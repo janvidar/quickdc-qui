@@ -1,0 +1,3 @@
+[submodule "quickdc"]
+	path = quickdc
+	url = ../quickdc.git
