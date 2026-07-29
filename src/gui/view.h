@@ -5,6 +5,8 @@
 #ifndef HAVE_QUICKDC_QUI_VIEW_H
 #define HAVE_QUICKDC_QUI_VIEW_H
 
+#include "glyphs.h"
+
 #include <QString>
 #include <QWidget>
 
@@ -24,19 +26,12 @@ class View : public QWidget {
 	Q_OBJECT
 
 public:
-	/** What the rail draws next to a destination. */
-	enum class Glyph {
-		Home,
-		Hubs,
-		Transfers,
-		Settings
-	};
-
 	explicit View(QWidget* parent = nullptr);
 
 	/** The rail label, and the window title while this view is current. */
 	virtual QString title() const = 0;
 
+	/** What the rail draws next to this destination. */
 	virtual Glyph glyph() const = 0;
 
 	/**

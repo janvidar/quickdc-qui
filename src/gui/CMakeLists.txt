@@ -6,16 +6,34 @@
 # A library rather than part of the executable, so that the shell can be built
 # and driven by a test without a main().
 add_library(qdcgui STATIC
+    chatfeed.cpp
+    chatfeed.h
+    chatmodel.cpp
+    chatmodel.h
+    chatpane.cpp
+    chatpane.h
+    composer.cpp
+    composer.h
+    filelistview.cpp
+    filelistview.h
+    hubpane.cpp
+    hubpane.h
+    hubsview.cpp
+    hubsview.h
+    hubheader.cpp
+    hubheader.h
     mainwindow.cpp
     mainwindow.h
+    usermodel.cpp
+    usermodel.h
     navigationrail.cpp
     navigationrail.h
     placeholderview.cpp
     placeholderview.h
     railbutton.cpp
     railbutton.h
-    railglyph.cpp
-    railglyph.h
+    glyphs.cpp
+    glyphs.h
     view.cpp
     view.h
     views.cpp

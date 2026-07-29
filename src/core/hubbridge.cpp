@@ -78,6 +78,16 @@ Qdc::UserInfo convert(const QuickDC::User* user)
 	info.addressIPv4  = from_utf8(user->getAddressIPv4());
 	info.addressIPv6  = from_utf8(user->getAddressIPv6());
 	info.keyprint     = from_utf8(user->getKeyprint());
+
+	/*
+	 * The client ID is held as bytes but is a base32 string, and is empty on
+	 * NMDC, where the nickname does the same job. Same choice the reference
+	 * client makes in cmd_browse().
+	 */
+	const char* clientId = reinterpret_cast<const char*>(user->getClientID());
+	info.sourceId     = (clientId && *clientId) ? QString::fromUtf8(clientId)
+	                                            : info.nick;
+
 	info.sharedBytes  = user->getSharedBytes();
 	info.sharedFiles  = user->getSharedFiles();
 	info.slotCount    = user->getNumSlots();
@@ -172,6 +182,20 @@ public:
 		const NetStatus status = convert(netstate);
 		report([status](HubBridge* bridge) {
 			bridge->m_netStatus = status;
+
+			/*
+			 * TLS is tracked here because this is the only place it is ever
+			 * reported. Anything other than the handshake succeeding clears it:
+			 * a plain Connected means the session never negotiated any, and
+			 * every disconnection and error ends whatever there was.
+			 */
+			const bool secure = (status == NetStatus::TlsConnected);
+			if (secure != bridge->m_secure)
+			{
+				bridge->m_secure = secure;
+				emit bridge->secureChanged(secure);
+			}
+
 			emit bridge->netStatusChanged(status);
 		});
 	}
@@ -444,6 +468,11 @@ Qdc::HubBridge::~HubBridge()
 	});
 }
 
+QString Qdc::HubBridge::normalisedUrl(const QString& url)
+{
+	return normalise_url(url);
+}
+
 QString Qdc::HubBridge::url() const
 {
 	return m_url;
@@ -462,6 +491,11 @@ Qdc::HubStatus Qdc::HubBridge::hubStatus() const
 QString Qdc::HubBridge::hubName() const
 {
 	return m_hubName;
+}
+
+bool Qdc::HubBridge::isSecure() const
+{
+	return m_secure;
 }
 
 void Qdc::HubBridge::setFollowRedirects(bool follow)

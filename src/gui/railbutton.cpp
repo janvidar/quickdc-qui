@@ -4,7 +4,7 @@
 
 #include "railbutton.h"
 
-#include "railglyph.h"
+#include "glyphs.h"
 
 #include <QEnterEvent>
 #include <QFontMetricsF>
@@ -31,7 +31,7 @@ QString badge_text(int count)
 
 }
 
-Qdc::RailButton::RailButton(View::Glyph glyph, const QString& caption, QWidget* parent)
+Qdc::RailButton::RailButton(Glyph glyph, const QString& caption, QWidget* parent)
 	: QAbstractButton(parent)
 	, m_glyph(glyph)
 {

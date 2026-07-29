@@ -6,8 +6,11 @@
 #define HAVE_QUICKDC_QUI_CORETYPES_H
 
 #include <QDateTime>
+#include <QMetaType>
 #include <QObject>
 #include <QString>
+
+#include <vector>
 
 namespace Qdc {
 
@@ -96,6 +99,16 @@ struct UserInfo {
 	/** The certificate this user announced for peer connections; may be empty. */
 	QString keyprint;
 
+	/**
+	 * How the download queue names this user: the client ID on ADC, the nickname
+	 * on NMDC.
+	 *
+	 * This is what a file source records, and so what a browse or a download has
+	 * to be asked for by. Distinct from 'id', which is the session identifier and
+	 * only means anything while they stay on this hub.
+	 */
+	QString sourceId;
+
 	quint64 sharedBytes = 0;
 	quint32 sharedFiles = 0;
 
@@ -162,6 +175,40 @@ struct TransferInfo {
 	bool finished = false;
 };
 
+/** One file in someone else's share; Share::RemoteFile. */
+struct RemoteFileInfo {
+	QString name;
+
+	/** The TTH root in base32, or empty if the list carried none. */
+	QString tth;
+
+	quint64 size = 0;
+};
+
+/**
+ * One directory in someone else's share; Share::RemoteDir.
+ *
+ * The whole tree is copied out of the core's decoded form, which for a large
+ * share is not cheap - a hundred thousand files is tens of megabytes of QString.
+ * It is done anyway because the core frees its tree with the RemoteFileList that
+ * owns it, and holding that open across the thread boundary would mean the user
+ * interface pinning core objects it must not touch.
+ *
+ * std::vector rather than QList for the children: the member is declared while
+ * the type is still incomplete, which std::vector is required to support and
+ * QList is not.
+ */
+struct RemoteDirInfo {
+	QString name;
+
+	/** Recursive totals, as the core computed them while decoding. */
+	quint64 size = 0;
+	quint64 fileCount = 0;
+
+	std::vector<RemoteDirInfo> dirs;
+	std::vector<RemoteFileInfo> files;
+};
+
 /** A row of the download queue; QuickDC::QueueStatus. */
 struct QueueEntry {
 	QString filename;
@@ -175,5 +222,18 @@ struct QueueEntry {
 };
 
 }
+
+/*
+ * So that these can travel in a QVariant, which is how an item model hands a row
+ * to its delegate. Declared here rather than at each point of use, because a
+ * type registered in one translation unit and not another is a linker puzzle
+ * nobody should have to solve twice.
+ */
+Q_DECLARE_METATYPE(Qdc::UserInfo)
+Q_DECLARE_METATYPE(Qdc::ChatMessage)
+Q_DECLARE_METATYPE(Qdc::TransferInfo)
+Q_DECLARE_METATYPE(Qdc::QueueEntry)
+Q_DECLARE_METATYPE(Qdc::RemoteFileInfo)
+Q_DECLARE_METATYPE(Qdc::RemoteDirInfo)
 
 #endif // HAVE_QUICKDC_QUI_CORETYPES_H

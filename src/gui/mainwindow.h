@@ -12,7 +12,11 @@ class QStackedWidget;
 
 namespace Qdc {
 
+class ConfigBridge;
 class CoreThread;
+class Favourites;
+class FilelistBridge;
+class HubsView;
 class NavigationRail;
 class TransferBridge;
 class View;
@@ -58,10 +62,17 @@ private:
 	CoreThread* m_thread;
 
 	/**
-	 * Only the transfer bridge so far. The settings view brings a ConfigBridge
-	 * with it; there is nothing for one to do until then.
+	 * The bridges, and the favourites store built on one of them. Owned here so
+	 * that every view shares them, and destroyed in a fixed order - see the
+	 * destructor.
 	 */
+	ConfigBridge* m_config;
 	TransferBridge* m_transfers;
+	FilelistBridge* m_filelists;
+	Favourites* m_favourites;
+
+	/** Kept for openHub(), which the Home view will want. */
+	HubsView* m_hubs;
 
 	NavigationRail* m_rail;
 	QStackedWidget* m_stack;

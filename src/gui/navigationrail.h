@@ -5,7 +5,7 @@
 #ifndef HAVE_QUICKDC_QUI_NAVIGATIONRAIL_H
 #define HAVE_QUICKDC_QUI_NAVIGATIONRAIL_H
 
-#include "view.h"
+#include "glyphs.h"
 
 #include <QList>
 #include <QWidget>
@@ -38,7 +38,7 @@ public:
 	 *         current, because a rail with nothing selected has no matching
 	 *         view to show.
 	 */
-	int addDestination(View::Glyph glyph, const QString& caption);
+	int addDestination(Glyph glyph, const QString& caption);
 
 	/** Everything added after this sits at the bottom. Call it at most once. */
 	void addTrailingSpace();

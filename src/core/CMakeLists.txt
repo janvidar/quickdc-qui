@@ -11,6 +11,10 @@ add_library(qdcbridge STATIC
     corethread.cpp
     corethread.h
     coretypes.h
+    favourites.cpp
+    favourites.h
+    filelistbridge.cpp
+    filelistbridge.h
     hubbridge.cpp
     hubbridge.h
     transferbridge.cpp

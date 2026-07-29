@@ -5,7 +5,7 @@
 #ifndef HAVE_QUICKDC_QUI_RAILBUTTON_H
 #define HAVE_QUICKDC_QUI_RAILBUTTON_H
 
-#include "view.h"
+#include "glyphs.h"
 
 #include <QAbstractButton>
 
@@ -24,7 +24,7 @@ class RailButton final : public QAbstractButton {
 	Q_OBJECT
 
 public:
-	RailButton(View::Glyph glyph, const QString& caption, QWidget* parent = nullptr);
+	RailButton(Glyph glyph, const QString& caption, QWidget* parent = nullptr);
 
 	/** Zero draws no badge. Anything over 99 is drawn as "99+". */
 	void setBadgeCount(int count);
@@ -47,7 +47,7 @@ private:
 	/** Where the badge goes, given the box the glyph was drawn in. */
 	QRectF badgeRect(const QRectF& glyphBox, const QString& text) const;
 
-	View::Glyph m_glyph;
+	Glyph m_glyph;
 	int m_badgeCount = 0;
 };
 

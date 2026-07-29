@@ -14,19 +14,9 @@ Qdc::HomeView::HomeView(QWidget* parent)
 {
 }
 
-Qdc::View::Glyph Qdc::HomeView::glyph() const
+Qdc::Glyph Qdc::HomeView::glyph() const
 {
 	return Glyph::Home;
-}
-
-Qdc::HubsView::HubsView(QWidget* parent)
-	: PlaceholderView(tr("Hubs"), tr("No hubs are open."), parent)
-{
-}
-
-Qdc::View::Glyph Qdc::HubsView::glyph() const
-{
-	return Glyph::Hubs;
 }
 
 Qdc::TransfersView::TransfersView(TransferBridge* transfers, QWidget* parent)
@@ -63,7 +53,7 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, QWidget* parent)
 	refresh();
 }
 
-Qdc::View::Glyph Qdc::TransfersView::glyph() const
+Qdc::Glyph Qdc::TransfersView::glyph() const
 {
 	return Glyph::Transfers;
 }
@@ -85,7 +75,7 @@ Qdc::SettingsView::SettingsView(QWidget* parent)
 {
 }
 
-Qdc::View::Glyph Qdc::SettingsView::glyph() const
+Qdc::Glyph Qdc::SettingsView::glyph() const
 {
 	return Glyph::Settings;
 }

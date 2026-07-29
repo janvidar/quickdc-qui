@@ -34,7 +34,7 @@ Qdc::NavigationRail::NavigationRail(QWidget* parent)
 	setAccessibleName(tr("Navigation"));
 }
 
-int Qdc::NavigationRail::addDestination(View::Glyph glyph, const QString& caption)
+int Qdc::NavigationRail::addDestination(Glyph glyph, const QString& caption)
 {
 	RailButton* button = new RailButton(glyph, caption, this);
 

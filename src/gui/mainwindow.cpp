@@ -4,10 +4,14 @@
 
 #include "mainwindow.h"
 
+#include "hubsview.h"
 #include "navigationrail.h"
 #include "views.h"
 
+#include <core/configbridge.h>
 #include <core/corethread.h>
+#include <core/favourites.h>
+#include <core/filelistbridge.h>
 #include <core/transferbridge.h>
 
 #include <QFrame>
@@ -18,7 +22,11 @@
 Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	: QMainWindow(parent)
 	, m_thread(thread)
+	, m_config(new ConfigBridge(thread, this))
 	, m_transfers(new TransferBridge(thread, this))
+	, m_filelists(new FilelistBridge(thread, this))
+	, m_favourites(new Favourites(m_config, this))
+	, m_hubs(new HubsView(thread, m_favourites, m_filelists))
 	, m_rail(new NavigationRail)
 	, m_stack(new QStackedWidget)
 {
@@ -39,7 +47,7 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	setCentralWidget(central);
 
 	addView(new HomeView);
-	addView(new HubsView);
+	addView(m_hubs);
 	addView(new TransfersView(m_transfers));
 
 	/* Settings sits apart from the destinations, at the foot of the rail. */
@@ -69,8 +77,25 @@ Qdc::MainWindow::~MainWindow()
 	 *
 	 * The thread itself is not ours; whoever built it shuts it down.
 	 */
+	/*
+	 * The hub view before the bridges: it owns hub bridges of its own and panes
+	 * connected to them, and its destructor unwinds that in the right order.
+	 */
+	delete m_hubs;
+	m_hubs = nullptr;
+
+	delete m_filelists;
+	m_filelists = nullptr;
+
 	delete m_transfers;
 	m_transfers = nullptr;
+
+	/* The favourites store writes through the config bridge, so it goes first. */
+	delete m_favourites;
+	m_favourites = nullptr;
+
+	delete m_config;
+	m_config = nullptr;
 }
 
 void Qdc::MainWindow::addView(View* view)

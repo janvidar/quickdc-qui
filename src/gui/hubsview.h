@@ -1,0 +1,139 @@
+/*
+ * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
+ */
+
+#ifndef HAVE_QUICKDC_QUI_HUBSVIEW_H
+#define HAVE_QUICKDC_QUI_HUBSVIEW_H
+
+#include "view.h"
+
+#include <core/coretypes.h>
+
+#include <QHash>
+#include <QList>
+
+class QPushButton;
+class QSplitter;
+class QStackedWidget;
+class QTreeWidget;
+class QTreeWidgetItem;
+
+namespace Qdc {
+
+class ChatPane;
+class CoreThread;
+class DmPane;
+class Favourites;
+class FilelistBridge;
+class HubBridge;
+class HubPane;
+
+/**
+ * Hub chat and direct messages.
+ *
+ * Two panels: a tree of what is open on the left, and the current conversation on
+ * the right. Each hub is a top level row with its direct messages beneath it, so
+ * collapsing a hub hides its conversations without closing them.
+ *
+ * This view also routes chat. A hub bridge reports every line the hub sends,
+ * public and private together, and only something that can see all the panes can
+ * decide which one a line belongs to - a private message may even be the first
+ * sight of a conversation, and opens one.
+ */
+class HubsView final : public View {
+	Q_OBJECT
+
+public:
+	/**
+	 * @param favourites may be null, in which case the star still toggles but
+	 *        nothing is remembered.
+	 */
+	HubsView(CoreThread* thread, Favourites* favourites,
+	         FilelistBridge* filelists, QWidget* parent = nullptr);
+	~HubsView() override;
+
+	QString title() const override;
+	Glyph glyph() const override;
+
+	/**
+	 * Open a hub, or bring the one already open to the front.
+	 *
+	 * @return false only if the address was unusable.
+	 */
+	bool openHub(const QString& url);
+
+	/** Close a hub, its conversations, and its connection. */
+	void closeHub(const QString& url);
+
+	/** In the order they were opened. */
+	QStringList openHubs() const;
+
+	int paneCount() const;
+
+	/** Which conversation is showing, or null when none is. */
+	ChatPane* currentPane() const;
+
+public slots:
+	/** Ask for an address and open it. */
+	void promptForHub();
+
+private:
+	/**
+	 * One hub and everything hanging off it.
+	 *
+	 * The bridge, the pane and the tree row have the same lifetime, which is why
+	 * they are kept together rather than in parallel containers that could
+	 * disagree.
+	 */
+	struct Entry {
+		HubBridge* bridge = nullptr;
+		HubPane* pane = nullptr;
+		QTreeWidgetItem* item = nullptr;
+
+		/** Conversations on this hub, by the context they are keyed on. */
+		QHash<QString, DmPane*> dms;
+	};
+
+	Entry* entryFor(const QString& url);
+	Entry* entryFor(HubBridge* bridge);
+
+	/** Where a line belongs, opening a conversation if it is a new one. */
+	void route(Entry& entry, const ChatMessage& message);
+
+	DmPane* openDm(Entry& entry, const UserInfo& user);
+
+	/** Add a pane to the stack and a row to the tree, and wire its unread count. */
+	void adopt(ChatPane* pane, QTreeWidgetItem* item);
+
+	void showPane(ChatPane* pane);
+
+	/** Sum every pane's unread count into the rail badge. */
+	void refreshBadge();
+
+	/** Redraw a row's label, which carries the unread count. */
+	void refreshItem(QTreeWidgetItem* item, ChatPane* pane);
+
+	void onTreeSelectionChanged();
+
+	CoreThread* m_thread;
+	Favourites* m_favourites;
+	FilelistBridge* m_filelists;
+
+	QSplitter* m_split;
+	QTreeWidget* m_tree;
+	QStackedWidget* m_stack;
+	QWidget* m_empty;
+	QPushButton* m_connect;
+
+	QList<Entry*> m_entries;
+
+	/** The pane a tree row stands for, so a selection can be resolved. */
+	QHash<QTreeWidgetItem*, ChatPane*> m_panes;
+
+	/** And the other way, for closing a pane whose row has to go with it. */
+	QHash<ChatPane*, QTreeWidgetItem*> m_items;
+};
+
+}
+
+#endif // HAVE_QUICKDC_QUI_HUBSVIEW_H

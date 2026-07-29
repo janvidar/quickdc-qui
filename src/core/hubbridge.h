@@ -48,6 +48,15 @@ public:
 	~HubBridge() override;
 
 	/**
+	 * The address as this class would use it, with the scheme and port filled in.
+	 *
+	 * Public so a caller can tell whether two addresses name the same hub without
+	 * opening a connection to find out - "example.org" and
+	 * "dchub://example.org:411" are the same hub, and only this knows that.
+	 */
+	static QString normalisedUrl(const QString& url);
+
+	/**
 	 * The address as given. Note that this is not the canonical form the core
 	 * uses internally, which is only known once the session exists.
 	 */
@@ -59,6 +68,17 @@ public:
 
 	/** The hub's name or topic; empty until the hub sends one. */
 	QString hubName() const;
+
+	/**
+	 * Whether the connection is carrying TLS.
+	 *
+	 * Derived from the network status transitions rather than asked, because the
+	 * core offers nothing to ask: Hub keeps its session protected and has no
+	 * isSecure(), so NetTlsConnected arriving and any subsequent disconnection or
+	 * error is all there is to go on. That makes this a record of what was last
+	 * reported, not a live check of the socket.
+	 */
+	bool isSecure() const;
 
 	/**
 	 * Whether to follow a redirect the hub asks for.
@@ -102,6 +122,7 @@ signals:
 	void netStatusChanged(Qdc::NetStatus status);
 	void hubStatusChanged(Qdc::HubStatus status);
 	void hubNameChanged(const QString& name);
+	void secureChanged(bool secure);
 
 	/** Something the core wants to complain about, already formatted. */
 	void systemError(const QString& message);
@@ -143,6 +164,7 @@ private:
 	NetStatus m_netStatus = NetStatus::Invalid;
 	HubStatus m_hubStatus = HubStatus::None;
 	QString m_hubName;
+	bool m_secure = false;
 
 	/** Read by the session on the core thread, written by whoever calls the setter. */
 	std::atomic<bool> m_followRedirects{false};

@@ -22,15 +22,6 @@ public:
 	Glyph glyph() const override;
 };
 
-/** Hub chat and direct messages. */
-class HubsView final : public PlaceholderView {
-	Q_OBJECT
-
-public:
-	explicit HubsView(QWidget* parent = nullptr);
-	Glyph glyph() const override;
-};
-
 /**
  * The transfer queue and what is moving right now.
  *

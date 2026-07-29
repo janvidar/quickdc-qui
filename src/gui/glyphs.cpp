@@ -2,7 +2,7 @@
  * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
  */
 
-#include "railglyph.h"
+#include "glyphs.h"
 
 #include <QColor>
 #include <QPainter>
@@ -145,14 +145,145 @@ QPainterPath settings_path()
 	return path;
 }
 
-QPainterPath glyph_path(Qdc::View::Glyph glyph)
+/**
+ * A five pointed star, filled.
+ *
+ * Points are stepped round the circle at 36 degree intervals, alternating
+ * between the outer and inner radius, which is what makes the arms even. Starting
+ * at -90 degrees puts a point at the top rather than an arm to the right.
+ */
+QPainterPath star_path()
+{
+	constexpr qreal CENTRE = 12.0;
+	constexpr qreal OUTER = 9.4;
+	constexpr qreal INNER = 3.9;
+	constexpr int POINTS = 5;
+
+	QPainterPath path;
+
+	for (int n = 0; n < POINTS * 2; ++n)
+	{
+		const qreal radius = (n % 2 == 0) ? OUTER : INNER;
+		const qreal angle = qDegreesToRadians(-90.0 + n * 36.0);
+
+		const QPointF point(CENTRE + radius * qCos(angle),
+		                    CENTRE + radius * qSin(angle));
+
+		if (n == 0)
+			path.moveTo(point);
+		else
+			path.lineTo(point);
+	}
+
+	path.closeSubpath();
+	return path;
+}
+
+/**
+ * The same star as an outline.
+ *
+ * Stroked rather than drawn as two nested stars, because the gap between an outer
+ * and an inner star of the same shape is not of even width - the arms taper, so
+ * scaling one down moves its edges by different amounts.
+ */
+QPainterPath star_outline_path()
+{
+	QPainterPathStroker stroker;
+	stroker.setWidth(2.0);
+	stroker.setJoinStyle(Qt::MiterJoin);
+
+	return stroker.createStroke(star_path());
+}
+
+/**
+ * A padlock. 'closed' puts both legs of the shackle into the body; open lifts it
+ * clear on one side.
+ */
+QPainterPath lock_path(bool closed)
+{
+	constexpr qreal BODY_TOP = 11.5;
+
+	QPainterPath body;
+	body.addRoundedRect(QRectF(5.0, BODY_TOP, 14.0, 9.5), 2.0, 2.0);
+
+	/* The shackle is a stroked semicircle, offset sideways when open. */
+	const qreal shift = closed ? 0.0 : 3.5;
+	const QRectF arc(8.0 + shift, 3.5, 8.0, 8.0);
+
+	QPainterPath shackle;
+	shackle.moveTo(arc.right(), closed ? BODY_TOP + 1.0 : arc.center().y());
+	shackle.lineTo(arc.right(), arc.center().y());
+	shackle.arcTo(arc, 0.0, 180.0);
+	shackle.lineTo(arc.left(), BODY_TOP + 1.0);
+
+	QPainterPathStroker stroker;
+	stroker.setWidth(2.1);
+	stroker.setCapStyle(Qt::RoundCap);
+
+	QPainterPath keyhole;
+	keyhole.addEllipse(QPointF(12.0, 16.2), 1.6, 1.6);
+
+	QPainterPath path;
+	path.addPath(body.united(stroker.createStroke(shackle)));
+	path.addPath(keyhole);
+	path.setFillRule(Qt::OddEvenFill);
+
+	return path;
+}
+
+/** Two figures, for the button that reveals the user list. */
+QPainterPath people_path()
+{
+	QPainterPath path;
+
+	QPainterPath back;
+	back.addEllipse(QPointF(15.8, 8.6), 3.1, 3.1);
+	back.addRoundedRect(QRectF(11.6, 13.0, 8.4, 6.6), 3.0, 3.0);
+
+	/* Cut a gap where the front figure crosses, as with the hubs bubbles. */
+	QPainterPath front;
+	front.addEllipse(QPointF(9.4, 7.9), 3.8, 3.8);
+	front.addRoundedRect(QRectF(4.2, 13.0, 10.4, 7.4), 3.4, 3.4);
+
+	QPainterPathStroker stroker;
+	stroker.setWidth(2.6);
+
+	path.addPath(back.subtracted(stroker.createStroke(front).united(front))
+		.united(front));
+
+	return path;
+}
+
+/** A cross, for leaving a conversation. */
+QPainterPath close_path()
+{
+	QPainterPath strokes;
+	strokes.moveTo(6.5, 6.5);
+	strokes.lineTo(17.5, 17.5);
+	strokes.moveTo(17.5, 6.5);
+	strokes.lineTo(6.5, 17.5);
+
+	QPainterPathStroker stroker;
+	stroker.setWidth(2.4);
+	stroker.setCapStyle(Qt::RoundCap);
+
+	return stroker.createStroke(strokes);
+}
+
+QPainterPath glyph_path(Qdc::Glyph glyph)
 {
 	switch (glyph)
 	{
-		case Qdc::View::Glyph::Home:      return home_path();
-		case Qdc::View::Glyph::Hubs:      return hubs_path();
-		case Qdc::View::Glyph::Transfers: return transfers_path();
-		case Qdc::View::Glyph::Settings:  return settings_path();
+		case Qdc::Glyph::Home:        return home_path();
+		case Qdc::Glyph::Hubs:        return hubs_path();
+		case Qdc::Glyph::Transfers:   return transfers_path();
+		case Qdc::Glyph::Settings:    return settings_path();
+		case Qdc::Glyph::Star:        return star_path();
+		case Qdc::Glyph::StarOutline: return star_outline_path();
+		case Qdc::Glyph::Lock:        return lock_path(true);
+		case Qdc::Glyph::LockOpen:    return lock_path(false);
+		case Qdc::Glyph::People:      return people_path();
+		case Qdc::Glyph::Close:       return close_path();
 	}
 
 	return QPainterPath();
@@ -160,7 +291,7 @@ QPainterPath glyph_path(Qdc::View::Glyph glyph)
 
 }
 
-void Qdc::paint_glyph(QPainter& painter, View::Glyph glyph, const QRectF& box,
+void Qdc::paint_glyph(QPainter& painter, Glyph glyph, const QRectF& box,
                       const QColor& colour)
 {
 	const QPainterPath path = glyph_path(glyph);

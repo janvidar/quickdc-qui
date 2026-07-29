@@ -5,6 +5,7 @@
 #include <core/corethread.h>
 #include <gui/mainwindow.h>
 #include <gui/navigationrail.h>
+#include <gui/glyphs.h>
 #include <gui/view.h>
 
 #include <QDir>
@@ -46,7 +47,7 @@ class CountingView final : public Qdc::View {
 
 public:
 	QString title() const override { return QStringLiteral("Counting"); }
-	Glyph glyph() const override { return Glyph::Home; }
+	Qdc::Glyph glyph() const override { return Qdc::Glyph::Home; }
 
 	using Qdc::View::setBadgeCount;
 };
@@ -79,7 +80,7 @@ void TestShell::railStartsOnTheFirstDestination()
 
 	QSignalSpy changes(&rail, &Qdc::NavigationRail::currentIndexChanged);
 
-	QCOMPARE(rail.addDestination(Qdc::View::Glyph::Home, QStringLiteral("Home")), 0);
+	QCOMPARE(rail.addDestination(Qdc::Glyph::Home, QStringLiteral("Home")), 0);
 	QCOMPARE(rail.currentIndex(), 0);
 
 	/*
@@ -88,7 +89,7 @@ void TestShell::railStartsOnTheFirstDestination()
 	 */
 	QCOMPARE(changes.count(), 0);
 
-	QCOMPARE(rail.addDestination(Qdc::View::Glyph::Hubs, QStringLiteral("Hubs")), 1);
+	QCOMPARE(rail.addDestination(Qdc::Glyph::Hubs, QStringLiteral("Hubs")), 1);
 	QCOMPARE(rail.currentIndex(), 0);
 
 	rail.setCurrentIndex(1);
@@ -104,8 +105,8 @@ void TestShell::railStartsOnTheFirstDestination()
 void TestShell::railClampsOutOfRangeSelections()
 {
 	Qdc::NavigationRail rail;
-	rail.addDestination(Qdc::View::Glyph::Home, QStringLiteral("Home"));
-	rail.addDestination(Qdc::View::Glyph::Hubs, QStringLiteral("Hubs"));
+	rail.addDestination(Qdc::Glyph::Home, QStringLiteral("Home"));
+	rail.addDestination(Qdc::Glyph::Hubs, QStringLiteral("Hubs"));
 	rail.setCurrentIndex(1);
 
 	QSignalSpy changes(&rail, &Qdc::NavigationRail::currentIndexChanged);
@@ -122,8 +123,8 @@ void TestShell::railClampsOutOfRangeSelections()
 void TestShell::railBadgesAreSetAndCleared()
 {
 	Qdc::NavigationRail rail;
-	const int home = rail.addDestination(Qdc::View::Glyph::Home, QStringLiteral("Home"));
-	const int hubs = rail.addDestination(Qdc::View::Glyph::Hubs, QStringLiteral("Hubs"));
+	const int home = rail.addDestination(Qdc::Glyph::Home, QStringLiteral("Home"));
+	const int hubs = rail.addDestination(Qdc::Glyph::Hubs, QStringLiteral("Hubs"));
 
 	QCOMPARE(rail.badgeCount(home), 0);
 
