@@ -14,6 +14,8 @@ add_library(qdcgui STATIC
     chatpane.h
     composer.cpp
     composer.h
+    fileactions.cpp
+    fileactions.h
     filelistview.cpp
     filelistview.h
     hubpane.cpp
@@ -34,6 +36,12 @@ add_library(qdcgui STATIC
     railbutton.h
     glyphs.cpp
     glyphs.h
+    progressdelegate.cpp
+    progressdelegate.h
+    transfermodels.cpp
+    transfermodels.h
+    transfersview.cpp
+    transfersview.h
     view.cpp
     view.h
     views.cpp

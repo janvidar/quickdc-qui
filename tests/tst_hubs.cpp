@@ -429,7 +429,7 @@ void TestHubs::filelistModelFilterKeepsAncestors()
 
 void TestHubs::openingTheSameHubTwiceReusesThePane()
 {
-	Qdc::HubsView hubs(m_thread, nullptr, m_filelists);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr);
 
 	QVERIFY(!hubs.openHub(QString()));
 	QCOMPARE(hubs.paneCount(), 0);
@@ -459,7 +459,7 @@ void TestHubs::openingTheSameHubTwiceReusesThePane()
 
 void TestHubs::privateMessagesOpenAConversation()
 {
-	Qdc::HubsView hubs(m_thread, nullptr, m_filelists);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr);
 	QVERIFY(hubs.openHub(QStringLiteral("dchub://192.0.2.1:411")));
 
 	Qdc::ChatPane* pane = hubs.currentPane();
@@ -506,7 +506,7 @@ void TestHubs::privateMessagesOpenAConversation()
 
 void TestHubs::unreadCountsReachTheRailBadge()
 {
-	Qdc::HubsView hubs(m_thread, nullptr, m_filelists);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr);
 	QSignalSpy badges(&hubs, &Qdc::View::badgeCountChanged);
 
 	QVERIFY(hubs.openHub(QStringLiteral("dchub://192.0.2.1:411")));

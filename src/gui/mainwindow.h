@@ -12,6 +12,7 @@ class QStackedWidget;
 
 namespace Qdc {
 
+class Completed;
 class ConfigBridge;
 class CoreThread;
 class Favourites;
@@ -70,6 +71,7 @@ private:
 	TransferBridge* m_transfers;
 	FilelistBridge* m_filelists;
 	Favourites* m_favourites;
+	Completed* m_completed;
 
 	/** Kept for openHub(), which the Home view will want. */
 	HubsView* m_hubs;

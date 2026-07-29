@@ -232,6 +232,9 @@ Qdc::DmPane::DmPane(HubBridge* hub, const UserInfo& user,
 
 	tabs()->addTab(m_files, tr("Files"));
 
+	connect(m_files, &FilelistView::fileActivated,
+	        this, &DmPane::downloadRequested);
+
 	setUser(user);
 
 	if (!hub)

@@ -6,8 +6,10 @@
 
 #include "hubsview.h"
 #include "navigationrail.h"
+#include "transfersview.h"
 #include "views.h"
 
+#include <core/completed.h>
 #include <core/configbridge.h>
 #include <core/corethread.h>
 #include <core/favourites.h>
@@ -26,7 +28,8 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	, m_transfers(new TransferBridge(thread, this))
 	, m_filelists(new FilelistBridge(thread, this))
 	, m_favourites(new Favourites(m_config, this))
-	, m_hubs(new HubsView(thread, m_favourites, m_filelists))
+	, m_completed(new Completed(m_config, this))
+	, m_hubs(new HubsView(thread, m_favourites, m_filelists, m_transfers))
 	, m_rail(new NavigationRail)
 	, m_stack(new QStackedWidget)
 {
@@ -48,7 +51,7 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 
 	addView(new HomeView);
 	addView(m_hubs);
-	addView(new TransfersView(m_transfers));
+	addView(new TransfersView(m_transfers, m_completed));
 
 	/* Settings sits apart from the destinations, at the foot of the rail. */
 	m_rail->addTrailingSpace();
@@ -90,7 +93,10 @@ Qdc::MainWindow::~MainWindow()
 	delete m_transfers;
 	m_transfers = nullptr;
 
-	/* The favourites store writes through the config bridge, so it goes first. */
+	/* Both stores write through the config bridge, so they go before it. */
+	delete m_completed;
+	m_completed = nullptr;
+
 	delete m_favourites;
 	m_favourites = nullptr;
 

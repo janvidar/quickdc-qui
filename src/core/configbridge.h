@@ -7,8 +7,11 @@
 
 #include "coretypes.h"
 
+#include <QList>
 #include <QObject>
+#include <QPair>
 #include <QString>
+#include <QStringList>
 
 namespace Qdc {
 
@@ -52,6 +55,22 @@ public:
 	void setBool(ConfigStore store, const QString& group, const QString& key,
 	             bool value);
 	void remove(ConfigStore store, const QString& group, const QString& key);
+
+	/**
+	 * Rewrite a group in one job: 'removeKeys' cleared, then 'values' written.
+	 *
+	 * Every call above is one blocking round trip to the core thread, which is
+	 * fine for a settings form and useless for a numbered list - rewriting a few
+	 * hundred entries key by key means hundreds of round trips per change, and
+	 * hundreds of thousands over the life of the list.
+	 *
+	 * The keys to remove have to be named because QuickDC::Preferences cannot
+	 * enumerate a group; a caller writing a numbered list knows how long the
+	 * previous one was.
+	 */
+	void replaceGroup(ConfigStore store, const QString& group,
+	                  const QStringList& removeKeys,
+	                  const QList<QPair<QString, QString>>& values);
 
 	/**
 	 * Write the store out.

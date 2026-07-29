@@ -157,6 +157,29 @@ void Qdc::ConfigBridge::remove(ConfigStore store, const QString& group,
 	});
 }
 
+void Qdc::ConfigBridge::replaceGroup(ConfigStore store, const QString& group,
+                                     const QStringList& removeKeys,
+                                     const QList<QPair<QString, QString>>& values)
+{
+	if (!m_thread) return;
+
+	m_thread->invoke([&] {
+		QuickDC::Preferences* preferences = select(m_thread->core(), store, group);
+		if (!preferences) return;
+
+		/*
+		 * One group selection for the whole batch, which is safe precisely because
+		 * this is a single job - nothing else can select another group in between.
+		 */
+		for (const QString& key : removeKeys)
+			preferences->remove(key.toStdString());
+
+		for (const QPair<QString, QString>& value : values)
+			preferences->setString(value.first.toStdString(),
+			                       value.second.toStdString());
+	});
+}
+
 bool Qdc::ConfigBridge::save(ConfigStore store)
 {
 	bool written = false;

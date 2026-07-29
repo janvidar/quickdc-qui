@@ -10,6 +10,7 @@
 
 #include <core/corethread.h>
 #include <core/favourites.h>
+#include <core/transferbridge.h>
 #include <core/hubbridge.h>
 
 #include <QHeaderView>
@@ -38,11 +39,13 @@ QString decorate(const QString& title, int unread)
 }
 
 Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
-                        FilelistBridge* filelists, QWidget* parent)
+                        FilelistBridge* filelists, TransferBridge* transfers,
+                        QWidget* parent)
 	: View(parent)
 	, m_thread(thread)
 	, m_favourites(favourites)
 	, m_filelists(filelists)
+	, m_transfers(transfers)
 	, m_split(new QSplitter(Qt::Horizontal, this))
 	, m_tree(new QTreeWidget(this))
 	, m_stack(new QStackedWidget(this))
@@ -358,6 +361,32 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 	}
 
 	DmPane* pane = new DmPane(entry.bridge, user, m_filelists);
+
+	/*
+	 * A file chosen in the browser goes into the download queue with the TTH the
+	 * list carried. Without one the queue can never match a source to it, so an
+	 * entry would sit there for ever - better to say so than to add it.
+	 */
+	connect(pane, &DmPane::downloadRequested, this,
+	        [this](const QString& name, quint64 size, const QString& tth) {
+		if (!m_transfers) return;
+
+		if (tth.isEmpty())
+		{
+			QMessageBox::information(this, tr("Download"),
+				tr("'%1' cannot be downloaded: the file list gave no hash for it, "
+				   "and without one there is no way to find anyone who has it.")
+					.arg(name));
+			return;
+		}
+
+		/*
+		 * Into the configured download directory under its own name. The queue
+		 * resolves a leading "~" itself.
+		 */
+		const QString target = QStringLiteral("~/.quickdc/downloads/") + name;
+		m_transfers->enqueue(target, tth, size);
+	});
 
 	QTreeWidgetItem* item = new QTreeWidgetItem(entry.item);
 	item->setData(0, HubRole, false);

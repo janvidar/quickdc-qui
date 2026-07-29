@@ -13,6 +13,7 @@
 namespace Qdc {
 
 class CoreThread;
+class QueueReporter;
 class TransferReporter;
 
 /**
@@ -61,8 +62,54 @@ public:
 	/** How many queued files are being fetched from someone right now. */
 	quint32 activeTransferCount() const;
 
+public slots:
+	/**
+	 * Change a queued file's priority.
+	 *
+	 * Pausing is a priority rather than a separate state, which is the core's own
+	 * model: the scheduler skips PrioPaused and starts nothing for it.
+	 *
+	 * @param filename the local filename, which is what identifies a queue entry -
+	 *        QueueEntry::filename carries it.
+	 */
+	void setPriority(const QString& filename, Qdc::Priority priority);
+
+	/**
+	 * Take a file out of the queue.
+	 *
+	 * @param deletePartial also delete the incomplete ".part" file. Off by
+	 *        default: removing an entry is easy to do by accident and throwing
+	 *        away a half-finished download with it should be asked for.
+	 */
+	void removeFromQueue(const QString& filename, bool deletePartial = false);
+
+	/**
+	 * Queue a file for download.
+	 *
+	 * Sources are what actually make it downloadable, and this adds none - the
+	 * entry sits there until the queue finds somewhere to get it from, which for a
+	 * file with a TTH it does by searching. Without a TTH nothing will ever match
+	 * it.
+	 */
+	void enqueue(const QString& filename, const QString& tth, quint64 size);
+
 signals:
 	void transferStarted(const Qdc::TransferInfo& transfer);
+
+	/**
+	 * The queue gained or lost an entry. Carries nothing: a table wants the whole
+	 * snapshot anyway, and the events arrive in bursts as the queue is processed.
+	 */
+	void queueChanged();
+
+	/**
+	 * A download finished, matched its hash, and is now at 'filename'.
+	 *
+	 * The only notification that a download succeeded - see QuickDC::QueueListener
+	 * in the core for why this is separate from the entry leaving the queue.
+	 */
+	void downloadCompleted(const QString& filename, quint64 size,
+	                       const QString& tth);
 
 	/** Every byte asked for arrived. */
 	void transferFinished(const Qdc::TransferInfo& transfer);
@@ -74,10 +121,13 @@ signals:
 	void transferError(const Qdc::TransferInfo& transfer);
 
 private:
+	friend class QueueReporter;
+
 	CoreThread* m_thread;
 
 	/** Owned by the core thread; only touched from a job there. */
 	TransferReporter* m_reporter = nullptr;
+	QueueReporter* m_queueReporter = nullptr;
 };
 
 }

@@ -88,6 +88,10 @@ public:
 	/** The details, once the hub has sent more than a nickname. */
 	void setUser(const UserInfo& user);
 
+signals:
+	/** A file was chosen in the Files tab. */
+	void downloadRequested(const QString& name, quint64 size, const QString& tth);
+
 protected:
 	void sendMessage(const QString& message) override;
 

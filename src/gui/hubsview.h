@@ -27,6 +27,7 @@ class Favourites;
 class FilelistBridge;
 class HubBridge;
 class HubPane;
+class TransferBridge;
 
 /**
  * Hub chat and direct messages.
@@ -48,8 +49,13 @@ public:
 	 * @param favourites may be null, in which case the star still toggles but
 	 *        nothing is remembered.
 	 */
+	/**
+	 * @param transfers where a file chosen in a browser is queued. May be null,
+	 *        and then choosing one does nothing.
+	 */
 	HubsView(CoreThread* thread, Favourites* favourites,
-	         FilelistBridge* filelists, QWidget* parent = nullptr);
+	         FilelistBridge* filelists, TransferBridge* transfers,
+	         QWidget* parent = nullptr);
 	~HubsView() override;
 
 	QString title() const override;
@@ -118,6 +124,7 @@ private:
 	CoreThread* m_thread;
 	Favourites* m_favourites;
 	FilelistBridge* m_filelists;
+	TransferBridge* m_transfers;
 
 	QSplitter* m_split;
 	QTreeWidget* m_tree;

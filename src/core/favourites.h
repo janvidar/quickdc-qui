@@ -68,6 +68,9 @@ private:
 
 	ConfigBridge* m_config;
 	QStringList m_urls;
+
+	/** How many numbered keys are in the file; see Completed for the reasoning. */
+	int m_storedCount = 0;
 };
 
 }

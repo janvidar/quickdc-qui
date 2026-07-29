@@ -43,6 +43,8 @@ Qdc::Favourites::Favourites(ConfigBridge* config, QObject* parent)
 
 		m_urls.append(url);
 	}
+
+	m_storedCount = qMin(total, LIMIT);
 }
 
 QStringList Qdc::Favourites::urls() const
@@ -94,20 +96,19 @@ void Qdc::Favourites::store()
 	 * Cleared against the count that was there, not the one being written, so
 	 * that a list which has shrunk does not leave its old tail in the file.
 	 */
-	const int previous = m_config->getNumber(ConfigStore::Application, GROUP,
-	                                         TOTAL, 0);
+	QStringList stale;
+	for (int n = 0; n < m_storedCount; ++n) stale.append(hub_key(n));
 
-	for (int n = 0; n < qMin(previous, LIMIT); ++n)
-		m_config->remove(ConfigStore::Application, GROUP, hub_key(n));
+	QList<QPair<QString, QString>> values;
+	values.reserve(m_urls.size() + 1);
 
 	for (int n = 0; n < m_urls.size(); ++n)
-	{
-		m_config->setString(ConfigStore::Application, GROUP, hub_key(n),
-		                    m_urls.at(n));
-	}
+		values.append({hub_key(n), m_urls.at(n)});
 
-	m_config->setNumber(ConfigStore::Application, GROUP, TOTAL,
-	                    static_cast<int>(m_urls.size()));
+	values.append({TOTAL, QString::number(m_urls.size())});
 
+	m_config->replaceGroup(ConfigStore::Application, GROUP, stale, values);
 	m_config->save(ConfigStore::Application);
+
+	m_storedCount = static_cast<int>(m_urls.size());
 }

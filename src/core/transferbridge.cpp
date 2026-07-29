@@ -10,6 +10,8 @@
 #include <api/transfers.h>
 #include <samurai/io/file.h>
 
+#include <QByteArray>
+
 #include <QMetaObject>
 
 #include <vector>
@@ -39,6 +41,19 @@ Qdc::TransferInfo convert(QuickDC::Transfer* transfer)
 	info.finished        = transfer->isFinished();
 
 	return info;
+}
+
+QuickDC::QueueFile::Priority convert(Qdc::Priority priority)
+{
+	switch (priority)
+	{
+		case Qdc::Priority::Paused: return QuickDC::QueueFile::PrioPaused;
+		case Qdc::Priority::Low:    return QuickDC::QueueFile::PrioLow;
+		case Qdc::Priority::Normal: return QuickDC::QueueFile::PrioNormal;
+		case Qdc::Priority::High:   return QuickDC::QueueFile::PrioHigh;
+	}
+
+	return QuickDC::QueueFile::PrioNormal;
 }
 
 Qdc::Priority convert(QuickDC::QueueFile::Priority priority)
@@ -133,6 +148,61 @@ private:
 	TransferBridge* m_bridge;
 };
 
+/**
+ * The queue half.
+ *
+ * The core calls these from inside QueueManager::process(), and hands over a
+ * QueueFile it deletes immediately afterwards - so the completion event copies
+ * what it needs on the spot, and the change events carry nothing at all.
+ */
+class QueueReporter final : public QuickDC::QueueListener {
+
+public:
+	explicit QueueReporter(TransferBridge* bridge)
+		: m_bridge(bridge)
+	{
+	}
+
+	void EventQueueFileAdded(const QuickDC::QueueFile*) override
+	{
+		announce();
+	}
+
+	void EventQueueFileRemoved(const QuickDC::QueueFile*) override
+	{
+		announce();
+	}
+
+	void EventQueueFileVerified(const QuickDC::QueueFile* file) override
+	{
+		if (!file) return;
+
+		const QString filename = file->getLocalFilename()
+			? QString::fromUtf8(file->getLocalFilename()) : QString();
+		const QString tth = file->getTTH() ? QString::fromUtf8(file->getTTH())
+		                                   : QString();
+		const quint64 size = file->getSize();
+
+		TransferBridge* bridge = m_bridge;
+
+		QMetaObject::invokeMethod(bridge, [bridge, filename, size, tth] {
+			emit bridge->downloadCompleted(filename, size, tth);
+		}, Qt::QueuedConnection);
+	}
+
+private:
+	void announce()
+	{
+		TransferBridge* bridge = m_bridge;
+
+		QMetaObject::invokeMethod(bridge, [bridge] {
+			emit bridge->queueChanged();
+		}, Qt::QueuedConnection);
+	}
+
+	TransferBridge* m_bridge;
+};
+
 }
 
 Qdc::TransferBridge::TransferBridge(CoreThread* thread, QObject* parent)
@@ -147,12 +217,18 @@ Qdc::TransferBridge::TransferBridge(CoreThread* thread, QObject* parent)
 
 		m_reporter = new TransferReporter(this);
 		core->transfers->addListener(m_reporter);
+
+		/* A core built without a queue file has no queue to listen to. */
+		if (!core->queue) return;
+
+		m_queueReporter = new QueueReporter(this);
+		core->queue->addListener(m_queueReporter);
 	});
 }
 
 Qdc::TransferBridge::~TransferBridge()
 {
-	if (!m_reporter || !m_thread) return;
+	if (!m_thread || (!m_reporter && !m_queueReporter)) return;
 
 	/*
 	 * Blocking: the manager holds a raw pointer to the reporter and would call
@@ -164,8 +240,14 @@ Qdc::TransferBridge::~TransferBridge()
 		if (core && core->transfers)
 			core->transfers->removeListener(m_reporter);
 
+		if (core && core->queue && m_queueReporter)
+			core->queue->removeListener(m_queueReporter);
+
 		delete m_reporter;
 		m_reporter = nullptr;
+
+		delete m_queueReporter;
+		m_queueReporter = nullptr;
 	});
 }
 
@@ -226,4 +308,69 @@ quint32 Qdc::TransferBridge::activeTransferCount() const
 	});
 
 	return count;
+}
+
+void Qdc::TransferBridge::setPriority(const QString& filename, Priority priority)
+{
+	if (!m_thread || filename.isEmpty()) return;
+
+	const QByteArray name = filename.toUtf8();
+
+	m_thread->invoke([this, &name, priority] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->queue) return;
+
+		if (QuickDC::QueueFile* file = core->queue->getFileByName(name.constData()))
+			file->setPriority(convert(priority));
+	});
+
+	/*
+	 * Priority is not part of the queue's own change events - it does not add or
+	 * remove an entry - so the table is told from here.
+	 */
+	emit queueChanged();
+}
+
+void Qdc::TransferBridge::removeFromQueue(const QString& filename, bool deletePartial)
+{
+	if (!m_thread || filename.isEmpty()) return;
+
+	const QByteArray name = filename.toUtf8();
+
+	m_thread->invoke([this, &name, deletePartial] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->queue) return;
+
+		QuickDC::QueueFile* file = core->queue->getFileByName(name.constData());
+		if (!file) return;
+
+		/*
+		 * The temporary name has to be read before the entry goes: remove()
+		 * deletes the QueueFile that knows it.
+		 */
+		std::string partial;
+		if (deletePartial && file->getTempFilename())
+			partial = file->getTempFilename();
+
+		core->queue->remove(file);
+
+		if (!partial.empty()) Samurai::IO::File(partial).remove();
+	});
+}
+
+void Qdc::TransferBridge::enqueue(const QString& filename, const QString& tth,
+                                  quint64 size)
+{
+	if (!m_thread || filename.isEmpty()) return;
+
+	const QByteArray name = filename.toUtf8();
+	const QByteArray hash = tth.toUtf8();
+
+	m_thread->invoke([this, &name, &hash, size] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->queue) return;
+
+		core->queue->add(name.constData(),
+		                 hash.isEmpty() ? nullptr : hash.constData(), size);
+	});
 }
