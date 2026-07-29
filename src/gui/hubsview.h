@@ -12,6 +12,9 @@
 #include <QHash>
 #include <QList>
 
+#include <functional>
+#include <optional>
+
 class QPushButton;
 class QSplitter;
 class QStackedWidget;
@@ -75,6 +78,19 @@ public:
 	/** In the order they were opened. */
 	QStringList openHubs() const;
 
+	/**
+	 * How a hub password is asked for: given the hub's address, return the
+	 * password, or nothing if the user declines.
+	 *
+	 * A seam rather than a hardcoded dialog, so that the asking can be driven by a
+	 * test and so a caller may present it differently. The default is a modal
+	 * prompt.
+	 */
+	using PasswordPrompt =
+		std::function<std::optional<QString>(const QString& hubUrl)>;
+
+	void setPasswordPrompt(PasswordPrompt prompt);
+
 	int paneCount() const;
 
 	/** Which conversation is showing, or null when none is. */
@@ -99,6 +115,15 @@ private:
 
 		/** Conversations on this hub, by the context they are keyed on. */
 		QHash<QString, DmPane*> dms;
+
+		/**
+		 * A password is being asked for.
+		 *
+		 * A hub may ask more than once - the core sends an empty attempt first and
+		 * reports the refusal - and each request arrives as a separate queued
+		 * signal, so without this a second dialog would open behind the first.
+		 */
+		bool prompting = false;
 	};
 
 	Entry* entryFor(const QString& url);
@@ -108,6 +133,9 @@ private:
 	void route(Entry& entry, const ChatMessage& message);
 
 	DmPane* openDm(Entry& entry, const UserInfo& user);
+
+	/** Ask for this hub's password and send it, or say why login will fail. */
+	void promptForPassword(Entry& entry);
 
 	/** Add a pane to the stack and a row to the tree, and wire its unread count. */
 	void adopt(ChatPane* pane, QTreeWidgetItem* item);
@@ -142,6 +170,8 @@ private:
 	QPushButton* m_connect;
 
 	QList<Entry*> m_entries;
+
+	PasswordPrompt m_passwordPrompt;
 
 	/** The pane a tree row stands for, so a selection can be resolved. */
 	QHash<QTreeWidgetItem*, ChatPane*> m_panes;

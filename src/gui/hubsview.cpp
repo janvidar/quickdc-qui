@@ -16,6 +16,7 @@
 
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QLineEdit>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
@@ -224,12 +225,7 @@ bool Qdc::HubsView::openHub(const QString& url)
 
 	connect(bridge, &HubBridge::authenticationRequired, this,
 	        [this, bridge](){
-		if (Entry* found = entryFor(bridge))
-		{
-			found->pane->postNotice(
-				tr("This hub wants a password. Set one under the hub's "
-				   "entry in session.conf; asking here is not wired up yet."));
-		}
+		if (Entry* found = entryFor(bridge)) promptForPassword(*found);
 	});
 
 	connect(bridge, &HubBridge::hubNameChanged, this, [this, bridge] {
@@ -415,6 +411,58 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 	refreshItem(item, pane);
 
 	return pane;
+}
+
+void Qdc::HubsView::setPasswordPrompt(PasswordPrompt prompt)
+{
+	m_passwordPrompt = std::move(prompt);
+}
+
+void Qdc::HubsView::promptForPassword(Entry& entry)
+{
+	if (!entry.bridge || !entry.pane) return;
+
+	/* A second request while one is outstanding is the same question. */
+	if (entry.prompting) return;
+
+	entry.prompting = true;
+
+	const QString hubUrl = entry.bridge->url();
+
+	std::optional<QString> password;
+
+	if (m_passwordPrompt)
+	{
+		password = m_passwordPrompt(hubUrl);
+	}
+	else
+	{
+		bool accepted = false;
+
+		const QString typed = QInputDialog::getText(this, tr("Hub password"),
+			tr("%1 wants a password.\n\n"
+			   "It will be remembered for this hub.").arg(hubUrl),
+			QLineEdit::Password, QString(), &accepted);
+
+		if (accepted) password = typed;
+	}
+
+	entry.prompting = false;
+
+	if (!password || password->isEmpty())
+	{
+		entry.pane->postNotice(
+			tr("No password was given, so this hub will refuse the login."));
+		return;
+	}
+
+	/*
+	 * The core writes it to the session store itself, so the next connection to
+	 * this hub will not ask. It goes in as plain text, which is why the prompt
+	 * says it will be remembered.
+	 */
+	entry.bridge->sendPassword(*password);
+	entry.pane->postNotice(tr("Password sent."));
 }
 
 void Qdc::HubsView::adopt(ChatPane* pane, QTreeWidgetItem* item)

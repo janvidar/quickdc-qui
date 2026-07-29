@@ -52,6 +52,7 @@ private slots:
 	void openingTheSameHubTwiceReusesThePane();
 	void privateMessagesOpenAConversation();
 	void unreadCountsReachTheRailBadge();
+	void hubPasswordIsAskedForOnce();
 
 private:
 	Qdc::UserInfo user(const QString& nick, bool op = false) const;
@@ -545,6 +546,56 @@ void TestHubs::unreadCountsReachTheRailBadge()
 
 	pane->clearUnread();
 	QCOMPARE(hubs.badgeCount(), 1);
+}
+
+void TestHubs::hubPasswordIsAskedForOnce()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+
+	QStringList asked;
+
+	/*
+	 * The prompt is injected rather than shown, because a modal dialog cannot be
+	 * driven from a test - which is the reason it is a seam at all.
+	 */
+	hubs.setPasswordPrompt([&asked](const QString& hubUrl)
+		-> std::optional<QString> {
+		asked.append(hubUrl);
+		return QStringLiteral("hunter2");
+	});
+
+	QVERIFY(hubs.openHub(QStringLiteral("dchub://192.0.2.1:411")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	Qdc::HubBridge* bridge = pane->hub();
+	QVERIFY(bridge);
+
+	emit bridge->authenticationRequired();
+	QCOMPARE(asked, QStringList({QStringLiteral("dchub://192.0.2.1:411")}));
+
+	/*
+	 * A hub asks more than once - the core sends an empty attempt and reports the
+	 * refusal - and each request is a separate queued signal. Asking again after
+	 * the first has been answered is a fresh question, so this is two.
+	 */
+	emit bridge->authenticationRequired();
+	QCOMPARE(asked.size(), 2);
+
+	/* Declining says so in the conversation rather than failing silently. */
+	QStringList declined;
+	hubs.setPasswordPrompt([&declined](const QString& hubUrl)
+		-> std::optional<QString> {
+		declined.append(hubUrl);
+		return std::nullopt;
+	});
+
+	emit bridge->authenticationRequired();
+	QCOMPARE(declined.size(), 1);
+
+	/* And the view is still working afterwards. */
+	QVERIFY(m_thread->invoke([] { }));
 }
 
 QTEST_MAIN(TestHubs)
