@@ -6,6 +6,7 @@
 
 #include "hubsview.h"
 #include "navigationrail.h"
+#include "settingsview.h"
 #include "transfersview.h"
 #include "views.h"
 
@@ -14,6 +15,7 @@
 #include <core/corethread.h>
 #include <core/favourites.h>
 #include <core/filelistbridge.h>
+#include <core/shares.h>
 #include <core/transferbridge.h>
 
 #include <QFrame>
@@ -29,7 +31,8 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	, m_filelists(new FilelistBridge(thread, this))
 	, m_favourites(new Favourites(m_config, this))
 	, m_completed(new Completed(m_config, this))
-	, m_hubs(new HubsView(thread, m_favourites, m_filelists, m_transfers))
+	, m_shares(new Shares(m_config, this))
+	, m_hubs(new HubsView(thread, m_favourites, m_filelists, m_transfers, m_config))
 	, m_rail(new NavigationRail)
 	, m_stack(new QStackedWidget)
 {
@@ -55,7 +58,7 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 
 	/* Settings sits apart from the destinations, at the foot of the rail. */
 	m_rail->addTrailingSpace();
-	addView(new SettingsView);
+	addView(new SettingsView(m_config, m_shares));
 
 	connect(m_rail, &NavigationRail::currentIndexChanged,
 	        this, &MainWindow::showView);
@@ -93,7 +96,10 @@ Qdc::MainWindow::~MainWindow()
 	delete m_transfers;
 	m_transfers = nullptr;
 
-	/* Both stores write through the config bridge, so they go before it. */
+	/* Every store writes through the config bridge, so they go before it. */
+	delete m_shares;
+	m_shares = nullptr;
+
 	delete m_completed;
 	m_completed = nullptr;
 

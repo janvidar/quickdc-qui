@@ -1,0 +1,121 @@
+/*
+ * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
+ */
+
+#ifndef HAVE_QUICKDC_QUI_SETTINGSVIEW_H
+#define HAVE_QUICKDC_QUI_SETTINGSVIEW_H
+
+#include "view.h"
+
+class QCheckBox;
+class QComboBox;
+class QLabel;
+class QLineEdit;
+class QListWidget;
+class QPushButton;
+class QSpinBox;
+
+namespace Qdc {
+
+class ConfigBridge;
+class Shares;
+
+/**
+ * Identity, limits and folders, bound to the core's configuration.
+ *
+ * Loaded on construction and written only when Save is pressed, rather than on
+ * every keystroke: half a nickname is not a nickname, and the store writes the
+ * whole file each time.
+ *
+ * Only settings the core actually reads are here. There is no control for
+ * anything it would merely store and ignore - a switch that does nothing is worse
+ * than an absent one. Two things the plan asks for are absent for that reason and
+ * say so in the form itself: a global rate limit, which nothing in the core
+ * enforces, and a separate folder for incomplete files, which the core does not
+ * have - a partial download lives beside its finished name with ".part" appended.
+ */
+class SettingsView final : public View {
+	Q_OBJECT
+
+public:
+	/**
+	 * @param config where everything is read and written. May be null, in which
+	 *        case the form is shown disabled.
+	 * @param shares the shared folder list; may be null.
+	 */
+	SettingsView(ConfigBridge* config, Shares* shares, QWidget* parent = nullptr);
+
+	QString title() const override;
+	Glyph glyph() const override;
+
+	/** Discard any edits and read the stored values again. */
+	void load();
+
+	/**
+	 * Write every field, save the file, and tell the core.
+	 * @return false if the file could not be written.
+	 */
+	bool save();
+
+	/** Whether anything has been edited since the last load or save. */
+	bool isModified() const;
+
+signals:
+	/** Saved successfully. The download directory may have changed. */
+	void saved();
+
+private:
+	QWidget* buildIdentity();
+	QWidget* buildLimits();
+	QWidget* buildDirectories();
+
+	/** Mark the form dirty and enable Save. Connected to every field. */
+	void markModified();
+
+	void refreshShareList();
+	void addShare();
+	void removeSelectedShare();
+	void renameSelectedShare();
+	void chooseDownloadDirectory();
+
+	/** A note under a group, in the muted colour. */
+	QLabel* makeNote(const QString& text);
+
+	ConfigBridge* m_config;
+	Shares* m_shares;
+
+	QLineEdit* m_nickname;
+	QLineEdit* m_description;
+	QLineEdit* m_email;
+	QLabel* m_clientId;
+
+	QComboBox* m_mode;
+	QSpinBox* m_port;
+	QLineEdit* m_bind;
+	QLineEdit* m_address;
+
+	QSpinBox* m_slots;
+	QSpinBox* m_maxDownloads;
+	QSpinBox* m_chunkSize;
+
+	QLineEdit* m_downloadDir;
+	QListWidget* m_shareList;
+	QPushButton* m_removeShare;
+	QPushButton* m_renameShare;
+
+	QPushButton* m_save;
+	QPushButton* m_revert;
+	QLabel* m_status;
+
+	/**
+	 * True while load() is populating the fields, so that setting them does not
+	 * count as the user editing them.
+	 */
+	bool m_loading = false;
+
+	bool m_modified = false;
+};
+
+}
+
+#endif // HAVE_QUICKDC_QUI_SETTINGSVIEW_H

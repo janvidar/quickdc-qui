@@ -9,6 +9,7 @@
 #include "usermodel.h"
 
 #include <core/corethread.h>
+#include <core/configbridge.h>
 #include <core/favourites.h>
 #include <core/transferbridge.h>
 #include <core/hubbridge.h>
@@ -40,12 +41,13 @@ QString decorate(const QString& title, int unread)
 
 Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
                         FilelistBridge* filelists, TransferBridge* transfers,
-                        QWidget* parent)
+                        ConfigBridge* config, QWidget* parent)
 	: View(parent)
 	, m_thread(thread)
 	, m_favourites(favourites)
 	, m_filelists(filelists)
 	, m_transfers(transfers)
+	, m_config(config)
 	, m_split(new QSplitter(Qt::Horizontal, this))
 	, m_tree(new QTreeWidget(this))
 	, m_stack(new QStackedWidget(this))
@@ -381,10 +383,10 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 		}
 
 		/*
-		 * Into the configured download directory under its own name. The queue
-		 * resolves a leading "~" itself.
+		 * Into the configured download directory under its own name. The core
+		 * resolves a leading "~" itself, so the default may stay in that form.
 		 */
-		const QString target = QStringLiteral("~/.quickdc/downloads/") + name;
+		const QString target = downloadDirectory() + QLatin1Char('/') + name;
 		m_transfers->enqueue(target, tth, size);
 	});
 
@@ -485,6 +487,18 @@ void Qdc::HubsView::refreshBadge()
 	for (ChatPane* pane : m_panes) unread += pane->unreadCount();
 
 	setBadgeCount(unread);
+}
+
+QString Qdc::HubsView::downloadDirectory() const
+{
+	/* The core's own default, from QUICKDC_DOWNLOAD_DIR. */
+	const QString fallback = QStringLiteral("~/.quickdc/downloads");
+	if (!m_config) return fallback;
+
+	const QString configured = m_config->getString(ConfigStore::Application,
+		QStringLiteral("Downloads"), QStringLiteral("Directory")).trimmed();
+
+	return configured.isEmpty() ? fallback : configured;
 }
 
 void Qdc::HubsView::promptForHub()

@@ -16,13 +16,3 @@ Qdc::Glyph Qdc::HomeView::glyph() const
 	return Glyph::Home;
 }
 
-Qdc::SettingsView::SettingsView(QWidget* parent)
-	: PlaceholderView(tr("Settings"), tr("Identity, limits and shared folders."),
-	                  parent)
-{
-}
-
-Qdc::Glyph Qdc::SettingsView::glyph() const
-{
-	return Glyph::Settings;
-}

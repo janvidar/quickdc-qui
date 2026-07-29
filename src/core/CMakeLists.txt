@@ -17,6 +17,8 @@ add_library(qdcbridge STATIC
     favourites.h
     filelistbridge.cpp
     filelistbridge.h
+    shares.cpp
+    shares.h
     hubbridge.cpp
     hubbridge.h
     transferbridge.cpp

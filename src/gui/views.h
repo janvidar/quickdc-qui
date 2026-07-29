@@ -18,15 +18,6 @@ public:
 	Glyph glyph() const override;
 };
 
-/** Identity, limits and directories. */
-class SettingsView final : public PlaceholderView {
-	Q_OBJECT
-
-public:
-	explicit SettingsView(QWidget* parent = nullptr);
-	Glyph glyph() const override;
-};
-
 }
 
 #endif // HAVE_QUICKDC_QUI_VIEWS_H

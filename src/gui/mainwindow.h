@@ -18,6 +18,7 @@ class CoreThread;
 class Favourites;
 class FilelistBridge;
 class HubsView;
+class Shares;
 class NavigationRail;
 class TransferBridge;
 class View;
@@ -72,6 +73,7 @@ private:
 	FilelistBridge* m_filelists;
 	Favourites* m_favourites;
 	Completed* m_completed;
+	Shares* m_shares;
 
 	/** Kept for openHub(), which the Home view will want. */
 	HubsView* m_hubs;

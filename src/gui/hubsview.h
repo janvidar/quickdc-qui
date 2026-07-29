@@ -21,6 +21,7 @@ class QTreeWidgetItem;
 namespace Qdc {
 
 class ChatPane;
+class ConfigBridge;
 class CoreThread;
 class DmPane;
 class Favourites;
@@ -55,7 +56,7 @@ public:
 	 */
 	HubsView(CoreThread* thread, Favourites* favourites,
 	         FilelistBridge* filelists, TransferBridge* transfers,
-	         QWidget* parent = nullptr);
+	         ConfigBridge* config, QWidget* parent = nullptr);
 	~HubsView() override;
 
 	QString title() const override;
@@ -121,10 +122,18 @@ private:
 
 	void onTreeSelectionChanged();
 
+	/**
+	 * Where a download should land: [Downloads] Directory, or the core's own
+	 * default when that is unset. Read each time rather than cached, so a change
+	 * in the settings takes effect without restarting.
+	 */
+	QString downloadDirectory() const;
+
 	CoreThread* m_thread;
 	Favourites* m_favourites;
 	FilelistBridge* m_filelists;
 	TransferBridge* m_transfers;
+	ConfigBridge* m_config;
 
 	QSplitter* m_split;
 	QTreeWidget* m_tree;

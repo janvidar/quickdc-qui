@@ -38,6 +38,8 @@ add_library(qdcgui STATIC
     glyphs.h
     progressdelegate.cpp
     progressdelegate.h
+    settingsview.cpp
+    settingsview.h
     transfermodels.cpp
     transfermodels.h
     transfersview.cpp
