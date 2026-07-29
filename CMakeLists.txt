@@ -30,13 +30,11 @@ option(QUICKDC_QUI_BUILD_TESTS "Build the quickdc-qui tests" ON)
 # ---------------------------------------------------------------------------
 # Qt
 #
-# Only Core so far. The bridge in src/core is QtCore alone - it deliberately
-# knows nothing about widgets - so asking for more would fail a configure over
-# something no target here uses. The view layer adds Qt6::Widgets when there is
-# one.
+# Widgets for the view layer in src/gui; the bridge in src/core links Core alone
+# and deliberately knows nothing about widgets.
 # ---------------------------------------------------------------------------
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 
 # AUTOMOC is set per target rather than globally: the core builds ~90 source
 # files that carry no Q_OBJECT, and scanning them all is wasted work.

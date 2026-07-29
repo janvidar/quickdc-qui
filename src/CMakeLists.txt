@@ -5,3 +5,6 @@
 # The isolation layer between the core and the views. Everything above this
 # links it and includes nothing else.
 add_subdirectory(core)
+
+add_subdirectory(gui)
+add_subdirectory(app)

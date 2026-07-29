@@ -1,0 +1,43 @@
+#
+## The Qt widget layer
+## Copyright (c) 2026, Jan Vidar Krey
+#
+
+# A library rather than part of the executable, so that the shell can be built
+# and driven by a test without a main().
+add_library(qdcgui STATIC
+    mainwindow.cpp
+    mainwindow.h
+    navigationrail.cpp
+    navigationrail.h
+    placeholderview.cpp
+    placeholderview.h
+    railbutton.cpp
+    railbutton.h
+    railglyph.cpp
+    railglyph.h
+    view.cpp
+    view.h
+    views.cpp
+    views.h)
+
+set_target_properties(qdcgui PROPERTIES
+    AUTOMOC ON
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+    POSITION_INDEPENDENT_CODE ON)
+
+target_include_directories(qdcgui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+# qdcbridge is PUBLIC because the view headers name its types, and it in turn
+# keeps quickdc::quickdc private - so nothing here can reach a core header. That
+# is the isolation rule, enforced by the link rather than by review.
+target_link_libraries(qdcgui
+    PUBLIC
+        qdcbridge
+        Qt6::Widgets)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(qdcgui PRIVATE -Wall -Wextra)
+endif()
