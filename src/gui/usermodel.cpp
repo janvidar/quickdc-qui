@@ -106,6 +106,19 @@ void Qdc::UserModel::upsert(const UserInfo& user)
 {
 	if (user.id.isEmpty()) return;
 
+	/*
+	 * This is the real record, so it is no longer standing in for anything.
+	 */
+	m_placeholders.remove(user.id);
+
+	/*
+	 * On ADC the id is a session id and the placeholder was keyed on the nickname,
+	 * so the stand-in has to be evicted by name before this row is added - or the
+	 * user is listed twice, once as a bare nickname and once for real.
+	 */
+	if (user.id != user.nick && m_placeholders.contains(user.nick))
+		remove(user.nick);
+
 	const auto existing = m_rows.constFind(user.id);
 	if (existing != m_rows.constEnd())
 	{
@@ -156,6 +169,12 @@ void Qdc::UserModel::noteNickname(const QString& nick)
 	user.sourceId = nick;
 
 	upsert(user);
+
+	/*
+	 * Marked after the insert, because upsert() clears the mark for the id it is
+	 * given - which is this one.
+	 */
+	m_placeholders.insert(nick);
 }
 
 void Qdc::UserModel::remove(const QString& id)
@@ -170,6 +189,7 @@ void Qdc::UserModel::remove(const QString& id)
 	endRemoveRows();
 
 	m_rows.remove(id);
+	m_placeholders.remove(id);
 	reindex(row);
 
 	emit countChanged(count());
@@ -182,6 +202,7 @@ void Qdc::UserModel::clear()
 	beginResetModel();
 	m_users.clear();
 	m_rows.clear();
+	m_placeholders.clear();
 	endResetModel();
 
 	emit countChanged(0);

@@ -7,6 +7,7 @@
 #include "chatmodel.h"
 
 #include <QAbstractTextDocumentLayout>
+#include <QFontMetricsF>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -23,9 +24,22 @@ constexpr int MARGIN_Y = 3;
 /** How near the bottom still counts as following the tail, in pixels. */
 constexpr int TAIL_SLACK = 24;
 
+/**
+ * Escape for the document, and turn real line breaks into <br>.
+ *
+ * A newline is whitespace in HTML and would otherwise collapse into a space, so a
+ * message someone sent as several lines would arrive as one. Both \r\n and a bare
+ * \r are normalised first, since either may come off the wire.
+ */
 QString escape(const QString& text)
 {
-	return text.toHtmlEscaped();
+	QString escaped = text.toHtmlEscaped();
+
+	escaped.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+	escaped.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+	escaped.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+
+	return escaped;
 }
 
 /**
@@ -70,7 +84,33 @@ public:
 		const QColor stamp = palette.color(QPalette::PlaceholderText);
 		const QString time = message.received.toString(QStringLiteral("HH:mm"));
 
-		QString html = QStringLiteral("<span style=\"color:%1\">%2</span> ")
+		/*
+		 * Where the message text starts, measured rather than guessed: the
+		 * timestamp is in the body font and the name is bold, so the two have to be
+		 * measured with the fonts they are drawn in.
+		 */
+		QFont bold = font;
+		bold.setBold(true);
+
+		const QString speaker = message.fromHub.isEmpty() ? message.from.nick
+		                                                  : message.fromHub;
+
+		const qreal indent = QFontMetricsF(font).horizontalAdvance(time + QLatin1Char(' '))
+			+ QFontMetricsF(bold).horizontalAdvance(speaker + QLatin1Char(' '));
+
+		/*
+		 * A hanging indent: the block is pushed right to the text column and its
+		 * first line pulled back out again, so every line after the first - whether
+		 * it came from a newline in the message or from wrapping - lines up under
+		 * the text rather than under the timestamp.
+		 */
+		const QString style =
+			QStringLiteral("margin-left:%1px; text-indent:-%1px;")
+				.arg(static_cast<int>(qRound(indent)));
+
+		QString html = QStringLiteral("<div style=\"%1\">").arg(style);
+
+		html += QStringLiteral("<span style=\"color:%1\">%2</span> ")
 			.arg(stamp.name(), escape(time));
 
 		if (!message.fromHub.isEmpty())
@@ -95,6 +135,8 @@ public:
 				.arg(nick_colour(message.from.nick, darkBackground).name(),
 				     escape(message.from.nick), escape(message.text));
 		}
+
+		html += QStringLiteral("</div>");
 
 		document.setHtml(html);
 		document.setTextWidth(width);

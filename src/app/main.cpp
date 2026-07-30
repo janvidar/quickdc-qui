@@ -39,15 +39,27 @@ int main(int argc, char** argv)
 		return 1;
 	}
 
-	Qdc::MainWindow window(&core);
-	window.show();
-
-	const int status = QApplication::exec();
+	int status = 0;
 
 	/*
-	 * Explicit, and before the window goes out of scope, so that the queue and
-	 * the hash cache are flushed while there is still something to report a
-	 * failure to. The destructor would do it, but silently and later.
+	 * The window is scoped so that it is destroyed before the core is stopped.
+	 *
+	 * Its bridges unregister themselves from the core as they go, and each of them
+	 * does so by blocking on a job on the core thread - which only runs while the
+	 * core is up. Shutting down first left every one of those jobs refused, so the
+	 * sessions and listeners were never unregistered at all.
+	 */
+	{
+		Qdc::MainWindow window(&core);
+		window.show();
+
+		status = QApplication::exec();
+	}
+
+	/*
+	 * Explicit rather than left to the destructor, so that flushing the download
+	 * queue and the hash cache happens here, where a failure could still be
+	 * reported, rather than silently on the way out of scope.
 	 */
 	core.shutdown();
 

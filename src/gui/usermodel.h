@@ -10,6 +10,7 @@
 #include <QAbstractListModel>
 #include <QHash>
 #include <QList>
+#include <QSet>
 
 namespace Qdc {
 
@@ -46,8 +47,13 @@ public:
 	void upsert(const UserInfo& user);
 
 	/**
-	 * A nickname with nothing else known yet, from a join. Ignored if that user
-	 * is already present, so a join arriving after the details cannot undo them.
+	 * A nickname with nothing else known yet, from a join.
+	 *
+	 * The core raises a join and an info event for the same new user, and the join
+	 * carries only a nickname while the info carries the id. On NMDC those are the
+	 * same string and the row is simply filled in; on ADC the id is a session id,
+	 * so the row this adds is a placeholder that upsert() replaces once the real
+	 * record arrives. Without that replacement every ADC user appears twice.
 	 */
 	void noteNickname(const QString& nick);
 
@@ -80,6 +86,16 @@ private:
 
 	/** Row by user id, so an update or a departure is not a linear scan. */
 	QHash<QString, int> m_rows;
+
+	/**
+	 * Ids of rows that came from a bare nickname and are standing in for a user
+	 * whose real record has not arrived.
+	 *
+	 * Tracked rather than inferred from an empty field, because a real user may
+	 * legitimately have no description or share and would then look like a
+	 * placeholder.
+	 */
+	QSet<QString> m_placeholders;
 };
 
 }

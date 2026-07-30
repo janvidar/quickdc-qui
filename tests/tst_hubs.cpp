@@ -7,13 +7,16 @@
 #include <core/favourites.h>
 #include <core/filelistbridge.h>
 #include <core/hubbridge.h>
+#include <gui/chatfeed.h>
 #include <gui/chatmodel.h>
 #include <gui/chatpane.h>
 #include <gui/filelistview.h>
 #include <gui/hubsview.h>
 #include <gui/usermodel.h>
 
+#include <QApplication>
 #include <QDir>
+#include <QStyleOptionViewItem>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -40,6 +43,8 @@ private slots:
 	void userModelOrdersOperatorsFirst();
 	void userModelReplacesOnUpdate();
 	void userModelForgetsUsersWhoLeave();
+	void userModelListsAdcUsersOnce();
+	void chatFeedGivesMultiLineMessagesMoreHeight();
 
 	void favouritesRoundTripThroughTheStore();
 	void favouritesShrinkWithoutLeavingATail();
@@ -221,6 +226,104 @@ void TestHubs::userModelForgetsUsersWhoLeave()
 
 	model.clear();
 	QCOMPARE(model.count(), 0);
+}
+
+void TestHubs::userModelListsAdcUsersOnce()
+{
+	Qdc::UserModel model;
+
+	/*
+	 * What the core actually does for a new user: UserManager::info() raises a
+	 * join carrying the nickname and an info carrying the record. On ADC the
+	 * record's id is a session id, not the nickname.
+	 */
+	model.noteNickname(QStringLiteral("alice"));
+	QCOMPARE(model.count(), 1);
+
+	Qdc::UserInfo real;
+	real.id = QStringLiteral("AAAB");
+	real.nick = QStringLiteral("alice");
+	real.sourceId = QStringLiteral("ACSTOWQXZASA");
+
+	model.upsert(real);
+
+	/* One row, and it is the real record rather than the bare nickname. */
+	QCOMPARE(model.count(), 1);
+	QCOMPARE(model.at(0).id, QStringLiteral("AAAB"));
+	QCOMPARE(model.at(0).nick, QStringLiteral("alice"));
+	QCOMPARE(model.at(0).sourceId, QStringLiteral("ACSTOWQXZASA"));
+
+	/* Leaving is reported by session id, which is what the surviving row uses. */
+	model.remove(QStringLiteral("AAAB"));
+	QCOMPARE(model.count(), 0);
+
+	/* On NMDC the id is the nickname, so the placeholder is simply filled in. */
+	model.noteNickname(QStringLiteral("bob"));
+	Qdc::UserInfo nmdc = user(QStringLiteral("bob"));
+	nmdc.description = QStringLiteral("somewhere");
+	model.upsert(nmdc);
+
+	QCOMPARE(model.count(), 1);
+	QCOMPARE(model.at(0).description, QStringLiteral("somewhere"));
+
+	/*
+	 * And a later record for someone whose placeholder is long gone must not
+	 * evict an unrelated row that happens to be named like a session id.
+	 */
+	Qdc::UserInfo other;
+	other.id = QStringLiteral("bob");
+	other.nick = QStringLiteral("bob");
+	model.upsert(other);
+	QCOMPARE(model.count(), 1);
+}
+
+void TestHubs::chatFeedGivesMultiLineMessagesMoreHeight()
+{
+	Qdc::ChatModel model;
+
+	Qdc::ChatMessage single;
+	single.from = user(QStringLiteral("alice"));
+	single.text = QStringLiteral("one line");
+	single.received = QDateTime::currentDateTime();
+	model.append(single);
+
+	Qdc::ChatMessage several = single;
+	several.text = QStringLiteral("first\nsecond\nthird");
+	model.append(several);
+
+	Qdc::ChatMessage crlf = single;
+	crlf.text = QStringLiteral("first\r\nsecond\r\nthird");
+	model.append(crlf);
+
+	/*
+	 * The delegate is measured directly rather than through the view. Asking the
+	 * view means asking before its viewport has been laid out, and the delegate
+	 * answers a single line's height for any row when it is given no width - so
+	 * the test would pass whatever the layout did.
+	 */
+	Qdc::ChatDelegate delegate;
+
+	QStyleOptionViewItem option;
+	option.rect = QRect(0, 0, 420, 0);
+	option.font = QApplication::font();
+	option.palette = QApplication::palette();
+
+	const int one = delegate.sizeHint(option, model.index(0)).height();
+	const int three = delegate.sizeHint(option, model.index(1)).height();
+	const int viaCrlf = delegate.sizeHint(option, model.index(2)).height();
+
+	QVERIFY(one > 0);
+
+	/*
+	 * A newline is whitespace in HTML: before the fix all three rows were one line
+	 * tall and the message read "first second third".
+	 */
+	QVERIFY2(three > 2 * one,
+	         qPrintable(QStringLiteral("three lines measured %1, one line %2")
+	                    .arg(three).arg(one)));
+
+	/* Carriage returns off the wire count as line breaks too. */
+	QCOMPARE(viaCrlf, three);
 }
 
 void TestHubs::favouritesRoundTripThroughTheStore()
