@@ -18,10 +18,11 @@
 #include <core/shares.h>
 #include <core/transferbridge.h>
 
-#include <QFrame>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QVBoxLayout>
 
 Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	: QMainWindow(parent)
@@ -36,19 +37,29 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	, m_rail(new NavigationRail)
 	, m_stack(new QStackedWidget)
 {
-	QWidget* central = new QWidget(this);
+	m_stack->setObjectName(QStringLiteral("contentStack"));
+	m_stack->setAutoFillBackground(true);
 
-	QHBoxLayout* layout = new QHBoxLayout(central);
+	/*
+	 * The frame: the window's own surface, which the top bar and the rail share and
+	 * the content is inset into. No divider between rail and content - the colour
+	 * change is the division, and a line through it would only break the corner.
+	 */
+	QWidget* central = new QWidget(this);
+	central->setObjectName(QStringLiteral("appFrame"));
+	central->setAutoFillBackground(true);
+
+	QHBoxLayout* body = new QHBoxLayout;
+	body->setContentsMargins(0, 0, 0, 0);
+	body->setSpacing(0);
+	body->addWidget(m_rail);
+	body->addWidget(m_stack, 1);
+
+	QVBoxLayout* layout = new QVBoxLayout(central);
 	layout->setContentsMargins(0, 0, 0, 0);
 	layout->setSpacing(0);
-
-	QFrame* divider = new QFrame(central);
-	divider->setFrameShape(QFrame::VLine);
-	divider->setFrameShadow(QFrame::Plain);
-
-	layout->addWidget(m_rail);
-	layout->addWidget(divider);
-	layout->addWidget(m_stack, 1);
+	layout->addWidget(buildTopBar());
+	layout->addLayout(body, 1);
 
 	setCentralWidget(central);
 
@@ -121,6 +132,33 @@ Qdc::MainWindow::~MainWindow()
 	m_config = nullptr;
 }
 
+QWidget* Qdc::MainWindow::buildTopBar()
+{
+	QWidget* bar = new QWidget(this);
+	bar->setObjectName(QStringLiteral("topBar"));
+	bar->setAutoFillBackground(true);
+	bar->setFixedHeight(42);
+
+	QLabel* product = new QLabel(QStringLiteral("QuickDC"), bar);
+	product->setObjectName(QStringLiteral("topBarTitle"));
+
+	QFont large = product->font();
+	large.setPointSize(large.pointSize() + 1);
+	product->setFont(large);
+
+	m_topBarTitle = new QLabel(bar);
+	m_topBarTitle->setObjectName(QStringLiteral("topBarSubtitle"));
+
+	QHBoxLayout* layout = new QHBoxLayout(bar);
+	layout->setContentsMargins(16, 0, 16, 0);
+	layout->setSpacing(10);
+	layout->addWidget(product);
+	layout->addWidget(m_topBarTitle);
+	layout->addStretch(1);
+
+	return bar;
+}
+
 void Qdc::MainWindow::addView(View* view)
 {
 	const int index = m_rail->addDestination(view->glyph(), view->title());
@@ -143,7 +181,11 @@ void Qdc::MainWindow::showView(int index)
 	m_rail->setCurrentIndex(index);
 	m_stack->setCurrentIndex(index);
 
-	setWindowTitle(tr("%1 — QuickDC").arg(m_views.at(index)->title()));
+	const QString title = m_views.at(index)->title();
+
+	if (m_topBarTitle) m_topBarTitle->setText(QStringLiteral("· ") + title);
+
+	setWindowTitle(tr("%1 — QuickDC").arg(title));
 }
 
 int Qdc::MainWindow::currentIndex() const

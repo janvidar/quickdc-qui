@@ -40,6 +40,8 @@ add_library(qdcgui STATIC
     progressdelegate.h
     settingsview.cpp
     settingsview.h
+    theme.cpp
+    theme.h
     transfermodels.cpp
     transfermodels.h
     transfersview.cpp

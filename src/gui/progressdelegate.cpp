@@ -4,6 +4,8 @@
 
 #include "progressdelegate.h"
 
+#include "theme.h"
+
 #include <QApplication>
 #include <QPainter>
 #include <QStyle>
@@ -59,24 +61,20 @@ void Qdc::ProgressDelegate::paint(QPainter* painter,
 	painter->save();
 	painter->setRenderHint(QPainter::Antialiasing, true);
 
-	const QPalette& colours = option.palette;
-	const bool selected = (option.state & QStyle::State_Selected);
-
 	/*
-	 * On a selected row the track has to sit against the highlight rather than
-	 * against the base, or it disappears into it.
+	 * The same colours whether or not the row is selected: the selection is a pale
+	 * tint rather than a strong fill, so the bar reads against it unchanged. It had
+	 * to be inverted back when selection was a dark colour.
 	 */
-	QColor trackColour = colours.color(selected ? QPalette::Highlight
-	                                            : QPalette::AlternateBase);
-	trackColour = selected ? trackColour.lighter(115) : trackColour.darker(108);
-
 	painter->setPen(Qt::NoPen);
-	painter->setBrush(trackColour);
+	painter->setBrush(theme().border);
 	painter->drawRoundedRect(track, RADIUS, RADIUS);
+
+	QRectF filled;
 
 	if (done > 0.0)
 	{
-		QRectF filled = track;
+		filled = track;
 		filled.setWidth(track.width() * done);
 
 		/*
@@ -86,19 +84,37 @@ void Qdc::ProgressDelegate::paint(QPainter* painter,
 		 */
 		filled.setWidth(qMax(filled.width(), 2.0 * RADIUS));
 
-		painter->setBrush(colours.color(selected ? QPalette::HighlightedText
-		                                         : QPalette::Highlight));
+		painter->setBrush(theme().accent);
 		painter->drawRoundedRect(filled, RADIUS, RADIUS);
 	}
-
-	/* The percentage over the bar, in whichever colour reads on this row. */
-	painter->setPen(colours.color(selected ? QPalette::HighlightedText
-	                                       : QPalette::Text));
 
 	QFont small = option.font;
 	small.setPointSize(qMax(1, small.pointSize() - 2));
 	painter->setFont(small);
-	painter->drawText(option.rect, Qt::AlignCenter, text);
+
+	/*
+	 * The percentage is drawn twice, clipped to either side of the fill: once in
+	 * the colour that reads on the filled part and once in the colour that reads
+	 * on the track. A single pass cannot do it - wherever the text crosses the
+	 * edge of the bar, one half of it disappears into the background.
+	 */
+	const QRect whole = option.rect;
+	const QRect filledPart = filled.isEmpty() ? QRect() : filled.toAlignedRect();
+
+	if (!filledPart.isEmpty())
+	{
+		painter->save();
+		painter->setClipRect(filledPart);
+		painter->setPen(theme().accentText);
+		painter->drawText(whole, Qt::AlignCenter, text);
+		painter->restore();
+	}
+
+	painter->save();
+	painter->setClipRegion(QRegion(whole).subtracted(QRegion(filledPart)));
+	painter->setPen(theme().contentText);
+	painter->drawText(whole, Qt::AlignCenter, text);
+	painter->restore();
 
 	painter->restore();
 }

@@ -4,6 +4,7 @@
 
 #include <core/corethread.h>
 #include <gui/mainwindow.h>
+#include <gui/theme.h>
 
 #include <QApplication>
 #include <QMessageBox>
@@ -94,6 +95,12 @@ int main(int argc, char** argv)
 	QApplication::setApplicationDisplayName(QStringLiteral("QuickDC"));
 	QApplication::setOrganizationName(QStringLiteral("QuickDC"));
 	QApplication::setDesktopFileName(QStringLiteral("quickdc-qui"));
+
+	/*
+	 * Before any widget is built, so nothing is created against the platform
+	 * palette and restyled afterwards.
+	 */
+	Qdc::applyTheme(Qdc::defaultTheme());
 
 	/*
 	 * Declared before the window so that it outlives it. The window's bridges

@@ -4,7 +4,48 @@
 
 #include "usermodel.h"
 
+#include "theme.h"
+
+#include <QIcon>
 #include <QLocale>
+#include <QPainter>
+#include <QPixmap>
+
+namespace {
+
+/**
+ * The presence dot, made once and reused.
+ *
+ * Built rather than shipped as an asset so it follows the theme, and cached
+ * because a user list asks for it on every row of every repaint.
+ */
+QIcon presence_dot()
+{
+	static QIcon dot;
+
+	if (dot.isNull())
+	{
+		constexpr int SIZE = 8;
+		constexpr qreal RATIO = 3.0;
+
+		QPixmap pixmap(QSize(SIZE, SIZE) * RATIO);
+		pixmap.setDevicePixelRatio(RATIO);
+		pixmap.fill(Qt::transparent);
+
+		QPainter painter(&pixmap);
+		painter.setRenderHint(QPainter::Antialiasing, true);
+		painter.setPen(Qt::NoPen);
+		painter.setBrush(Qdc::theme().presence);
+		painter.drawEllipse(QRectF(1.0, 1.0, SIZE - 2.0, SIZE - 2.0));
+		painter.end();
+
+		dot = QIcon(pixmap);
+	}
+
+	return dot;
+}
+
+}
 
 Qdc::UserModel::UserModel(QObject* parent)
 	: QAbstractListModel(parent)
@@ -30,6 +71,15 @@ QVariant Qdc::UserModel::data(const QModelIndex& index, int role) const
 
 		case Qt::DisplayRole:
 			return user.nick;
+
+		case Qt::DecorationRole:
+			/*
+			 * A presence dot. Everyone listed is on the hub - there is no away or
+			 * busy state in either protocol - so the dot says "here" and nothing
+			 * more, which is still worth saying: it is what makes the column read
+			 * as people rather than as strings.
+			 */
+			return presence_dot();
 
 		case Qt::ToolTipRole:
 		{

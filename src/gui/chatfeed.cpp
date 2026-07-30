@@ -18,8 +18,8 @@
 
 namespace {
 
-constexpr int MARGIN_X = 8;
-constexpr int MARGIN_Y = 3;
+constexpr int MARGIN_X = 12;
+constexpr int MARGIN_Y = 4;
 
 /** How near the bottom still counts as following the tail, in pixels. */
 constexpr int TAIL_SLACK = 24;

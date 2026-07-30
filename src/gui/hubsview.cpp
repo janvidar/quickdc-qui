@@ -6,6 +6,7 @@
 
 #include "hubheader.h"
 #include "hubpane.h"
+#include "theme.h"
 #include "usermodel.h"
 
 #include <core/corethread.h>
@@ -55,6 +56,7 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	, m_empty(new QWidget(this))
 	, m_connect(new QPushButton(tr("Connect to a hub…"), this))
 {
+	m_tree->setObjectName(QStringLiteral("hubTree"));
 	m_tree->setHeaderHidden(true);
 	m_tree->setColumnCount(1);
 	m_tree->setFrameShape(QFrame::NoFrame);
@@ -75,7 +77,7 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	nothing->setAlignment(Qt::AlignCenter);
 
 	QPalette muted = nothing->palette();
-	muted.setColor(QPalette::WindowText, muted.color(QPalette::PlaceholderText));
+	muted.setColor(QPalette::WindowText, theme().contentMuted);
 	nothing->setPalette(muted);
 
 	QPushButton* openFromEmpty = new QPushButton(tr("Connect to a hub…"), m_empty);
@@ -93,6 +95,14 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	connect(m_connect, &QPushButton::clicked, this, &HubsView::promptForHub);
 
 	QWidget* side = new QWidget(this);
+
+	/*
+	 * Named for the stylesheet: the sidebar sits a step lighter than the rail and
+	 * a long way darker than the content, which is what gives the window its
+	 * depth.
+	 */
+	side->setObjectName(QStringLiteral("secondaryNav"));
+	side->setAutoFillBackground(true);
 	QVBoxLayout* sideLayout = new QVBoxLayout(side);
 	sideLayout->setContentsMargins(0, 0, 0, 6);
 	sideLayout->setSpacing(6);

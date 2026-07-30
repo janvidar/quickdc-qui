@@ -261,6 +261,7 @@ Qdc::Composer::Composer(QWidget* parent)
 	bar->addWidget(m_emoji);
 	bar->addStretch(1);
 
+	m_send->setObjectName(QStringLiteral("primaryButton"));
 	m_send->setText(tr("Send"));
 	m_send->setToolTip(tr("Send the message (Return; Shift+Return for a new line)"));
 	m_send->setCursor(Qt::PointingHandCursor);

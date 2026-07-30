@@ -5,6 +5,7 @@
 #include "navigationrail.h"
 
 #include "railbutton.h"
+#include "theme.h"
 
 #include <QButtonGroup>
 #include <QVBoxLayout>
@@ -22,14 +23,15 @@ Qdc::NavigationRail::NavigationRail(QWidget* parent)
 	setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
 
 	/*
-	 * The rail is a distinct surface from the content beside it. AutoFillBackground
-	 * with the palette's alternate base is the cheapest way to say so that still
-	 * follows the desktop into dark mode.
+	 * Named so the stylesheet can address it: the rail is the darkest surface in
+	 * the window and does not follow the content palette.
 	 */
-	QPalette shaded = palette();
-	shaded.setColor(QPalette::Window, shaded.color(QPalette::AlternateBase));
-	setPalette(shaded);
+	setObjectName(QStringLiteral("navigationRail"));
 	setAutoFillBackground(true);
+
+	QPalette shaded = palette();
+	shaded.setColor(QPalette::Window, Qdc::theme().rail);
+	setPalette(shaded);
 
 	setAccessibleName(tr("Navigation"));
 }

@@ -5,6 +5,7 @@
 #include "hubheader.h"
 
 #include "glyphs.h"
+#include "theme.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
@@ -70,6 +71,9 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	, m_users(new QToolButton(this))
 	, m_close(new QToolButton(this))
 {
+	setObjectName(QStringLiteral("hubHeader"));
+	setAutoFillBackground(true);
+
 	QFont titleFont = m_title->font();
 	titleFont.setBold(true);
 	titleFont.setPointSize(titleFont.pointSize() + 1);
@@ -81,7 +85,7 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	m_subtitle->setFont(subtitleFont);
 
 	QPalette muted = m_subtitle->palette();
-	muted.setColor(QPalette::WindowText, muted.color(QPalette::PlaceholderText));
+	muted.setColor(QPalette::WindowText, theme().contentMuted);
 	m_subtitle->setPalette(muted);
 	m_subtitle->hide();
 
@@ -100,7 +104,7 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	m_close->setAccessibleName(tr("Leave"));
 
 	const qreal ratio = devicePixelRatioF();
-	const QColor ink = palette().color(QPalette::WindowText);
+	const QColor ink = theme().contentMuted;
 
 	m_users->setIcon(glyph_icon(Glyph::People, ink, ratio));
 	m_close->setIcon(glyph_icon(Glyph::Close, ink, ratio));
@@ -221,8 +225,7 @@ void Qdc::HubHeader::refreshStar()
 	 * outline rather than a dimmed fill, so the two are distinguishable without
 	 * relying on colour.
 	 */
-	const QColor colour = m_favourite ? QColor(0xe8, 0xa8, 0x1f)
-	                                  : palette().color(QPalette::WindowText);
+	const QColor colour = m_favourite ? theme().star : theme().contentMuted;
 
 	m_star->setIcon(glyph_icon(m_favourite ? Glyph::Star : Glyph::StarOutline,
 	                           colour, ratio));
@@ -237,8 +240,7 @@ void Qdc::HubHeader::refreshLock()
 {
 	const qreal ratio = devicePixelRatioF();
 
-	const QColor colour = m_secure ? QColor(0x2e, 0x8b, 0x4f)
-	                               : palette().color(QPalette::PlaceholderText);
+	const QColor colour = m_secure ? theme().success : theme().contentMuted;
 
 	QPixmap pixmap(QSize(GLYPH, GLYPH) * ratio);
 	pixmap.setDevicePixelRatio(ratio);

@@ -28,12 +28,17 @@ Qdc::ChatPane::ChatPane(HubBridge* hub, QWidget* parent)
 	, m_messages(new QSplitter(Qt::Horizontal, this))
 {
 	m_feed->setModel(m_model);
+	m_feed->setObjectName(QStringLiteral("chatFeed"));
 
 	QWidget* conversation = new QWidget(m_messages);
+	conversation->setObjectName(QStringLiteral("chatSurface"));
+	conversation->setAutoFillBackground(true);
 
 	QFrame* divider = new QFrame(conversation);
 	divider->setFrameShape(QFrame::HLine);
 	divider->setFrameShadow(QFrame::Plain);
+
+	m_composer->setObjectName(QStringLiteral("composerSurface"));
 
 	QVBoxLayout* stacked = new QVBoxLayout(conversation);
 	stacked->setContentsMargins(0, 0, 0, 0);

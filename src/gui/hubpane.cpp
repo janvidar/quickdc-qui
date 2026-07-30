@@ -53,6 +53,7 @@ Qdc::HubPane::HubPane(HubBridge* hub, QWidget* parent)
 	header()->setUserListVisible(true);
 	header()->setFavouriteVisible(true);
 
+	m_userList->setObjectName(QStringLiteral("userList"));
 	m_userList->setModel(m_users);
 	m_userList->setUniformItemSizes(true);
 	m_userList->setFrameShape(QFrame::NoFrame);

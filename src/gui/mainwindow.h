@@ -8,6 +8,7 @@
 #include <QList>
 #include <QMainWindow>
 
+class QLabel;
 class QStackedWidget;
 
 namespace Qdc {
@@ -58,8 +59,17 @@ private:
 	 */
 	void addView(View* view);
 
-	/** Follow the current view: rail selection, stack, and window title. */
+	/** Follow the current view: rail selection, stack, top bar, window title. */
 	void showView(int index);
+
+	/**
+	 * The strip across the top of the window, in the frame colour.
+	 *
+	 * Drawn inside the window rather than by styling the native title bar, which Qt
+	 * cannot colour without platform code. On macOS that leaves the system title
+	 * bar above it; a frameless window would be the way to merge the two.
+	 */
+	QWidget* buildTopBar();
 
 	CoreThread* m_thread;
 
@@ -81,6 +91,9 @@ private:
 	NavigationRail* m_rail;
 	QStackedWidget* m_stack;
 	QList<View*> m_views;
+
+	/** Names the view on screen, in the top bar. Built in the constructor body. */
+	QLabel* m_topBarTitle = nullptr;
 };
 
 }

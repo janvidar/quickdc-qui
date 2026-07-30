@@ -5,6 +5,7 @@
 #include "railbutton.h"
 
 #include "glyphs.h"
+#include "theme.h"
 
 #include <QEnterEvent>
 #include <QFontMetricsF>
@@ -114,33 +115,23 @@ void Qdc::RailButton::paintEvent(QPaintEvent*)
 	QPainter painter(this);
 	painter.setRenderHint(QPainter::Antialiasing, true);
 
-	const QPalette& colours = palette();
+	const Theme& scheme = theme();
 	const bool selected = isChecked();
 
 	/*
-	 * Highlight behind the whole button when selected, and a lighter wash on
-	 * hover. Both are drawn from the palette so the rail follows the desktop
-	 * into dark mode without a stylesheet.
+	 * A rounded pill behind the current destination and a lighter wash under the
+	 * pointer. Taken from the theme rather than the palette: the rail is its own
+	 * surface and the palette describes the content area.
 	 */
-	if (selected)
+	if (selected || (underMouse() && isEnabled()))
 	{
 		painter.setPen(Qt::NoPen);
-		painter.setBrush(colours.color(QPalette::Highlight));
-		painter.drawRoundedRect(rect().adjusted(4, 2, -4, -2),
-		                        SELECTION_RADIUS, SELECTION_RADIUS);
-	}
-	else if (underMouse() && isEnabled())
-	{
-		QColor wash = colours.color(QPalette::Highlight);
-		wash.setAlpha(40);
-		painter.setPen(Qt::NoPen);
-		painter.setBrush(wash);
-		painter.drawRoundedRect(rect().adjusted(4, 2, -4, -2),
+		painter.setBrush(selected ? scheme.railActive : scheme.railHover);
+		painter.drawRoundedRect(rect().adjusted(5, 3, -5, -3),
 		                        SELECTION_RADIUS, SELECTION_RADIUS);
 	}
 
-	QColor ink = colours.color(selected ? QPalette::HighlightedText
-	                                    : QPalette::WindowText);
+	QColor ink = selected ? scheme.railTextActive : scheme.railText;
 	if (!isEnabled()) ink.setAlpha(90);
 
 	const QRectF glyphBox((width() - GLYPH_SIZE) / 2.0, GLYPH_TOP,
@@ -168,13 +159,15 @@ void Qdc::RailButton::paintEvent(QPaintEvent*)
 	 * the glyph rather than merging into it, which matters most when the button
 	 * is selected and both are strong colours.
 	 */
-	painter.setPen(QPen(colours.color(QPalette::Window), 2.0));
-	painter.setBrush(QColor(0xd6, 0x3c, 0x3c));
+	painter.setPen(QPen(scheme.rail, 2.0));
+	painter.setBrush(scheme.notification);
 	painter.drawRoundedRect(box, box.height() / 2.0, box.height() / 2.0);
 
 	QFont badgeFont = captionFont;
 	badgeFont.setBold(true);
 	painter.setFont(badgeFont);
-	painter.setPen(Qt::white);
+
+	/* The notification colour is light, so the count on it has to be dark. */
+	painter.setPen(scheme.notificationText);
 	painter.drawText(box, Qt::AlignCenter, badge);
 }
