@@ -65,9 +65,14 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	m_tree->setSelectionMode(QAbstractItemView::SingleSelection);
 
 	/*
-	 * Expanding on a single click as well as on the arrow, because the rows are
-	 * short and hitting a disclosure triangle is fiddly.
+	 * No disclosure arrows in front of the hubs. Conversations under a hub are
+	 * opened and closed from the conversation itself and are always shown while they
+	 * are open, so the arrow has nothing to do - and without it a hub row starts at
+	 * the edge, which is what lets the selection be one unbroken pill.
 	 */
+	m_tree->setRootIsDecorated(false);
+
+	/* Which leaves a double click as the way to fold a hub away. */
 	m_tree->setExpandsOnDoubleClick(true);
 
 	connect(m_tree, &QTreeWidget::itemSelectionChanged,

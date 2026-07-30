@@ -14,6 +14,8 @@ add_library(qdcgui STATIC
     chatpane.h
     composer.cpp
     composer.h
+    cornermask.cpp
+    cornermask.h
     fileactions.cpp
     fileactions.h
     filelistview.cpp
@@ -28,6 +30,7 @@ add_library(qdcgui STATIC
     hubheader.h
     mainwindow.cpp
     mainwindow.h
+    nativewindow.h
     usermodel.cpp
     usermodel.h
     navigationrail.cpp
@@ -48,6 +51,15 @@ add_library(qdcgui STATIC
     transfersview.h
     view.cpp
     view.h)
+
+# The title bar is the platform's, so colouring it is platform code: Objective-C++
+# against AppKit on macOS, and a no-op elsewhere.
+if(APPLE)
+    target_sources(qdcgui PRIVATE nativewindow_mac.mm)
+    target_link_libraries(qdcgui PRIVATE "-framework AppKit")
+else()
+    target_sources(qdcgui PRIVATE nativewindow_other.cpp)
+endif()
 
 set_target_properties(qdcgui PROPERTIES
     AUTOMOC ON

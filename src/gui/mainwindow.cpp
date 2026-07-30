@@ -4,8 +4,10 @@
 
 #include "mainwindow.h"
 
+#include "cornermask.h"
 #include "homeview.h"
 #include "hubsview.h"
+#include "nativewindow.h"
 #include "navigationrail.h"
 #include "settingsview.h"
 #include "transfersview.h"
@@ -18,11 +20,29 @@
 #include <core/shares.h>
 #include <core/transferbridge.h>
 
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QShowEvent>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QVBoxLayout>
+
+namespace {
+
+/**
+ * How far the content is held off the right-hand edge of the window.
+ *
+ * The frame closes on all four sides: the top bar above, the rail to the left and
+ * the status bar below already do it, and this is the fourth. Matched to the large
+ * corner radius, so the gap and the curve are the same size.
+ */
+constexpr int RIGHT_INSET = 8;
+
+constexpr int TOP_BAR_HEIGHT = 42;
+constexpr int TOP_BAR_MARGIN = 16;
+
+}
 
 Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	: QMainWindow(parent)
@@ -50,7 +70,7 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	central->setAutoFillBackground(true);
 
 	QHBoxLayout* body = new QHBoxLayout;
-	body->setContentsMargins(0, 0, 0, 0);
+	body->setContentsMargins(0, 0, RIGHT_INSET, 0);
 	body->setSpacing(0);
 	body->addWidget(m_rail);
 	body->addWidget(m_stack, 1);
@@ -60,6 +80,14 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	layout->setSpacing(0);
 	layout->addWidget(buildTopBar());
 	layout->addLayout(body, 1);
+
+	/*
+	 * Built after the stack and as a sibling of it, which is what puts its corners
+	 * over the top. It follows the stack around by watching it for resizes rather
+	 * than by being laid out, since a layout would give it space of its own.
+	 */
+	m_mask = new CornerMask(central);
+	m_stack->installEventFilter(this);
 
 	setCentralWidget(central);
 
@@ -132,12 +160,51 @@ Qdc::MainWindow::~MainWindow()
 	m_config = nullptr;
 }
 
+bool Qdc::MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+	if (watched == m_stack && m_mask
+		&& (event->type() == QEvent::Resize || event->type() == QEvent::Move))
+	{
+		m_mask->cover(m_stack->geometry());
+	}
+
+	return QMainWindow::eventFilter(watched, event);
+}
+
+bool Qdc::MainWindow::event(QEvent* event)
+{
+	const bool handled = QMainWindow::event(event);
+
+	switch (event->type())
+	{
+		/*
+		 * Not only on the way up. Qt rewrites the window's style mask whenever the
+		 * size constraints change - switching view is enough to do it - and undoes
+		 * the title bar's colour on the way past, so it is put back after anything
+		 * that might have disturbed it. styleTitleBar() returns straight away when
+		 * there is nothing to do, which is almost always.
+		 */
+		case QEvent::Show:
+		case QEvent::Resize:
+		case QEvent::LayoutRequest:
+		case QEvent::WindowStateChange:
+		case QEvent::WindowActivate:
+			styleTitleBar(this);
+			break;
+
+		default:
+			break;
+	}
+
+	return handled;
+}
+
 QWidget* Qdc::MainWindow::buildTopBar()
 {
 	QWidget* bar = new QWidget(this);
 	bar->setObjectName(QStringLiteral("topBar"));
 	bar->setAutoFillBackground(true);
-	bar->setFixedHeight(42);
+	bar->setFixedHeight(TOP_BAR_HEIGHT);
 
 	QLabel* product = new QLabel(QStringLiteral("QuickDC"), bar);
 	product->setObjectName(QStringLiteral("topBarTitle"));
@@ -150,7 +217,7 @@ QWidget* Qdc::MainWindow::buildTopBar()
 	m_topBarTitle->setObjectName(QStringLiteral("topBarSubtitle"));
 
 	QHBoxLayout* layout = new QHBoxLayout(bar);
-	layout->setContentsMargins(16, 0, 16, 0);
+	layout->setContentsMargins(TOP_BAR_MARGIN, 0, TOP_BAR_MARGIN, 0);
 	layout->setSpacing(10);
 	layout->addWidget(product);
 	layout->addWidget(m_topBarTitle);

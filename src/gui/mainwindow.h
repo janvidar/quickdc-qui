@@ -15,6 +15,7 @@ namespace Qdc {
 
 class Completed;
 class ConfigBridge;
+class CornerMask;
 class CoreThread;
 class Favourites;
 class FilelistBridge;
@@ -52,6 +53,16 @@ public:
 
 	NavigationRail* rail() const;
 
+protected:
+	/** Keeps the corner mask over the content stack as the window is resized. */
+	bool eventFilter(QObject* watched, QEvent* event) override;
+
+	/**
+	 * Keeps the native title bar coloured. Qt undoes it whenever it rewrites the
+	 * window's style mask, so it is reapplied after anything that might have.
+	 */
+	bool event(QEvent* event) override;
+
 private:
 	/**
 	 * Add a view as a rail destination, wiring its badge to the rail and taking
@@ -65,9 +76,8 @@ private:
 	/**
 	 * The strip across the top of the window, in the frame colour.
 	 *
-	 * Drawn inside the window rather than by styling the native title bar, which Qt
-	 * cannot colour without platform code. On macOS that leaves the system title
-	 * bar above it; a frameless window would be the way to merge the two.
+	 * Drawn inside the window, below whatever title bar the platform gives us. The
+	 * two are meant to read as one strip, which is what styleTitleBar() is for.
 	 */
 	QWidget* buildTopBar();
 
@@ -91,6 +101,9 @@ private:
 	NavigationRail* m_rail;
 	QStackedWidget* m_stack;
 	QList<View*> m_views;
+
+	/** Rounds the corners of the content, from above. Never laid out. */
+	CornerMask* m_mask = nullptr;
 
 	/** Names the view on screen, in the top bar. Built in the constructor body. */
 	QLabel* m_topBarTitle = nullptr;

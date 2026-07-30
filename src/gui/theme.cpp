@@ -192,6 +192,16 @@ QTreeWidget#hubTree::item {
     color: %(sidebarText);
 }
 
+/*
+ * The indentation in front of a row is painted apart from the row itself, and it
+ * takes the selection colour with it - a square block butted against the rounded
+ * end of the pill, which reads as two things selected rather than one. Left clear,
+ * so a nested conversation is an indented pill and nothing more.
+ */
+QTreeWidget#hubTree::branch {
+    background: transparent;
+}
+
 QTreeWidget#hubTree::item:hover {
     background: %(sidebarHover);
 }
@@ -227,13 +237,12 @@ QWidget#secondaryNav QPushButton:hover {
  * the surface being read rather than a card on a page.
  */
 /*
- * The content is a card inset into the frame: rounded where it meets the corner
- * the top bar and the rail make between them, square against the window edges it
- * runs up to.
+ * The content is a card inset into the frame on all four sides. Its corners are
+ * rounded by CornerMask rather than here: a radius on this background only shows
+ * through where a view has left the corner empty.
  */
 QWidget#contentStack {
     background: %(contentAlt);
-    border-top-left-radius: %(radiusLarge)px;
 }
 
 QScrollArea {

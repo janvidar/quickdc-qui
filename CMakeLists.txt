@@ -12,6 +12,15 @@ project(quickdc-qui
     DESCRIPTION "Qt6 user interface for QuickDC"
     LANGUAGES CXX)
 
+# Objective-C++, for the one file that has to talk to AppKit: the native title
+# bar. Enabled here rather than beside that file, because a language turned on in
+# a subdirectory is not set up for the sibling directories.
+if(APPLE)
+    enable_language(OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 20)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
+
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
