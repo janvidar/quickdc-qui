@@ -14,6 +14,16 @@
 
 namespace {
 
+/**
+ * How long a hub has to log us in before we say something.
+ *
+ * Generous: a login is a handful of round trips and is normally done inside a
+ * second, but a hub behind a slow link and a TLS handshake is still a hub. This is
+ * long enough that no working hub trips it and short enough to be an answer rather
+ * than a wait.
+ */
+constexpr int LOGIN_TIMEOUT_MS = 20000;
+
 QString from_utf8(const char* text)
 {
 	return text ? QString::fromUtf8(text) : QString();
@@ -402,6 +412,8 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 	, m_thread(thread)
 	, m_url(normalise_url(url))
 {
+	startLoginWatch();
+
 	if (!m_thread || !m_thread->isCoreRunning())
 	{
 		/*
@@ -518,15 +530,55 @@ bool Qdc::HubBridge::allowPeerConnections() const
 	return m_allowPeerConnections.load(std::memory_order_relaxed);
 }
 
+void Qdc::HubBridge::startLoginWatch()
+{
+	m_loginTimer = new QTimer(this);
+	m_loginTimer->setSingleShot(true);
+	m_loginTimer->setInterval(LOGIN_TIMEOUT_MS);
+
+	connect(m_loginTimer, &QTimer::timeout, this, [this] {
+		emit systemError(tr("%1 took the connection and then said nothing. "
+		                    "The hub is most likely not running, however open "
+		                    "the port is.").arg(m_url));
+	});
+
+	/*
+	 * Both of these arrive on this thread - the session marshals them - so the
+	 * timer is only ever touched from the one place.
+	 */
+	connect(this, &HubBridge::hubStatusChanged, this, [this](HubStatus status) {
+		if (status == HubStatus::LoggedIn) m_loginTimer->stop();
+	});
+
+	connect(this, &HubBridge::netStatusChanged, this, [this](NetStatus status) {
+		switch (status)
+		{
+			case NetStatus::Lookup:
+			case NetStatus::Connecting:
+			case NetStatus::Connected:
+			case NetStatus::TlsConnected:
+				break;
+
+			/* It failed and said so itself; no need to say it twice. */
+			default:
+				m_loginTimer->stop();
+		}
+	});
+}
+
 void Qdc::HubBridge::connectToHub()
 {
 	if (!m_session || !m_thread) return;
+
+	m_loginTimer->start();
 	m_thread->post([this] { m_session->connect(); });
 }
 
 void Qdc::HubBridge::disconnectFromHub()
 {
 	if (!m_session || !m_thread) return;
+
+	m_loginTimer->stop();
 	m_thread->post([this] { m_session->disconnect(); });
 }
 

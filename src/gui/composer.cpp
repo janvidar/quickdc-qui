@@ -328,6 +328,11 @@ void Qdc::Composer::setSendable(bool sendable, const QString& reason)
 	m_edit->setPlaceholderText(sendable ? tr("Write a message") : reason);
 }
 
+bool Qdc::Composer::isSendable() const
+{
+	return m_send->isEnabled();
+}
+
 void Qdc::Composer::clear()
 {
 	m_edit->clear();

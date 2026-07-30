@@ -24,13 +24,21 @@ namespace {
 constexpr int USER_LIST_WIDTH = 190;
 constexpr int USER_LIST_MINIMUM = 120;
 
-QString status_reason(Qdc::NetStatus status)
+/**
+ * Why the composer is not sendable, or empty when it is.
+ *
+ * Both halves matter. Reaching the hub is not the same as being logged in to it -
+ * a hub that accepts the connection and then says nothing leaves the socket
+ * connected for as long as one cares to wait - and a message sent in between is
+ * refused by the core, which is no way to find out.
+ */
+QString status_reason(Qdc::NetStatus net, Qdc::HubStatus hub)
 {
-	switch (status)
+	switch (net)
 	{
 		case Qdc::NetStatus::Connected:
 		case Qdc::NetStatus::TlsConnected:
-			return QString();
+			break;
 
 		case Qdc::NetStatus::Lookup:
 		case Qdc::NetStatus::Connecting:
@@ -38,6 +46,22 @@ QString status_reason(Qdc::NetStatus status)
 
 		default:
 			return QObject::tr("Not connected");
+	}
+
+	switch (hub)
+	{
+		case Qdc::HubStatus::LoggedIn:
+			return QString();
+
+		case Qdc::HubStatus::Password:
+			return QObject::tr("Waiting for the password…");
+
+		case Qdc::HubStatus::None:
+		case Qdc::HubStatus::Login:
+			return QObject::tr("Signing in…");
+
+		default:
+			return QObject::tr("The hub would not let us in");
 	}
 }
 
@@ -133,11 +157,15 @@ Qdc::HubPane::HubPane(HubBridge* hub, QWidget* parent)
 
 	connect(hub, &HubBridge::netStatusChanged, this, &HubPane::applyNetStatus);
 
-	connect(hub, &HubBridge::hubStatusChanged, this, [this](HubStatus) {
+	connect(hub, &HubBridge::hubStatusChanged, this, [this](HubStatus status) {
+		/* Logging in is half of whether a message can be sent; see status_reason. */
+		m_hubStatus = status;
+		applySendable();
 		refreshInfo();
 	});
 
 	header()->setSecure(hub->isSecure());
+	m_hubStatus = hub->hubStatus();
 	applyNetStatus(hub->netStatus());
 	refreshInfo();
 }
@@ -167,12 +195,18 @@ void Qdc::HubPane::sendMessage(const QString& message)
 
 void Qdc::HubPane::applyNetStatus(NetStatus status)
 {
+	m_netStatus = status;
 	header()->setNetStatus(status);
-
-	const QString reason = status_reason(status);
-	composer()->setSendable(reason.isEmpty(), reason);
-
+	applySendable();
 	refreshInfo();
+}
+
+void Qdc::HubPane::applySendable()
+{
+	if (!hub()) return;
+
+	const QString reason = status_reason(m_netStatus, m_hubStatus);
+	composer()->setSendable(reason.isEmpty(), reason);
 }
 
 void Qdc::HubPane::refreshInfo()
@@ -245,15 +279,27 @@ Qdc::DmPane::DmPane(HubBridge* hub, const UserInfo& user,
 	}
 
 	connect(hub, &HubBridge::netStatusChanged, this, [this](NetStatus status) {
-		const QString reason = status_reason(status);
-		composer()->setSendable(reason.isEmpty(), reason);
+		m_netStatus = status;
+		applySendable();
 	});
 
-	const QString reason = status_reason(hub->netStatus());
-	composer()->setSendable(reason.isEmpty(), reason);
+	connect(hub, &HubBridge::hubStatusChanged, this, [this](HubStatus status) {
+		m_hubStatus = status;
+		applySendable();
+	});
+
+	m_netStatus = hub->netStatus();
+	m_hubStatus = hub->hubStatus();
+	applySendable();
 
 	/* Mentioning the other party is the only completion that makes sense here. */
 	composer()->setNicknames({m_user.nick});
+}
+
+void Qdc::DmPane::applySendable()
+{
+	const QString reason = status_reason(m_netStatus, m_hubStatus);
+	composer()->setSendable(reason.isEmpty(), reason);
 }
 
 QString Qdc::DmPane::paneTitle() const

@@ -9,6 +9,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QTimer>
 
 #include <atomic>
 
@@ -155,6 +156,9 @@ signals:
 private:
 	friend class HubSession;
 
+	/** Build the login watchdog and the signals that call it off. */
+	void startLoginWatch();
+
 	CoreThread* m_thread;
 	QString m_url;
 
@@ -165,6 +169,15 @@ private:
 	HubStatus m_hubStatus = HubStatus::None;
 	QString m_hubName;
 	bool m_secure = false;
+
+	/**
+	 * Says so when a hub takes the connection and then never logs us in.
+	 *
+	 * Nothing else ever will. A hub that accepts the socket and says nothing leaves
+	 * the connection open and healthy for as long as anyone cares to wait, so
+	 * without this the view sits there connected to a hub that is not there.
+	 */
+	QTimer* m_loginTimer = nullptr;
 
 	/** Read by the session on the core thread, written by whoever calls the setter. */
 	std::atomic<bool> m_followRedirects{false};

@@ -10,6 +10,7 @@
 #include <gui/chatfeed.h>
 #include <gui/chatmodel.h>
 #include <gui/chatpane.h>
+#include <gui/composer.h>
 #include <gui/filelistview.h>
 #include <gui/hubsview.h>
 #include <gui/usermodel.h>
@@ -58,6 +59,7 @@ private slots:
 	void privateMessagesOpenAConversation();
 	void unreadCountsReachTheRailBadge();
 	void hubPasswordIsAskedForOnce();
+	void nothingCanBeSentUntilTheHubHasLoggedUsIn();
 
 private:
 	Qdc::UserInfo user(const QString& nick, bool op = false) const;
@@ -702,5 +704,37 @@ void TestHubs::hubPasswordIsAskedForOnce()
 }
 
 QTEST_MAIN(TestHubs)
+
+void TestHubs::nothingCanBeSentUntilTheHubHasLoggedUsIn()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("dchub://192.0.2.1:411")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	Qdc::HubBridge* bridge = pane->hub();
+	QVERIFY(bridge);
+
+	Qdc::Composer* composer = pane->findChild<Qdc::Composer*>();
+	QVERIFY(composer);
+
+	QVERIFY(!composer->isSendable());
+
+	/*
+	 * Reaching the hub is not being logged in to it. A hub that accepts the
+	 * connection and then says nothing leaves the socket exactly like this, and a
+	 * message sent now is refused by the core - so the composer stays shut.
+	 */
+	emit bridge->netStatusChanged(Qdc::NetStatus::Connected);
+	QVERIFY(!composer->isSendable());
+
+	emit bridge->hubStatusChanged(Qdc::HubStatus::LoggedIn);
+	QVERIFY(composer->isSendable());
+
+	/* And shuts again when the hub goes away. */
+	emit bridge->netStatusChanged(Qdc::NetStatus::Disconnected);
+	QVERIFY(!composer->isSendable());
+}
 
 #include "tst_hubs.moc"

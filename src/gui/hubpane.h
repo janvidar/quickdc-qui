@@ -54,6 +54,18 @@ private:
 	/** Follow the connection state into the header and the composer. */
 	void applyNetStatus(NetStatus status);
 
+	/** Let the composer send only once the hub has actually let us in. */
+	void applySendable();
+
+	/**
+	 * The last of each that was reported.
+	 *
+	 * Followed from the signals rather than read back off the bridge, because
+	 * sendability needs both at once and each signal carries only one of them.
+	 */
+	NetStatus m_netStatus = NetStatus::Invalid;
+	HubStatus m_hubStatus = HubStatus::None;
+
 	UserModel* m_users;
 	QListView* m_userList;
 	QLabel* m_info;
@@ -96,6 +108,12 @@ protected:
 	void sendMessage(const QString& message) override;
 
 private:
+	/** As HubPane: a private message goes through the hub and waits on its login. */
+	void applySendable();
+
+	NetStatus m_netStatus = NetStatus::Invalid;
+	HubStatus m_hubStatus = HubStatus::None;
+
 	UserInfo m_user;
 	FilelistView* m_files;
 };

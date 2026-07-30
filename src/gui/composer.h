@@ -86,6 +86,7 @@ public:
 
 	/** Disable everything, with a reason shown in place of the placeholder. */
 	void setSendable(bool sendable, const QString& reason = QString());
+	bool isSendable() const;
 
 	void clear();
 	void focusInput();
