@@ -2,13 +2,18 @@
  * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
  */
 
+#include <core/configbridge.h>
 #include <core/corethread.h>
+#include <core/favourites.h>
+#include <gui/homeview.h>
 #include <gui/mainwindow.h>
 #include <gui/navigationrail.h>
 #include <gui/glyphs.h>
 #include <gui/view.h>
 
 #include <QDir>
+#include <QListWidget>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QStackedWidget>
 #include <QTemporaryDir>
@@ -35,6 +40,7 @@ private slots:
 	void selectingARailDestinationSwapsTheView();
 	void viewBadgesReachTheRail();
 	void windowSurvivesRepeatedConstruction();
+	void homeListsFavouritesAndAsksTheWindowToOpenThem();
 
 private:
 	QTemporaryDir m_dir;
@@ -224,6 +230,64 @@ void TestShell::windowSurvivesRepeatedConstruction()
 
 	QVERIFY(m_thread->invoke([] { }));
 	QVERIFY(m_thread->isCoreRunning());
+}
+
+void TestShell::homeListsFavouritesAndAsksTheWindowToOpenThem()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::Favourites favourites(&config);
+	favourites.remove(QStringLiteral("dchub://home.example.org:411"));
+
+	Qdc::HomeView home(&config, &favourites, nullptr, nullptr);
+	QCOMPARE(home.favouriteCount(), favourites.urls().size());
+	QCOMPARE(home.recentCount(), 0);
+
+	QSignalSpy requested(&home, &Qdc::HomeView::hubRequested);
+	QVERIFY(requested.isValid());
+
+	/* A favourite added to the store appears without Home being told directly. */
+	const QString hub = QStringLiteral("dchub://home.example.org:411");
+	QVERIFY(favourites.add(hub));
+
+	const int before = home.favouriteCount();
+	QVERIFY(before > 0);
+
+	/*
+	 * Home cannot open a hub itself, so what it does is ask. The window is what
+	 * turns that into a connection.
+	 */
+	QListWidget* list = home.findChild<QListWidget*>();
+	QVERIFY(list);
+
+	for (int n = 0; n < list->count(); ++n)
+	{
+		if (list->item(n)->text() != hub) continue;
+
+		list->setCurrentRow(n);
+		break;
+	}
+
+	QCOMPARE(list->currentItem()->text(), hub);
+
+	QList<QPushButton*> buttons = home.findChildren<QPushButton*>();
+	QPushButton* open = nullptr;
+	for (QPushButton* button : buttons)
+	{
+		if (button->text() == QStringLiteral("Connect") && button->isEnabled())
+			open = button;
+	}
+
+	QVERIFY(open);
+	open->click();
+
+	QCOMPARE(requested.count(), 1);
+	QCOMPARE(requested.at(0).at(0).toString(), hub);
+
+	/* Removing it through Home takes it out of the store, not just the list. */
+	QVERIFY(favourites.contains(hub));
+	favourites.remove(hub);
+	QVERIFY(!favourites.contains(hub));
+	QCOMPARE(home.favouriteCount(), before - 1);
 }
 
 QTEST_MAIN(TestShell)

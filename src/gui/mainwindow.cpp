@@ -4,11 +4,11 @@
 
 #include "mainwindow.h"
 
+#include "homeview.h"
 #include "hubsview.h"
 #include "navigationrail.h"
 #include "settingsview.h"
 #include "transfersview.h"
-#include "views.h"
 
 #include <core/completed.h>
 #include <core/configbridge.h>
@@ -52,7 +52,18 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 
 	setCentralWidget(central);
 
-	addView(new HomeView);
+	HomeView* home = new HomeView(m_config, m_favourites, m_completed, m_transfers);
+
+	/*
+	 * Home cannot open a hub itself - they live in another view - so the window
+	 * routes the request and follows it, which is what someone pressing Connect on
+	 * a favourite expects to happen.
+	 */
+	connect(home, &HomeView::hubRequested, this, [this](const QString& url) {
+		if (m_hubs->openHub(url)) showView(m_views.indexOf(m_hubs));
+	});
+
+	addView(home);
 	addView(m_hubs);
 	addView(new TransfersView(m_transfers, m_completed));
 

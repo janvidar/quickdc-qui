@@ -18,6 +18,8 @@ add_library(qdcgui STATIC
     fileactions.h
     filelistview.cpp
     filelistview.h
+    homeview.cpp
+    homeview.h
     hubpane.cpp
     hubpane.h
     hubsview.cpp
@@ -30,8 +32,6 @@ add_library(qdcgui STATIC
     usermodel.h
     navigationrail.cpp
     navigationrail.h
-    placeholderview.cpp
-    placeholderview.h
     railbutton.cpp
     railbutton.h
     glyphs.cpp
@@ -45,9 +45,7 @@ add_library(qdcgui STATIC
     transfersview.cpp
     transfersview.h
     view.cpp
-    view.h
-    views.cpp
-    views.h)
+    view.h)
 
 set_target_properties(qdcgui PROPERTIES
     AUTOMOC ON
