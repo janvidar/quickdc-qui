@@ -24,7 +24,11 @@
 #include <QTextEdit>
 #include <QTextList>
 #include <QToolButton>
+#include <QMenu>
+#include <QTimer>
+#include <QMenu>
 #include <QSignalSpy>
+#include <QTimer>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -66,6 +70,7 @@ private slots:
 	void composerFlagsOnlyWhatItActuallyFormatted();
 	void composerSerializesEachConstructToMarkdown();
 	void composerWritesListsAsMarkdown();
+	void emojiPickerGivesEveryEmojiRoomToDraw();
 	void composerFlattensFormattingWhereItCannotBeSent();
 
 	void filelistModelExposesTheTree();
@@ -776,6 +781,72 @@ void TestHubs::composerWritesListsAsMarkdown()
 	QCOMPARE(sent.count(), 3);
 	QCOMPARE(sent.at(2).at(0).toString(), QStringLiteral("plain again"));
 	QCOMPARE(sent.at(2).at(1).toBool(), false);
+}
+
+void TestHubs::emojiPickerGivesEveryEmojiRoomToDraw()
+{
+	Qdc::Composer composer;
+	composer.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&composer));
+
+	QToolButton* opener = nullptr;
+	for (QToolButton* button : composer.findChildren<QToolButton*>())
+		if (button->text() == QStringLiteral("🙂")) opener = button;
+
+	QVERIFY(opener);
+
+	int cells = 0;
+	int cramped = 0;
+	bool ragged = false;
+	QSize uniform;
+
+	/* The picker is a menu and runs its own event loop, so the looking happens inside. */
+	QTimer::singleShot(100, [&] {
+		QMenu* menu = nullptr;
+
+		for (QWidget* top : QApplication::topLevelWidgets())
+		{
+			QMenu* candidate = qobject_cast<QMenu*>(top);
+			if (candidate && candidate->isVisible()) menu = candidate;
+		}
+
+		if (!menu) return;
+
+		for (const QToolButton* button : menu->findChildren<QToolButton*>())
+		{
+			++cells;
+
+			if (!uniform.isValid()) uniform = button->size();
+			else if (button->size() != uniform) ragged = true;
+
+			/*
+			 * A cell smaller than the style asked for is where an ellipsis comes from:
+			 * QToolButton elides text that will not fit its content rect, and an emoji
+			 * comes from a colour font whose glyphs are wider than the interface font's.
+			 * Sizing the cells by hand is what used to leave most of the picker showing
+			 * "..." on macOS while the few narrow ones drew fine.
+			 */
+			if (button->size().width() < button->sizeHint().width()
+			    || button->size().height() < button->sizeHint().height())
+			{
+				++cramped;
+			}
+		}
+
+		menu->close();
+	});
+
+	/* So the test cannot hang in the menu's loop if the picker never appeared. */
+	QTimer::singleShot(4000, [] {
+		for (QWidget* top : QApplication::topLevelWidgets())
+			if (QMenu* menu = qobject_cast<QMenu*>(top)) menu->close();
+	});
+
+	opener->click();
+
+	QVERIFY2(cells > 0, "the picker did not open");
+	QCOMPARE(cramped, 0);
+	QVERIFY2(!ragged, "the grid is not made of equal cells");
 }
 
 void TestHubs::composerFlattensFormattingWhereItCannotBeSent()

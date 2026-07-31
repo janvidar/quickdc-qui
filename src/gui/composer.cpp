@@ -805,13 +805,15 @@ void Qdc::Composer::showEmojiPicker()
 
 	const QStringList& set = emoji_set();
 
+	QList<QToolButton*> buttons;
+
 	for (int n = 0; n < set.size(); ++n)
 	{
 		QToolButton* button = new QToolButton(grid);
 		button->setText(set.at(n));
 		button->setAutoRaise(true);
-		button->setFixedSize(30, 30);
 		button->setCursor(Qt::PointingHandCursor);
+		button->setAccessibleName(set.at(n));
 
 		QFont face = button->font();
 		face.setPointSize(face.pointSize() + 4);
@@ -824,8 +826,25 @@ void Qdc::Composer::showEmojiPicker()
 			m_edit->setFocus(Qt::OtherFocusReason);
 		});
 
+		buttons.append(button);
 		layout->addWidget(button, n / EMOJI_COLUMNS, n % EMOJI_COLUMNS);
 	}
+
+	/*
+	 * Square cells, all the size of the largest thing the style asks for. Asked rather
+	 * than chosen: an emoji is drawn from a colour font whose glyphs are wider than the
+	 * interface font's, and the padding around them comes from the stylesheet - so a
+	 * size picked here would be a guess at two things this does not own, and a cell too
+	 * small by a pixel makes the button elide the emoji away to an ellipsis.
+	 */
+	int cell = 0;
+	for (const QToolButton* button : buttons)
+	{
+		const QSize wanted = button->sizeHint();
+		cell = qMax(cell, qMax(wanted.width(), wanted.height()));
+	}
+
+	for (QToolButton* button : buttons) button->setFixedSize(cell, cell);
 
 	QWidgetAction* action = new QWidgetAction(&menu);
 	action->setDefaultWidget(grid);
