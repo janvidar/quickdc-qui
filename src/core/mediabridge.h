@@ -11,6 +11,7 @@
 
 namespace Qdc {
 
+class ConfigBridge;
 class CoreThread;
 class Attacher;
 
@@ -33,7 +34,12 @@ class MediaBridge final : public QObject {
 	Q_OBJECT
 
 public:
-	explicit MediaBridge(CoreThread* thread, QObject* parent = nullptr);
+	/**
+	 * @param config where the core records what is offered, so that files attached
+	 *        before this session started are recognised too. May be null.
+	 */
+	explicit MediaBridge(CoreThread* thread, ConfigBridge* config = nullptr,
+	                     QObject* parent = nullptr);
 	~MediaBridge() override;
 
 	/**
@@ -51,9 +57,12 @@ public:
 	/**
 	 * Where a file with this hash is, if this client is the one offering it.
 	 *
-	 * Only what was attached in this session; the core remembers the rest across
-	 * restarts. Empty when the hash is not ours, which is the usual case for a file
-	 * somebody else sent.
+	 * Everything this client offers: attached in this session, or remembered by the core
+	 * from an earlier one. Empty when the hash is not ours, which is the usual case for a
+	 * file somebody else sent.
+	 *
+	 * Answered from memory. A picture is asked about while a message is being laid out,
+	 * so this must not go anywhere near the core thread.
 	 */
 	QString pathFor(const QString& tth) const;
 
@@ -66,6 +75,9 @@ signals:
 	void attachFailed(const QString& path, const QString& reason);
 
 private:
+	/** Read what the core remembers offering, once, at construction. */
+	void loadOffered(ConfigBridge* config);
+
 	friend class Attacher;
 
 	CoreThread* m_thread = nullptr;

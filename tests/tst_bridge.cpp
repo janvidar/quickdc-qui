@@ -5,6 +5,7 @@
 #include <core/configbridge.h>
 #include <core/corethread.h>
 #include <core/hubbridge.h>
+#include <core/mediabridge.h>
 #include <core/transferbridge.h>
 
 #include <QCoreApplication>
@@ -38,6 +39,7 @@ private slots:
 	void jobsRunInOrderOnTheCoreThread();
 	void invokeDoesNotWaitForThePollInterval();
 	void snapshotsDoNotWaitForABusyCore();
+	void anOfferedFileIsRecognisedAfterARestart();
 	void configRoundTripsThroughTheStore();
 	void configWritesTheFileItWasGiven();
 	void hubBridgeReportsErrorsOnTheCallingThread();
@@ -177,6 +179,45 @@ void TestBridge::snapshotsDoNotWaitForABusyCore()
 	/* And the figures do arrive, once the core is free again. */
 	QSignalSpy fresh(&transfers, &Qdc::TransferBridge::snapshotChanged);
 	QVERIFY(fresh.wait(10000));
+}
+
+void TestBridge::anOfferedFileIsRecognisedAfterARestart()
+{
+	const QString tth = QStringLiteral("L6LKZG4CUXDSCJQHBLL5GFG6FWAPSLKK2S3VIFA");
+	const QString path = QStringLiteral("/Users/somebody/holiday photo.jpg");
+
+	Qdc::ConfigBridge config(m_thread);
+
+	/* Written the way the core writes it when a file is attached. */
+	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Attachments"),
+	                 QStringLiteral("Total"), 1);
+	config.setString(Qdc::ConfigStore::Application, QStringLiteral("Attachments"),
+	                 QStringLiteral("File 0"), tth + QLatin1Char(' ') + path);
+
+	Qdc::MediaBridge media(m_thread, &config);
+
+	/*
+	 * Known without anything having been attached in this session. Otherwise a picture
+	 * sent yesterday is not recognised as ours: it would be drawn as a file to fetch,
+	 * and fetching would ask the hub for a file this client is the only source of.
+	 *
+	 * The path is kept whole: a name may contain spaces, so the entry is parsed by
+	 * position rather than split.
+	 */
+	QCOMPARE(media.pathFor(tth), path);
+
+	QVERIFY(media.pathFor(QStringLiteral("F6ED42THAKQCOCNHJOUCMOEOX4GOCT25D5WM7SY"))
+	        .isEmpty());
+	QVERIFY(media.pathFor(QString()).isEmpty());
+
+	/* A bridge given no configuration simply knows nothing yet. */
+	Qdc::MediaBridge blind(m_thread);
+	QVERIFY(blind.pathFor(tth).isEmpty());
+
+	config.remove(Qdc::ConfigStore::Application, QStringLiteral("Attachments"),
+	              QStringLiteral("File 0"));
+	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Attachments"),
+	                 QStringLiteral("Total"), 0);
 }
 
 void TestBridge::configRoundTripsThroughTheStore()

@@ -4,12 +4,20 @@
 
 #include "mediabridge.h"
 
+#include "configbridge.h"
 #include "corethread.h"
 
 #include <api/attachments.h>
 #include <api/core.h>
 
 #include <QMetaObject>
+
+namespace {
+
+/** A tiger root in base32, which is how long an entry's hash is. */
+constexpr int TTH_LENGTH = 39;
+
+}
 
 namespace Qdc {
 
@@ -64,10 +72,12 @@ private:
 
 }
 
-Qdc::MediaBridge::MediaBridge(CoreThread* thread, QObject* parent)
+Qdc::MediaBridge::MediaBridge(CoreThread* thread, ConfigBridge* config, QObject* parent)
 	: QObject(parent)
 	, m_thread(thread)
 {
+	loadOffered(config);
+
 	if (!m_thread) return;
 
 	m_thread->invoke([this] { m_attacher = new Attacher(this); });
@@ -91,6 +101,34 @@ Qdc::MediaBridge::~MediaBridge()
 		delete m_attacher;
 		m_attacher = nullptr;
 	});
+}
+
+void Qdc::MediaBridge::loadOffered(ConfigBridge* config)
+{
+	if (!config) return;
+
+	/*
+	 * Read once, here, rather than whenever somebody asks: pathFor() is called while a
+	 * message is being laid out, and a configuration read is a blocking trip to the core
+	 * thread - which is exactly what must never happen while drawing.
+	 *
+	 * The group is the core's, written when a file is attached: one entry per file, a
+	 * tiger root and a path. Parsed by position because a path may contain spaces.
+	 */
+	const int total = config->getNumber(ConfigStore::Application,
+	                                    QStringLiteral("Attachments"),
+	                                    QStringLiteral("Total"));
+
+	for (int n = 0; n < total; ++n)
+	{
+		const QString entry = config->getString(ConfigStore::Application,
+			QStringLiteral("Attachments"), QStringLiteral("File %1").arg(n));
+
+		if (entry.size() < TTH_LENGTH + 2 || entry.at(TTH_LENGTH) != QLatin1Char(' '))
+			continue;
+
+		m_offered.insert(entry.left(TTH_LENGTH), entry.mid(TTH_LENGTH + 1));
+	}
 }
 
 QString Qdc::MediaBridge::pathFor(const QString& tth) const

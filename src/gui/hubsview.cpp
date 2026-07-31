@@ -571,7 +571,7 @@ void Qdc::HubsView::attachFile(ChatPane* pane)
 {
 	if (!pane) return;
 
-	if (!m_media) m_media = new MediaBridge(m_thread, this);
+	if (!m_media) m_media = new MediaBridge(m_thread, m_config, this);
 
 	const QPointer<ChatPane> waiting(pane);
 
