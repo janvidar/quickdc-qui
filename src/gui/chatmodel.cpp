@@ -4,6 +4,8 @@
 
 #include "chatmodel.h"
 
+#include "richtext.h"
+
 Qdc::ChatModel::ChatModel(QObject* parent)
 	: QAbstractListModel(parent)
 {
@@ -28,13 +30,19 @@ QVariant Qdc::ChatModel::data(const QModelIndex& index, int role) const
 			return QVariant::fromValue(message);
 
 		case Qt::DisplayRole:
+		{
 			/*
 			 * Not what the delegate paints; this is for accessibility and for
-			 * anything that copies rows as text.
+			 * anything that copies rows as text. Markup comes off, so what is read
+			 * aloud or pasted elsewhere is prose rather than asterisks.
 			 */
+			const QString text = message.richText
+				? RichText::toPlainText(message.text) : message.text;
+
 			return message.fromHub.isEmpty()
-				? QStringLiteral("%1: %2").arg(message.from.nick, message.text)
-				: QStringLiteral("%1: %2").arg(message.fromHub, message.text);
+				? QStringLiteral("%1: %2").arg(message.from.nick, text)
+				: QStringLiteral("%1: %2").arg(message.fromHub, text);
+		}
 
 		default:
 			return QVariant();

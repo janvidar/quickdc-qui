@@ -6,6 +6,7 @@
 
 #include "hubheader.h"
 #include "hubpane.h"
+#include "richtext.h"
 #include "theme.h"
 #include "usermodel.h"
 
@@ -15,6 +16,7 @@
 #include <core/transferbridge.h>
 #include <core/hubbridge.h>
 
+#include <QDesktopServices>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QLineEdit>
@@ -497,6 +499,29 @@ void Qdc::HubsView::adopt(ChatPane* pane, QTreeWidgetItem* item)
 		refreshItem(item, pane);
 		refreshBadge();
 	});
+
+	connect(pane, &ChatPane::linkActivated, this, &HubsView::followLink);
+}
+
+void Qdc::HubsView::followLink(const QUrl& url)
+{
+	/* Nothing else may be followed, whatever a message claimed. */
+	if (!RichText::isLinkable(url)) return;
+
+	if (RichText::isHubUrl(url))
+	{
+		if (!openHub(url.toString()))
+		{
+			QMessageBox::warning(this, tr("Connect to a hub"),
+				tr("'%1' is not an address I can use.").arg(url.toString()));
+			return;
+		}
+
+		if (Entry* entry = entryFor(url.toString())) showPane(entry->pane);
+		return;
+	}
+
+	QDesktopServices::openUrl(url);
 }
 
 void Qdc::HubsView::showPane(ChatPane* pane)

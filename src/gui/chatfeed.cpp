@@ -5,9 +5,12 @@
 #include "chatfeed.h"
 
 #include "chatmodel.h"
+#include "richtext.h"
+#include "theme.h"
 
 #include <QAbstractTextDocumentLayout>
 #include <QFontMetricsF>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -25,24 +28,6 @@ constexpr int MARGIN_Y = 4;
 constexpr int TAIL_SLACK = 24;
 
 /**
- * Escape for the document, and turn real line breaks into <br>.
- *
- * A newline is whitespace in HTML and would otherwise collapse into a space, so a
- * message someone sent as several lines would arrive as one. Both \r\n and a bare
- * \r are normalised first, since either may come off the wire.
- */
-QString escape(const QString& text)
-{
-	QString escaped = text.toHtmlEscaped();
-
-	escaped.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
-	escaped.replace(QLatin1Char('\r'), QLatin1Char('\n'));
-	escaped.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
-
-	return escaped;
-}
-
-/**
  * A stable colour for a nickname.
  *
  * Hashed rather than assigned, so the same person is the same colour in every
@@ -57,6 +42,21 @@ QColor nick_colour(const QString& nick, bool darkBackground)
 
 	return darkBackground ? QColor::fromHsl(hue, 160, 168)
 	                      : QColor::fromHsl(hue, 150, 92);
+}
+
+/** The markup colours, taken from the theme rather than mixed here. */
+Qdc::RichText::RenderColours markup_colours()
+{
+	const Qdc::Theme& current = Qdc::theme();
+
+	Qdc::RichText::RenderColours colours;
+	colours.code = current.contentText;
+	colours.codeBack = current.contentAlt;
+	colours.quote = current.contentMuted;
+	colours.quoteBar = current.border;
+	colours.link = current.accent;
+
+	return colours;
 }
 
 }
@@ -77,9 +77,9 @@ public:
 		document.setDefaultFont(font);
 		document.setDocumentMargin(0.0);
 
-		QTextOption options = document.defaultTextOption();
-		options.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-		document.setDefaultTextOption(options);
+		QTextOption wrapping = document.defaultTextOption();
+		wrapping.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+		document.setDefaultTextOption(wrapping);
 
 		const QColor stamp = palette.color(QPalette::PlaceholderText);
 		const QString time = message.received.toString(QStringLiteral("HH:mm"));
@@ -89,54 +89,56 @@ public:
 		 * timestamp is in the body font and the name is bold, so the two have to be
 		 * measured with the fonts they are drawn in.
 		 */
-		QFont bold = font;
-		bold.setBold(true);
+		QFont speakerFont = font;
+		speakerFont.setBold(!message.action);
+		speakerFont.setItalic(message.action);
 
-		const QString speaker = message.fromHub.isEmpty() ? message.from.nick
-		                                                  : message.fromHub;
+		RichText::RenderOptions options;
+		options.colours = markup_colours();
 
-		const qreal indent = QFontMetricsF(font).horizontalAdvance(time + QLatin1Char(' '))
-			+ QFontMetricsF(bold).horizontalAdvance(speaker + QLatin1Char(' '));
+		options.prefix = QStringLiteral("<span style=\"color:%1\">%2</span> ")
+			.arg(stamp.name(), time.toHtmlEscaped());
 
-		/*
-		 * A hanging indent: the block is pushed right to the text column and its
-		 * first line pulled back out again, so every line after the first - whether
-		 * it came from a newline in the message or from wrapping - lines up under
-		 * the text rather than under the timestamp.
-		 */
-		const QString style =
-			QStringLiteral("margin-left:%1px; text-indent:-%1px;")
-				.arg(static_cast<int>(qRound(indent)));
+		qreal indent = QFontMetricsF(font).horizontalAdvance(time + QLatin1Char(' '));
 
-		QString html = QStringLiteral("<div style=\"%1\">").arg(style);
-
-		html += QStringLiteral("<span style=\"color:%1\">%2</span> ")
-			.arg(stamp.name(), escape(time));
-
-		if (!message.fromHub.isEmpty())
+		if (message.fromHub.isEmpty())
 		{
+			const QColor ink = nick_colour(message.from.nick, darkBackground);
+			const QString nick = message.from.nick.toHtmlEscaped();
+
 			/*
-			 * A line the hub generated rather than a person. Italic and unnamed
-			 * by colour, so it does not read as someone speaking.
+			 * A "/me" line puts the name inside the sentence rather than before it, so
+			 * it is set in the same italic as the words that follow it.
 			 */
-			html += QStringLiteral("<i style=\"color:%1\">%2</i>")
-				.arg(stamp.name(), escape(message.text));
-		}
-		else if (message.action)
-		{
-			/* "/me" style: the nick belongs inside the sentence, not before it. */
-			html += QStringLiteral("<i><span style=\"color:%1\">%2</span> %3</i>")
-				.arg(nick_colour(message.from.nick, darkBackground).name(),
-				     escape(message.from.nick), escape(message.text));
+			options.prefix += message.action
+				? QStringLiteral("<span style=\"color:%1; font-style:italic\">%2</span> ")
+					.arg(ink.name(), nick)
+				: QStringLiteral("<b style=\"color:%1\">%2</b> ").arg(ink.name(), nick);
+
+			indent += QFontMetricsF(speakerFont)
+				.horizontalAdvance(message.from.nick + QLatin1Char(' '));
+
+			options.italic = message.action;
 		}
 		else
 		{
-			html += QStringLiteral("<b style=\"color:%1\">%2</b> %3")
-				.arg(nick_colour(message.from.nick, darkBackground).name(),
-				     escape(message.from.nick), escape(message.text));
+			/*
+			 * A line the hub generated rather than a person: muted and italic, and with
+			 * no name in front of it, so it does not read as somebody speaking.
+			 */
+			options.body = stamp;
+			options.italic = true;
 		}
 
-		html += QStringLiteral("</div>");
+		options.indent = static_cast<int>(qRound(indent));
+
+		/*
+		 * Only a message that said it is markdown is read as markdown. Without the flag
+		 * the text is literal, so somebody's asterisks stay asterisks.
+		 */
+		const QString html = message.richText
+			? RichText::renderMarkdown(message.text, options)
+			: RichText::renderPlain(message.text, options);
 
 		document.setHtml(html);
 		document.setTextWidth(width);
@@ -244,6 +246,24 @@ QSize Qdc::ChatDelegate::sizeHint(const QStyleOptionViewItem& option,
 	             qCeil(layout.document.size().height()) + 2 * MARGIN_Y);
 }
 
+QString Qdc::ChatDelegate::anchorAt(const QModelIndex& index,
+                                   const QStyleOptionViewItem& option,
+                                   const QPoint& point) const
+{
+	const int width = option.rect.width() - 2 * MARGIN_X;
+	if (width <= 0) return QString();
+
+	const Layout& layout = layoutFor(index, width, option);
+
+	/* Into the document's own coordinates, which start where paint() translated to. */
+	const QPointF inside = QPointF(point) - QPointF(option.rect.left() + MARGIN_X,
+	                                                option.rect.top() + MARGIN_Y);
+
+	if (inside.x() < 0.0 || inside.y() < 0.0) return QString();
+
+	return layout.document.documentLayout()->anchorAt(inside);
+}
+
 Qdc::ChatFeed::ChatFeed(QWidget* parent)
 	: QListView(parent)
 	, m_delegate(new ChatDelegate(this))
@@ -259,6 +279,9 @@ Qdc::ChatFeed::ChatFeed(QWidget* parent)
 	setFrameShape(QFrame::NoFrame);
 	setWordWrap(true);
 	setAccessibleName(tr("Messages"));
+
+	/* So that a link can show a hand before it is pressed. */
+	viewport()->setMouseTracking(true);
 }
 
 void Qdc::ChatFeed::setModel(QAbstractItemModel* model)
@@ -280,6 +303,21 @@ void Qdc::ChatFeed::setModel(QAbstractItemModel* model)
 
 	connect(model, &QAbstractItemModel::rowsInserted,
 	        this, &ChatFeed::onRowsInserted);
+
+	/*
+	 * The delegate caches a laid out row against its row number, and trimming the
+	 * backlog renumbers every row after the one that went - so without this the feed
+	 * would go on measuring and painting each row with the layout of another.
+	 */
+	connect(model, &QAbstractItemModel::rowsRemoved, this, [this] {
+		m_delegate->invalidateLayout();
+		scheduleDelayedItemsLayout();
+	});
+
+	connect(model, &QAbstractItemModel::modelReset, this, [this] {
+		m_delegate->invalidateLayout();
+		scheduleDelayedItemsLayout();
+	});
 }
 
 bool Qdc::ChatFeed::isAtBottom() const
@@ -329,4 +367,67 @@ void Qdc::ChatFeed::resizeEvent(QResizeEvent* event)
 		QMetaObject::invokeMethod(this, &QListView::scrollToBottom,
 		                          Qt::QueuedConnection);
 	}
+}
+
+QString Qdc::ChatFeed::anchorAt(const QPoint& point) const
+{
+	const QModelIndex index = indexAt(point);
+	if (!index.isValid()) return QString();
+
+	QStyleOptionViewItem option;
+	initViewItemOption(&option);
+	option.rect = visualRect(index);
+
+	return m_delegate->anchorAt(index, option, point);
+}
+
+void Qdc::ChatFeed::mouseMoveEvent(QMouseEvent* event)
+{
+	QListView::mouseMoveEvent(event);
+
+	/* Not while dragging out a selection, where the pointer is doing something else. */
+	const QString anchor = event->buttons() == Qt::NoButton
+		? anchorAt(event->position().toPoint()) : QString();
+
+	if (anchor.isEmpty())
+		viewport()->unsetCursor();
+	else
+		viewport()->setCursor(Qt::PointingHandCursor);
+}
+
+void Qdc::ChatFeed::mousePressEvent(QMouseEvent* event)
+{
+	m_pressedAnchor = event->button() == Qt::LeftButton
+		? anchorAt(event->position().toPoint()) : QString();
+
+	QListView::mousePressEvent(event);
+}
+
+void Qdc::ChatFeed::mouseReleaseEvent(QMouseEvent* event)
+{
+	const QString anchor = m_pressedAnchor;
+	m_pressedAnchor.clear();
+
+	QListView::mouseReleaseEvent(event);
+
+	if (anchor.isEmpty() || event->button() != Qt::LeftButton) return;
+
+	/* Released somewhere else, so this was a drag and not a click on the link. */
+	if (anchorAt(event->position().toPoint()) != anchor) return;
+
+	const QUrl url(anchor, QUrl::StrictMode);
+
+	/*
+	 * Checked again on the way out even though nothing unlinkable was ever rendered as
+	 * an anchor: this is the last point before a stranger's text reaches the desktop.
+	 */
+	if (!RichText::isLinkable(url)) return;
+
+	emit linkActivated(url);
+}
+
+void Qdc::ChatFeed::leaveEvent(QEvent* event)
+{
+	viewport()->unsetCursor();
+	QListView::leaveEvent(event);
 }

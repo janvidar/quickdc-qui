@@ -140,6 +140,15 @@ private:
 	/** Add a pane to the stack and a row to the tree, and wire its unread count. */
 	void adopt(ChatPane* pane, QTreeWidgetItem* item);
 
+	/**
+	 * Follow a link somebody clicked in a message.
+	 *
+	 * A hub address is opened here, in a pane of its own, rather than handed to the
+	 * desktop - which would at best start a second copy of QuickDC. Everything else goes
+	 * out to the browser.
+	 */
+	void followLink(const QUrl& url);
+
 	void showPane(ChatPane* pane);
 
 	/** Sum every pane's unread count into the rail badge. */

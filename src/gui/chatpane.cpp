@@ -61,7 +61,15 @@ Qdc::ChatPane::ChatPane(HubBridge* hub, QWidget* parent)
 	layout->addWidget(m_tabs, 1);
 
 	connect(m_composer, &Composer::sendRequested, this, &ChatPane::sendMessage);
+	connect(m_feed, &ChatFeed::linkActivated, this, &ChatPane::linkActivated);
 	connect(m_header, &HubHeader::closeRequested, this, &ChatPane::closeRequested);
+
+	/*
+	 * Only a protocol that can flag a message as markdown gets the formatting controls.
+	 * On NMDC they are disabled rather than sending markers the far end would show
+	 * literally.
+	 */
+	m_composer->setRichTextEnabled(m_hub && m_hub->supportsRichText());
 }
 
 Qdc::HubBridge* Qdc::ChatPane::hub() const

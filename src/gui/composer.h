@@ -5,6 +5,9 @@
 #ifndef HAVE_QUICKDC_QUI_COMPOSER_H
 #define HAVE_QUICKDC_QUI_COMPOSER_H
 
+#include "richtext.h"
+
+#include <QList>
 #include <QStringList>
 #include <QTextEdit>
 #include <QWidget>
@@ -18,9 +21,10 @@ namespace Qdc {
 /**
  * The text box part of the composer.
  *
- * Split out from Composer because two behaviours have to be intercepted before
- * QTextEdit sees them: Return sends rather than breaking the line, and typing
- * after an '@' offers the people who are here.
+ * Split out from Composer because three behaviours have to be intercepted before
+ * QTextEdit sees them: Return sends rather than breaking the line, typing after an '@'
+ * offers the people who are here, and a paste has to be stripped back to the formatting
+ * a chat line can actually carry.
  */
 class ComposerEdit final : public QTextEdit {
 	Q_OBJECT
@@ -48,6 +52,15 @@ signals:
 protected:
 	void keyPressEvent(QKeyEvent* event) override;
 
+	/**
+	 * Keep only the formatting a message can carry.
+	 *
+	 * Pasting from a browser otherwise drags in fonts, sizes, colours, headings and
+	 * images, none of which survives being sent and all of which would sit in the box
+	 * looking as though it would. What is kept is bold, italic and inline code.
+	 */
+	void insertFromMimeData(const QMimeData* source) override;
+
 private:
 	/**
 	 * The word being typed after an '@', or empty if the cursor is not in one.
@@ -67,11 +80,14 @@ private:
 /**
  * Where a message is written: a formatting bar, a text box, and a send button.
  *
- * "Rich text" here means markup that survives being sent, not styled runs. Both
- * ADC and NMDC carry a chat line as one plain string - Hub::sendChatMessage takes
- * a const char* and there is no field for anything else - so the formatting
- * buttons wrap the selection in the markers other clients understand rather than
- * applying a QTextCharFormat that would be discarded on the way out.
+ * The box holds real rich text. On the way out the document is serialized to the
+ * markdown subset in richtext.h and the message is flagged as markup, so the far end
+ * knows to render it rather than show the markers. A message with no formatting in it is
+ * sent as its own plain text and carries no flag at all - which is what lets somebody
+ * type *asterisks* and have them arrive as asterisks.
+ *
+ * Formatting is only offered where the protocol can carry that flag; see
+ * setRichTextEnabled().
  */
 class Composer final : public QWidget {
 	Q_OBJECT
@@ -88,23 +104,42 @@ public:
 	void setSendable(bool sendable, const QString& reason = QString());
 	bool isSendable() const;
 
+	/**
+	 * Whether formatting may be applied at all.
+	 *
+	 * False on a hub that cannot flag a message as markdown - NMDC has nowhere to put
+	 * the flag, so formatting there would be sent as markers the far end shows
+	 * literally. The controls are disabled rather than quietly dropping what they did,
+	 * and any formatting already in the box is flattened.
+	 */
+	void setRichTextEnabled(bool enabled);
+	bool isRichTextEnabled() const;
+
 	void clear();
 	void focusInput();
 
 signals:
-	/** Never emitted with empty or whitespace-only text. */
-	void sendRequested(const QString& message);
+	/**
+	 * Never emitted with empty or whitespace-only text.
+	 *
+	 * @param richText the text is markdown and the message should say so.
+	 */
+	void sendRequested(const QString& message, bool richText);
 
 private:
-	/**
-	 * Put 'prefix' and 'suffix' around the selection, or around the word the
-	 * cursor is in when there is no selection - which is what makes the buttons
-	 * useful without having to select first.
-	 */
-	void wrapSelection(const QString& prefix, const QString& suffix);
+	/** Apply or lift a character format across the selection, or the word under it. */
+	void toggleCharFormat(const QTextCharFormat& on, const QTextCharFormat& off,
+	                      bool enable);
 
-	/** Prefix every selected line, for quotes. */
-	void prefixLines(const QString& prefix);
+	void toggleBold();
+	void toggleItalic();
+	void toggleCode();
+
+	/** Turn the selected blocks into a quote or a code block, or back to prose. */
+	void toggleBlockKind(RichText::BlockKind kind);
+
+	/** Ask for an address and turn the selection into a link to it. */
+	void insertLink();
 
 	QToolButton* makeFormatButton(const QString& label, const QString& tooltip,
 	                              bool bold, bool italic, bool monospace);
@@ -112,9 +147,33 @@ private:
 	void showEmojiPicker();
 	void send();
 
+	/** Follow the cursor: the format buttons show what is in force where it sits. */
+	void refreshFormatState();
+
+	/**
+	 * Take all formatting off what is in the box, leaving the words.
+	 *
+	 * Done through a cursor rather than by setting the plain text back: QTextEdit
+	 * applies the format at the cursor to text set that way, so a bold document would
+	 * come back bold.
+	 */
+	void flattenDocument();
+
 	ComposerEdit* m_edit;
 	QToolButton* m_emoji;
 	QToolButton* m_send;
+
+	QToolButton* m_bold;
+	QToolButton* m_italic;
+	QToolButton* m_code;
+	QToolButton* m_quote;
+	QToolButton* m_codeBlock;
+	QToolButton* m_link;
+
+	/** Everything that applies formatting, so it can be enabled as a group. */
+	QList<QToolButton*> m_formatButtons;
+
+	bool m_richTextEnabled = true;
 };
 
 }

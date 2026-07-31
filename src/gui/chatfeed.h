@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QListView>
 #include <QStyledItemDelegate>
+#include <QUrl>
 
 namespace Qdc {
 
@@ -34,8 +35,17 @@ public:
 	QSize sizeHint(const QStyleOptionViewItem& option,
 	               const QModelIndex& index) const override;
 
-	/** Called by the feed when the viewport width changes. */
+	/** Called by the feed when the viewport width changes, or when rows move. */
 	void invalidateLayout();
+
+	/**
+	 * The link under 'point', or empty if there is none there.
+	 *
+	 * 'point' is in the coordinates the row was drawn in, so the caller passes what it
+	 * got from the mouse and the offset the delegate painted at is applied here.
+	 */
+	QString anchorAt(const QModelIndex& index, const QStyleOptionViewItem& option,
+	                 const QPoint& point) const;
 
 private:
 	/**
@@ -72,8 +82,26 @@ public:
 	/** Whether the view is close enough to the bottom to be following it. */
 	bool isAtBottom() const;
 
+	/** The link under a point in the viewport, or empty. */
+	QString anchorAt(const QPoint& point) const;
+
+signals:
+	/**
+	 * A link in a message was clicked.
+	 *
+	 * Only ever a scheme RichText::isLinkable() allows. Where it goes is not decided
+	 * here: a hub address is opened inside QuickDC and everything else is handed to the
+	 * desktop, and only the window above knows how to do the first of those.
+	 */
+	void linkActivated(const QUrl& url);
+
 protected:
 	void resizeEvent(QResizeEvent* event) override;
+
+	void mouseMoveEvent(QMouseEvent* event) override;
+	void mousePressEvent(QMouseEvent* event) override;
+	void mouseReleaseEvent(QMouseEvent* event) override;
+	void leaveEvent(QEvent* event) override;
 
 private:
 	void onRowsInserted();
@@ -86,6 +114,14 @@ private:
 	 * already moved and the question can no longer be asked.
 	 */
 	bool m_wasAtBottom = true;
+
+	/**
+	 * The link the press landed on.
+	 *
+	 * A link follows on release over the same one it was pressed on, so that a drag that
+	 * happens to start on a link selects text instead of navigating.
+	 */
+	QString m_pressedAnchor;
 };
 
 }

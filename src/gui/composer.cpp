@@ -9,6 +9,11 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
+#include <QMessageBox>
+#include <QMimeData>
+#include <QTextFragment>
+#include <QUrl>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QPushButton>
@@ -72,7 +77,12 @@ Qdc::ComposerEdit::ComposerEdit(QWidget* parent)
 	, m_completer(new QCompleter(this))
 	, m_nicknames(new QStringListModel(this))
 {
-	setAcceptRichText(false);
+	/*
+	 * Rich: the buttons apply real formatting and the document is what gets serialized
+	 * on the way out. What may be pasted in is narrowed separately - see
+	 * insertFromMimeData().
+	 */
+	setAcceptRichText(true);
 	setTabChangesFocus(true);
 	setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 	setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -116,6 +126,76 @@ QSize Qdc::ComposerEdit::sizeHint() const
 QSize Qdc::ComposerEdit::minimumSizeHint() const
 {
 	return sizeHint();
+}
+
+void Qdc::ComposerEdit::insertFromMimeData(const QMimeData* source)
+{
+	if (!source) return;
+
+	/*
+	 * Rebuilt run by run rather than filtered in place: a pasted fragment can carry
+	 * headings, tables, colours, sizes and images, and there is no subtractive way to
+	 * be sure none of it survived. Keeping only what is asked for is the only version
+	 * of this that stays correct as Qt's HTML support grows.
+	 */
+	if (!source->hasHtml())
+	{
+		if (source->hasText()) insertPlainText(source->text());
+		return;
+	}
+
+	QTextDocument parsed;
+	parsed.setHtml(source->html());
+
+	QTextCursor out = textCursor();
+	out.beginEditBlock();
+
+	bool firstBlock = true;
+
+	for (QTextBlock block = parsed.begin(); block.isValid(); block = block.next())
+	{
+		if (!firstBlock) out.insertText(QStringLiteral("\n"));
+		firstBlock = false;
+
+		for (QTextBlock::iterator it = block.begin(); !it.atEnd(); ++it)
+		{
+			const QTextFragment fragment = it.fragment();
+			if (!fragment.isValid()) continue;
+
+			const QTextCharFormat had = fragment.charFormat();
+
+			QTextCharFormat kept;
+			if (had.fontWeight() >= QFont::Bold) kept.setFontWeight(QFont::Bold);
+			if (had.fontItalic()) kept.setFontItalic(true);
+
+			/*
+			 * A pasted monospace run is taken as inline code, which is what somebody
+			 * copying a command out of a terminal or a code sample means by it.
+			 */
+			if (had.fontFixedPitch()
+			    || had.property(Qdc::RichText::CodeProperty).toBool())
+			{
+				kept.setProperty(Qdc::RichText::CodeProperty, true);
+				kept.setFontFixedPitch(true);
+				kept.setFontFamilies({Qdc::RichText::monospaceFamily()});
+			}
+
+			/* A link is kept when QuickDC would open it, so pasting one from a
+			   browser keeps its target rather than only its text. */
+			const QUrl href(had.anchorHref(), QUrl::StrictMode);
+			if (had.isAnchor() && Qdc::RichText::isLinkable(href))
+			{
+				kept.setAnchor(true);
+				kept.setAnchorHref(href.toString());
+				kept.setFontUnderline(true);
+			}
+
+			out.insertText(fragment.text(), kept);
+		}
+	}
+
+	out.endEditBlock();
+	setTextCursor(out);
 }
 
 QString Qdc::ComposerEdit::mentionPrefix() const
@@ -223,6 +303,12 @@ Qdc::Composer::Composer(QWidget* parent)
 	, m_edit(new ComposerEdit(this))
 	, m_emoji(new QToolButton(this))
 	, m_send(new QToolButton(this))
+	, m_bold(makeFormatButton(tr("B"), tr("Bold"), true, false, false))
+	, m_italic(makeFormatButton(tr("I"), tr("Italic"), false, true, false))
+	, m_code(makeFormatButton(tr("< >"), tr("Code"), false, false, true))
+	, m_quote(makeFormatButton(tr("❝"), tr("Quote"), false, false, false))
+	, m_codeBlock(makeFormatButton(tr("≣"), tr("Code block"), false, false, true))
+	, m_link(makeFormatButton(tr("🔗"), tr("Link"), false, false, false))
 {
 	m_edit->setPlaceholderText(tr("Write a message"));
 
@@ -230,23 +316,30 @@ Qdc::Composer::Composer(QWidget* parent)
 	bar->setContentsMargins(0, 0, 0, 0);
 	bar->setSpacing(2);
 
-	QToolButton* bold = makeFormatButton(tr("B"), tr("Bold"), true, false, false);
-	QToolButton* italic = makeFormatButton(tr("I"), tr("Italic"), false, true, false);
-	QToolButton* code = makeFormatButton(tr("< >"), tr("Code"), false, false, true);
-	QToolButton* quote = makeFormatButton(tr("❝"), tr("Quote"), false, false, false);
+	m_formatButtons = {m_bold, m_italic, m_code, m_quote, m_codeBlock, m_link};
 
-	connect(bold, &QToolButton::clicked, this, [this] {
-		wrapSelection(QStringLiteral("**"), QStringLiteral("**"));
+	/*
+	 * Checkable, because each one reports whether its formatting is in force where the
+	 * cursor sits. refreshFormatState() keeps them honest as it moves.
+	 */
+	for (QToolButton* button : m_formatButtons) button->setCheckable(true);
+	m_link->setCheckable(false);
+
+	connect(m_bold, &QToolButton::clicked, this, &Composer::toggleBold);
+	connect(m_italic, &QToolButton::clicked, this, &Composer::toggleItalic);
+	connect(m_code, &QToolButton::clicked, this, &Composer::toggleCode);
+	connect(m_quote, &QToolButton::clicked, this, [this] {
+		toggleBlockKind(RichText::Quote);
 	});
-	connect(italic, &QToolButton::clicked, this, [this] {
-		wrapSelection(QStringLiteral("*"), QStringLiteral("*"));
+	connect(m_codeBlock, &QToolButton::clicked, this, [this] {
+		toggleBlockKind(RichText::CodeBlock);
 	});
-	connect(code, &QToolButton::clicked, this, [this] {
-		wrapSelection(QStringLiteral("`"), QStringLiteral("`"));
-	});
-	connect(quote, &QToolButton::clicked, this, [this] {
-		prefixLines(QStringLiteral("> "));
-	});
+	connect(m_link, &QToolButton::clicked, this, &Composer::insertLink);
+
+	connect(m_edit, &QTextEdit::cursorPositionChanged,
+	        this, &Composer::refreshFormatState);
+	connect(m_edit, &QTextEdit::currentCharFormatChanged,
+	        this, &Composer::refreshFormatState);
 
 	m_emoji->setText(QStringLiteral("🙂"));
 	m_emoji->setAutoRaise(true);
@@ -254,10 +347,7 @@ Qdc::Composer::Composer(QWidget* parent)
 	m_emoji->setCursor(Qt::PointingHandCursor);
 	connect(m_emoji, &QToolButton::clicked, this, &Composer::showEmojiPicker);
 
-	bar->addWidget(bold);
-	bar->addWidget(italic);
-	bar->addWidget(code);
-	bar->addWidget(quote);
+	for (QToolButton* button : m_formatButtons) bar->addWidget(button);
 	bar->addWidget(m_emoji);
 	bar->addStretch(1);
 
@@ -281,6 +371,8 @@ Qdc::Composer::Composer(QWidget* parent)
 	layout->setSpacing(4);
 	layout->addLayout(bar);
 	layout->addLayout(row);
+
+	refreshFormatState();
 }
 
 QToolButton* Qdc::Composer::makeFormatButton(const QString& label,
@@ -303,7 +395,7 @@ QToolButton* Qdc::Composer::makeFormatButton(const QString& label,
 	QFont face = button->font();
 	face.setBold(bold);
 	face.setItalic(italic);
-	if (monospace) face.setFamily(QStringLiteral("monospace"));
+	if (monospace) face.setFamily(RichText::monospaceFamily());
 	button->setFont(face);
 
 	return button;
@@ -325,7 +417,38 @@ void Qdc::Composer::setSendable(bool sendable, const QString& reason)
 	m_send->setEnabled(sendable);
 	m_emoji->setEnabled(sendable);
 
+	for (QToolButton* button : m_formatButtons)
+		button->setEnabled(sendable && m_richTextEnabled);
+
 	m_edit->setPlaceholderText(sendable ? tr("Write a message") : reason);
+}
+
+void Qdc::Composer::setRichTextEnabled(bool enabled)
+{
+	m_richTextEnabled = enabled;
+
+	for (QToolButton* button : m_formatButtons)
+	{
+		button->setEnabled(enabled && isSendable());
+
+		/* accessibleName() is what the button does, set when it was made. */
+		button->setToolTip(enabled ? button->accessibleName()
+		                           : tr("This hub cannot carry formatting"));
+	}
+
+	/*
+	 * Formatting that cannot be sent must not sit in the box looking as though it will
+	 * be. The markers are not left in its place either: that would send punctuation
+	 * nobody typed.
+	 */
+	if (!enabled) flattenDocument();
+
+	refreshFormatState();
+}
+
+bool Qdc::Composer::isRichTextEnabled() const
+{
+	return m_richTextEnabled;
 }
 
 bool Qdc::Composer::isSendable() const
@@ -343,58 +466,220 @@ void Qdc::Composer::focusInput()
 	m_edit->setFocus(Qt::OtherFocusReason);
 }
 
-void Qdc::Composer::wrapSelection(const QString& prefix, const QString& suffix)
+void Qdc::Composer::toggleCharFormat(const QTextCharFormat& on,
+                                     const QTextCharFormat& off, bool enable)
 {
 	QTextCursor cursor = m_edit->textCursor();
 
-	/* No selection: take the word the cursor is sitting in, if any. */
+	/*
+	 * With nothing selected the word under the cursor is taken, which is what makes
+	 * the buttons useful without having to select first. An empty document has no word,
+	 * and then the format applies to whatever is typed next.
+	 */
 	if (!cursor.hasSelection()) cursor.select(QTextCursor::WordUnderCursor);
 
-	const QString selected = cursor.selectedText();
+	const QTextCharFormat& format = enable ? on : off;
 
-	cursor.insertText(prefix + selected + suffix);
-
-	/*
-	 * With nothing to wrap the markers are inserted empty, so the cursor is put
-	 * between them - otherwise the next thing typed lands outside.
-	 */
-	if (selected.isEmpty())
-	{
-		cursor.movePosition(QTextCursor::Left, QTextCursor::MoveAnchor,
-		                    suffix.length());
-		m_edit->setTextCursor(cursor);
-	}
+	if (cursor.hasSelection())
+		cursor.mergeCharFormat(format);
+	else
+		m_edit->mergeCurrentCharFormat(format);
 
 	m_edit->setFocus(Qt::OtherFocusReason);
+	refreshFormatState();
 }
 
-void Qdc::Composer::prefixLines(const QString& prefix)
+void Qdc::Composer::toggleBold()
+{
+	QTextCharFormat on;
+	on.setFontWeight(QFont::Bold);
+
+	QTextCharFormat off;
+	off.setFontWeight(QFont::Normal);
+
+	toggleCharFormat(on, off, m_bold->isChecked());
+}
+
+void Qdc::Composer::toggleItalic()
+{
+	QTextCharFormat on;
+	on.setFontItalic(true);
+
+	QTextCharFormat off;
+	off.setFontItalic(false);
+
+	toggleCharFormat(on, off, m_italic->isChecked());
+}
+
+void Qdc::Composer::toggleCode()
+{
+	/*
+	 * The property is what marks a run as code; the monospace font is only how it
+	 * looks. Detecting code from the family instead would mistake somebody who simply
+	 * prefers a monospace font for somebody quoting a command.
+	 */
+	QTextCharFormat on;
+	on.setProperty(RichText::CodeProperty, true);
+	on.setFontFixedPitch(true);
+	on.setFontFamilies({RichText::monospaceFamily()});
+
+	QTextCharFormat off;
+	off.setProperty(RichText::CodeProperty, false);
+	off.setFontFixedPitch(false);
+	off.setFontFamilies({m_edit->font().family()});
+
+	toggleCharFormat(on, off, m_code->isChecked());
+}
+
+void Qdc::Composer::toggleBlockKind(RichText::BlockKind kind)
 {
 	QTextCursor cursor = m_edit->textCursor();
 
-	const int start = cursor.selectionStart();
-	const int end = cursor.selectionEnd();
+	const int from = cursor.selectionStart();
+	const int to = cursor.selectionEnd();
 
 	cursor.beginEditBlock();
-	cursor.setPosition(start);
+	cursor.setPosition(from);
 
 	/*
-	 * Walked block by block from the start of the selection, re-reading the
-	 * cursor position each time because inserting shifts everything after it.
+	 * Pressing the button again on a block that is already that kind puts it back to
+	 * prose, so the same control both applies and lifts.
 	 */
-	int offset = 0;
+	const QVariant current = cursor.blockFormat().property(RichText::BlockKindProperty);
+	const bool lifting = current.isValid()
+		&& static_cast<RichText::BlockKind>(current.toInt()) == kind;
+
 	while (true)
 	{
-		cursor.movePosition(QTextCursor::StartOfBlock);
-		cursor.insertText(prefix);
-		offset += prefix.length();
+		QTextBlockFormat format = cursor.blockFormat();
+		format.setProperty(RichText::BlockKindProperty,
+		                   lifting ? RichText::Paragraph : kind);
 
-		if (cursor.position() >= end + offset) break;
+		/* Indented so a quote or a code block reads as set apart while it is typed. */
+		format.setLeftMargin(lifting ? 0 : 12);
+		cursor.setBlockFormat(format);
+
+		QTextCharFormat runs;
+		if (kind == RichText::CodeBlock && !lifting)
+		{
+			runs.setFontFixedPitch(true);
+			runs.setFontFamilies({RichText::monospaceFamily()});
+		}
+		else if (kind == RichText::CodeBlock)
+		{
+			runs.setFontFixedPitch(false);
+			runs.setFontFamilies({m_edit->font().family()});
+		}
+
+		if (runs.propertyCount() > 0)
+		{
+			QTextCursor whole = cursor;
+			whole.select(QTextCursor::BlockUnderCursor);
+			whole.mergeCharFormat(runs);
+		}
+
+		if (cursor.block().position() + cursor.block().length() > to) break;
 		if (!cursor.movePosition(QTextCursor::NextBlock)) break;
 	}
 
 	cursor.endEditBlock();
+
 	m_edit->setFocus(Qt::OtherFocusReason);
+	refreshFormatState();
+}
+
+void Qdc::Composer::insertLink()
+{
+	QTextCursor cursor = m_edit->textCursor();
+
+	if (!cursor.hasSelection()) cursor.select(QTextCursor::WordUnderCursor);
+
+	const QString label = cursor.selectedText();
+
+	bool accepted = false;
+	const QString typed = QInputDialog::getText(this, tr("Link"),
+		tr("Address:"), QLineEdit::Normal, QString(), &accepted);
+
+	if (!accepted) return;
+
+	const QUrl url(typed.trimmed(), QUrl::StrictMode);
+
+	/*
+	 * The same set the feed is willing to open, checked here so that a link nobody
+	 * could follow is refused while it can still be corrected rather than arriving as
+	 * dead text at the far end.
+	 */
+	if (!RichText::isLinkable(url))
+	{
+		QMessageBox::information(this, tr("Link"),
+			tr("'%1' is not an address QuickDC will open. Web addresses and hub "
+			   "addresses work: http, https, adc, adcs and dchub.")
+				.arg(typed.trimmed()));
+		return;
+	}
+
+	QTextCharFormat format;
+	format.setAnchor(true);
+	format.setAnchorHref(url.toString());
+	format.setFontUnderline(true);
+
+	cursor.insertText(label.isEmpty() ? url.toString() : label, format);
+
+	/*
+	 * The anchor format would otherwise carry on into whatever is typed next, which
+	 * would quietly extend the link past its text.
+	 */
+	QTextCharFormat plain;
+	plain.setAnchor(false);
+	plain.setAnchorHref(QString());
+	plain.setFontUnderline(false);
+	m_edit->setCurrentCharFormat(plain);
+
+	m_edit->setFocus(Qt::OtherFocusReason);
+}
+
+void Qdc::Composer::flattenDocument()
+{
+	QTextDocument* document = m_edit->document();
+
+	QTextCursor cursor(document);
+	cursor.beginEditBlock();
+
+	cursor.select(QTextCursor::Document);
+	cursor.setCharFormat(QTextCharFormat());
+
+	for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
+	{
+		QTextCursor at(block);
+		at.setBlockFormat(QTextBlockFormat());
+	}
+
+	cursor.endEditBlock();
+
+	m_edit->setCurrentCharFormat(QTextCharFormat());
+}
+
+void Qdc::Composer::refreshFormatState()
+{
+	const QTextCharFormat format = m_edit->currentCharFormat();
+	const QTextBlockFormat block = m_edit->textCursor().blockFormat();
+
+	const QVariant kind = block.property(RichText::BlockKindProperty);
+	const RichText::BlockKind current = kind.isValid()
+		? static_cast<RichText::BlockKind>(kind.toInt()) : RichText::Paragraph;
+
+	for (QToolButton* button : m_formatButtons)
+	{
+		const QSignalBlocker blocker(button);
+
+		if (button == m_bold) button->setChecked(format.fontWeight() >= QFont::Bold);
+		else if (button == m_italic) button->setChecked(format.fontItalic());
+		else if (button == m_code)
+			button->setChecked(format.property(RichText::CodeProperty).toBool());
+		else if (button == m_quote) button->setChecked(current == RichText::Quote);
+		else if (button == m_codeBlock)
+			button->setChecked(current == RichText::CodeBlock);
+	}
 }
 
 void Qdc::Composer::showEmojiPicker()
@@ -443,9 +728,28 @@ void Qdc::Composer::showEmojiPicker()
 
 void Qdc::Composer::send()
 {
-	const QString message = m_edit->toPlainText().trimmed();
+	const QString plain = m_edit->toPlainText().trimmed();
+	if (plain.isEmpty()) return;
+
+	const bool richText = m_richTextEnabled && RichText::hasMarkup(*m_edit->document());
+
+	/*
+	 * Unformatted text is sent exactly as it was typed, which is the whole reason the
+	 * flag exists: somebody who types *asterisks* has them arrive as asterisks, because
+	 * nothing told the far end to read them as markup.
+	 */
+	const QString message = richText
+		? RichText::toMarkdown(*m_edit->document()).trimmed()
+		: plain;
+
 	if (message.isEmpty()) return;
 
-	emit sendRequested(message);
+	emit sendRequested(message, richText);
+
 	m_edit->clear();
+
+	/* clear() leaves the format at the cursor behind, so the next message would open
+	   in whatever the last one ended in. */
+	m_edit->setCurrentCharFormat(QTextCharFormat());
+	refreshFormatState();
 }

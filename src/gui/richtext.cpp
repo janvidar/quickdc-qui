@@ -4,6 +4,7 @@
 
 #include "richtext.h"
 
+#include <QFontDatabase>
 #include <QStringList>
 #include <QTextBlock>
 #include <QTextDocument>
@@ -258,9 +259,10 @@ QString scan_inline(const QString& text, Mode mode,
 
 				out += (mode == Mode::Plain)
 					? body
-					: QStringLiteral("<span style=\"font-family:monospace;"
-					                 " background-color:%1; color:%2\">%3</span>")
-						.arg(colours.codeBack.name(), colours.code.name(),
+					: QStringLiteral("<span style=\"font-family:'%1';"
+					                 " background-color:%2; color:%3\">%4</span>")
+						.arg(Qdc::RichText::monospaceFamily(),
+						     colours.codeBack.name(), colours.code.name(),
 						     emit_text(body, mode));
 
 				i = end + fence;
@@ -350,6 +352,27 @@ QString scan_inline(const QString& text, Mode mode,
 	}
 
 	flush();
+	return out;
+}
+
+/**
+ * Wrap a block's body in whatever the whole message is set in.
+ *
+ * Applied to the body and not to the prefix, so a muted hub notice still has its
+ * timestamp in the timestamp's colour and a "/me" line still has its speaker in theirs.
+ */
+QString style_body(const QString& content, const Qdc::RichText::RenderOptions& options)
+{
+	QString out = content;
+
+	if (options.body.isValid())
+	{
+		out = QStringLiteral("<span style=\"color:%1\">%2</span>")
+			.arg(options.body.name(), out);
+	}
+
+	if (options.italic) out = QStringLiteral("<i>%1</i>").arg(out);
+
 	return out;
 }
 
@@ -477,6 +500,14 @@ QList<Block> split_blocks(const QString& markdown, Mode mode,
 
 }
 
+QString Qdc::RichText::monospaceFamily()
+{
+	static const QString family =
+		QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+
+	return family;
+}
+
 bool Qdc::RichText::isLinkable(const QUrl& url)
 {
 	if (!url.isValid() || url.host().isEmpty()) return false;
@@ -554,7 +585,13 @@ QString Qdc::RichText::toMarkdown(const QTextDocument& document)
 				if (is_bold(format)) run = QStringLiteral("**%1**").arg(run);
 			}
 
-			if (format.isAnchor() && !format.anchorHref().isEmpty())
+			/*
+			 * Only a scheme the far end would be willing to open is worth writing as a
+			 * link; anything else is left as its own text rather than sent as a target
+			 * nobody can follow.
+			 */
+			if (format.isAnchor()
+			    && Qdc::RichText::isLinkable(QUrl(format.anchorHref(), QUrl::StrictMode)))
 			{
 				run = QStringLiteral("[%1](%2)").arg(run, format.anchorHref());
 			}
@@ -643,19 +680,31 @@ QString Qdc::RichText::renderMarkdown(const QString& markdown,
 		switch (block.kind)
 		{
 			case Quote:
-				content = QStringLiteral(
-					"<span style=\"color:%1\">&#9615;</span> "
-					"<span style=\"color:%2\">%3</span>")
-					.arg(options.colours.quoteBar.name(),
-					     options.colours.quote.name(), content);
+			{
+				/*
+				 * The rule goes down the whole quote, so every line carries it - a
+				 * bar on the opening line alone reads as a stray character.
+				 */
+				QStringList marked;
+				for (const QString& line : content.split(QStringLiteral("<br>")))
+				{
+					marked.append(QStringLiteral(
+						"<span style=\"color:%1\">&#9615;</span> "
+						"<span style=\"color:%2\">%3</span>")
+						.arg(options.colours.quoteBar.name(),
+						     options.colours.quote.name(), line));
+				}
+
+				content = marked.join(QStringLiteral("<br>"));
 				break;
+			}
 
 			case CodeBlock:
 				style += QStringLiteral(" background-color:%1;")
 					.arg(options.colours.codeBack.name());
 				content = QStringLiteral(
-					"<span style=\"font-family:monospace; color:%1\">%2</span>")
-					.arg(options.colours.code.name(), content);
+					"<span style=\"font-family:'%1'; color:%2\">%3</span>")
+					.arg(monospaceFamily(), options.colours.code.name(), content);
 				break;
 
 			case Paragraph:
@@ -663,6 +712,7 @@ QString Qdc::RichText::renderMarkdown(const QString& markdown,
 				break;
 		}
 
+		content = style_body(content, options);
 		if (n == 0) content = options.prefix + content;
 
 		html += QStringLiteral("<div style=\"%1\">%2</div>").arg(style, content);
@@ -678,5 +728,5 @@ QString Qdc::RichText::renderPlain(const QString& text, const RenderOptions& opt
 
 	return QStringLiteral("<div style=\"margin-left:%1px; text-indent:-%1px;\">%2%3</div>")
 		.arg(options.indent)
-		.arg(options.prefix, escaped);
+		.arg(options.prefix, style_body(escaped, options));
 }

@@ -65,9 +65,17 @@ signals:
 	/** The header's leave button was pressed. */
 	void closeRequested();
 
+	/** A link in a message was clicked; see ChatFeed::linkActivated(). */
+	void linkActivated(const QUrl& url);
+
 protected:
-	/** Where the composer's text goes. Called with non-empty, trimmed text. */
-	virtual void sendMessage(const QString& message) = 0;
+	/**
+	 * Where the composer's text goes. Called with non-empty, trimmed text.
+	 *
+	 * @param richText the text is markdown, and the message must say so - otherwise
+	 *                 the far end shows the markers.
+	 */
+	virtual void sendMessage(const QString& message, bool richText) = 0;
 
 	QTabWidget* tabs() const;
 	ChatModel* chatModel() const;

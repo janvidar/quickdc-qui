@@ -372,6 +372,13 @@ QToolButton {
 QToolButton:hover   { background: %(contentAlt); }
 QToolButton:checked { background: %(border); }
 
+/*
+ * Said here as well as in the palette. A styled button takes its ink from the sheet, and
+ * the QWidget rule above would otherwise paint a disabled control at full strength.
+ */
+QToolButton:disabled { color: %(muted); }
+
+
 QGroupBox {
     background: %(content);
     border: 1px solid %(border);

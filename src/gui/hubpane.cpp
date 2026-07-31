@@ -188,9 +188,9 @@ void Qdc::HubPane::setFavourite(bool favourite)
 	header()->setFavourite(favourite);
 }
 
-void Qdc::HubPane::sendMessage(const QString& message)
+void Qdc::HubPane::sendMessage(const QString& message, bool richText)
 {
-	if (hub()) hub()->sendChat(message);
+	if (hub()) hub()->sendChat(message, richText);
 }
 
 void Qdc::HubPane::applyNetStatus(NetStatus status)
@@ -329,7 +329,7 @@ void Qdc::DmPane::setUser(const UserInfo& user)
 	composer()->setNicknames({m_user.nick});
 }
 
-void Qdc::DmPane::sendMessage(const QString& message)
+void Qdc::DmPane::sendMessage(const QString& message, bool richText)
 {
-	if (hub()) hub()->sendPrivateChat(m_user.id, message);
+	if (hub()) hub()->sendPrivateChat(m_user.id, message, richText);
 }

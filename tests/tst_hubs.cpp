@@ -14,11 +14,14 @@
 #include <gui/filelistview.h>
 #include <gui/hubpane.h>
 #include <gui/hubsview.h>
+#include <gui/richtext.h>
 #include <gui/usermodel.h>
 
 #include <QApplication>
 #include <QDir>
 #include <QStyleOptionViewItem>
+#include <QTextEdit>
+#include <QToolButton>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -47,12 +50,20 @@ private slots:
 	void userModelForgetsUsersWhoLeave();
 	void userModelListsAdcUsersOnce();
 	void chatFeedGivesMultiLineMessagesMoreHeight();
+	void chatFeedGivesAMarkdownMessageRoomForItsBlocks();
+	void chatFeedForgetsItsLayoutsWhenRowsMove();
+	void chatFeedClicksALinkAndIgnoresADrag();
+	void chatModelReadsARichMessageAsProse();
 
 	void favouritesRoundTripThroughTheStore();
 	void favouritesShrinkWithoutLeavingATail();
 
 	void urlNormalisationFillsInSchemeAndPort();
 	void onlyAdcHubsCanCarryRichText();
+
+	void composerFlagsOnlyWhatItActuallyFormatted();
+	void composerSerializesEachConstructToMarkdown();
+	void composerFlattensFormattingWhereItCannotBeSent();
 
 	void filelistModelExposesTheTree();
 	void filelistModelFilterKeepsAncestors();
@@ -63,10 +74,18 @@ private slots:
 	void aRichTextFlagReachesThePane();
 	void hubPasswordIsAskedForOnce();
 	void nothingCanBeSentUntilTheHubHasLoggedUsIn();
+	void formattingIsOnlyOfferedWhereItCanBeSent();
+	void aClickedHubLinkOpensTheHubItself();
 	void anEchoOfOurOwnPrivateMessageOpensTheirConversation();
 
 private:
 	Qdc::UserInfo user(const QString& nick, bool op = false) const;
+
+	/** The formatting button whose accessible name is 'name', or nullptr. */
+	static QToolButton* formatButton(Qdc::Composer* composer, const QString& name);
+
+	/** Type into the composer's box and press Return, as a person would. */
+	static void writeAndSend(Qdc::Composer* composer, const QString& text);
 
 	QTemporaryDir m_dir;
 	Qdc::CoreThread* m_thread = nullptr;
@@ -81,6 +100,25 @@ Qdc::UserInfo TestHubs::user(const QString& nick, bool op) const
 	info.sourceId = nick;
 	info.op = op;
 	return info;
+}
+
+QToolButton* TestHubs::formatButton(Qdc::Composer* composer, const QString& name)
+{
+	const QList<QToolButton*> buttons = composer->findChildren<QToolButton*>();
+
+	for (QToolButton* button : buttons)
+		if (button->accessibleName() == name) return button;
+
+	return nullptr;
+}
+
+void TestHubs::writeAndSend(Qdc::Composer* composer, const QString& text)
+{
+	QTextEdit* edit = composer->findChild<QTextEdit*>();
+	QVERIFY(edit);
+
+	if (!text.isEmpty()) QTest::keyClicks(edit, text);
+	QTest::keyClick(edit, Qt::Key_Return);
 }
 
 void TestHubs::initTestCase()
@@ -332,6 +370,177 @@ void TestHubs::chatFeedGivesMultiLineMessagesMoreHeight()
 	QCOMPARE(viaCrlf, three);
 }
 
+void TestHubs::chatFeedGivesAMarkdownMessageRoomForItsBlocks()
+{
+	Qdc::ChatModel model;
+
+	Qdc::ChatMessage plain;
+	plain.from = user(QStringLiteral("alice"));
+	plain.received = QDateTime::currentDateTime();
+	plain.text = QStringLiteral("try `make` first");
+	model.append(plain);
+
+	/* The same text, but flagged - so the marked-up runs are read as markup. */
+	Qdc::ChatMessage rich = plain;
+	rich.richText = true;
+	model.append(rich);
+
+	Qdc::ChatMessage block = plain;
+	block.richText = true;
+	block.text = QStringLiteral("run this:\n```\ncmake --build .\n```");
+	model.append(block);
+
+	/* The same two lines with no markup at all, as the yardstick for the row above. */
+	Qdc::ChatMessage twoLines = plain;
+	twoLines.text = QStringLiteral("run this:\ncmake --build .");
+	model.append(twoLines);
+
+	Qdc::ChatDelegate delegate;
+
+	QStyleOptionViewItem option;
+	option.rect = QRect(0, 0, 420, 0);
+	option.font = QApplication::font();
+	option.palette = QApplication::palette();
+
+	const int asText = delegate.sizeHint(option, model.index(0)).height();
+	const int asMarkup = delegate.sizeHint(option, model.index(1)).height();
+	const int withBlock = delegate.sizeHint(option, model.index(2)).height();
+	const int twoRows = delegate.sizeHint(option, model.index(3)).height();
+
+	/* One line either way; the backticks come off rather than wrapping to two. */
+	QCOMPARE(asMarkup, asText);
+
+	/*
+	 * The fence is a block of its own rather than two more lines of prose, so the row is
+	 * at least as tall as the same two lines unformatted, and taller than one.
+	 */
+	QVERIFY2(withBlock >= twoRows && withBlock > asText,
+	         qPrintable(QStringLiteral("code block measured %1, two plain lines %2, "
+	                                   "one line %3")
+	                    .arg(withBlock).arg(twoRows).arg(asText)));
+}
+
+void TestHubs::chatFeedForgetsItsLayoutsWhenRowsMove()
+{
+	Qdc::ChatFeed feed;
+	Qdc::ChatModel model;
+
+	feed.setModel(&model);
+	feed.resize(420, 300);
+
+	Qdc::ChatMessage message;
+	message.from = user(QStringLiteral("alice"));
+	message.received = QDateTime::currentDateTime();
+
+	/*
+	 * Row 0 is the tall one. Trimming the backlog removes it and shifts every row down
+	 * by one, so a cache keyed by row number would go on serving its height to whatever
+	 * row 0 became.
+	 */
+	message.text = QStringLiteral("first\nsecond\nthird\nfourth");
+	model.append(message);
+
+	message.text = QStringLiteral("short");
+	model.append(message);
+
+	Qdc::ChatDelegate* delegate = qobject_cast<Qdc::ChatDelegate*>(feed.itemDelegate());
+	QVERIFY(delegate);
+
+	QStyleOptionViewItem option;
+	option.rect = QRect(0, 0, 420, 0);
+	option.font = QApplication::font();
+	option.palette = QApplication::palette();
+
+	const int tall = delegate->sizeHint(option, model.index(0)).height();
+	const int shortRow = delegate->sizeHint(option, model.index(1)).height();
+	QVERIFY(tall > shortRow);
+
+	model.setCapacity(1);
+	QCOMPARE(model.rowCount(), 1);
+
+	/* What was row 1 is row 0 now, and must measure as the short line it is. */
+	QCOMPARE(delegate->sizeHint(option, model.index(0)).height(), shortRow);
+}
+
+void TestHubs::chatFeedClicksALinkAndIgnoresADrag()
+{
+	Qdc::ChatFeed feed;
+	Qdc::ChatModel model;
+
+	feed.setModel(&model);
+	feed.resize(600, 300);
+	feed.show();
+
+	Qdc::ChatMessage message;
+	message.from = user(QStringLiteral("alice"));
+	message.received = QDateTime::currentDateTime();
+	message.richText = true;
+	message.text = QStringLiteral("[the hub](adc://hub.example.org:412) is back");
+	model.append(message);
+
+	QVERIFY(QTest::qWaitForWindowExposed(&feed));
+
+	const QRect row = feed.visualRect(model.index(0));
+	QVERIFY(row.isValid());
+
+	/*
+	 * Swept across the row rather than aimed at one pixel: where the link falls depends
+	 * on the width of the timestamp and the name in whatever font this machine uses.
+	 */
+	QPoint onLink;
+	for (int x = row.left(); x < row.right(); ++x)
+	{
+		const QPoint point(x, row.center().y());
+		if (feed.anchorAt(point) == QStringLiteral("adc://hub.example.org:412"))
+		{
+			onLink = point;
+			break;
+		}
+	}
+
+	QVERIFY2(!onLink.isNull(), "no link was found anywhere along the row");
+
+	QSignalSpy followed(&feed, &Qdc::ChatFeed::linkActivated);
+
+	QTest::mousePress(feed.viewport(), Qt::LeftButton, Qt::NoModifier, onLink);
+	QTest::mouseRelease(feed.viewport(), Qt::LeftButton, Qt::NoModifier, onLink);
+
+	QCOMPARE(followed.count(), 1);
+	QCOMPARE(followed.at(0).at(0).toUrl(),
+	         QUrl(QStringLiteral("adc://hub.example.org:412")));
+
+	/* Pressed on the link but released off it: a selection, not a click. */
+	QTest::mousePress(feed.viewport(), Qt::LeftButton, Qt::NoModifier, onLink);
+	QTest::mouseRelease(feed.viewport(), Qt::LeftButton, Qt::NoModifier,
+	                    QPoint(row.right() - 1, row.center().y()));
+
+	QCOMPARE(followed.count(), 1);
+}
+
+void TestHubs::chatModelReadsARichMessageAsProse()
+{
+	Qdc::ChatModel model;
+
+	Qdc::ChatMessage message;
+	message.from = user(QStringLiteral("alice"));
+	message.received = QDateTime::currentDateTime();
+	message.richText = true;
+	message.text = QStringLiteral("**really** try `make` [here](https://example.org)");
+	model.append(message);
+
+	/* What a screen reader says and what a copy puts on the clipboard. */
+	QCOMPARE(model.index(0).data(Qt::DisplayRole).toString(),
+	         QStringLiteral("alice: really try make here"));
+
+	/* Unflagged text is nobody's markup, so it is left exactly as it arrived. */
+	Qdc::ChatMessage literal = message;
+	literal.richText = false;
+	model.append(literal);
+
+	QCOMPARE(model.index(1).data(Qt::DisplayRole).toString(),
+	         QStringLiteral("alice: **really** try `make` [here](https://example.org)"));
+}
+
 void TestHubs::favouritesRoundTripThroughTheStore()
 {
 	Qdc::ConfigBridge config(m_thread);
@@ -415,6 +624,136 @@ void TestHubs::onlyAdcHubsCanCarryRichText()
 	/* The shorthand becomes dchub, so it cannot either. */
 	Qdc::HubBridge shorthand(m_thread, QStringLiteral("192.0.2.1"), this);
 	QVERIFY(!shorthand.supportsRichText());
+}
+
+void TestHubs::composerFlagsOnlyWhatItActuallyFormatted()
+{
+	Qdc::Composer composer;
+	QSignalSpy sent(&composer, &Qdc::Composer::sendRequested);
+
+	/*
+	 * Asterisks somebody typed are theirs. Nothing was formatted, so no flag is set and
+	 * the text goes out exactly as written - which is what stops the far end reading it
+	 * as emphasis nobody asked for.
+	 */
+	writeAndSend(&composer, QStringLiteral("look at *this*"));
+
+	QCOMPARE(sent.count(), 1);
+	QCOMPARE(sent.at(0).at(0).toString(), QStringLiteral("look at *this*"));
+	QCOMPARE(sent.at(0).at(1).toBool(), false);
+
+	QToolButton* bold = formatButton(&composer, QStringLiteral("Bold"));
+	QVERIFY(bold);
+
+	QTextEdit* edit = composer.findChild<QTextEdit*>();
+	QVERIFY(edit);
+
+	QTest::keyClicks(edit, QStringLiteral("really"));
+	edit->selectAll();
+	bold->click();
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 2);
+	QCOMPARE(sent.at(1).at(0).toString(), QStringLiteral("**really**"));
+	QCOMPARE(sent.at(1).at(1).toBool(), true);
+}
+
+void TestHubs::composerSerializesEachConstructToMarkdown()
+{
+	Qdc::Composer composer;
+	QSignalSpy sent(&composer, &Qdc::Composer::sendRequested);
+
+	QTextEdit* edit = composer.findChild<QTextEdit*>();
+	QVERIFY(edit);
+
+	/* Italic and inline code, each applied to one word of the same line. */
+	QTest::keyClicks(edit, QStringLiteral("run make first"));
+
+	QTextCursor cursor = edit->textCursor();
+	cursor.setPosition(4);
+	cursor.setPosition(8, QTextCursor::KeepAnchor);
+	edit->setTextCursor(cursor);
+
+	QToolButton* code = formatButton(&composer, QStringLiteral("Code"));
+	QVERIFY(code);
+	code->click();
+
+	cursor.setPosition(9);
+	cursor.setPosition(14, QTextCursor::KeepAnchor);
+	edit->setTextCursor(cursor);
+
+	QToolButton* italic = formatButton(&composer, QStringLiteral("Italic"));
+	QVERIFY(italic);
+	italic->click();
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 1);
+	QCOMPARE(sent.at(0).at(0).toString(), QStringLiteral("run `make` *first*"));
+	QCOMPARE(sent.at(0).at(1).toBool(), true);
+
+	/* A whole block turned into a quote, and then into a code block. */
+	QTest::keyClicks(edit, QStringLiteral("as you were"));
+
+	QToolButton* quote = formatButton(&composer, QStringLiteral("Quote"));
+	QVERIFY(quote);
+	quote->click();
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 2);
+	QCOMPARE(sent.at(1).at(0).toString(), QStringLiteral("> as you were"));
+
+	QTest::keyClicks(edit, QStringLiteral("cmake --build ."));
+
+	QToolButton* block = formatButton(&composer, QStringLiteral("Code block"));
+	QVERIFY(block);
+	block->click();
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 3);
+	QCOMPARE(sent.at(2).at(0).toString(),
+	         QStringLiteral("```\ncmake --build .\n```"));
+}
+
+void TestHubs::composerFlattensFormattingWhereItCannotBeSent()
+{
+	Qdc::Composer composer;
+	QSignalSpy sent(&composer, &Qdc::Composer::sendRequested);
+
+	QTextEdit* edit = composer.findChild<QTextEdit*>();
+	QVERIFY(edit);
+
+	QToolButton* bold = formatButton(&composer, QStringLiteral("Bold"));
+	QVERIFY(bold);
+	QVERIFY(bold->isEnabled());
+
+	QTest::keyClicks(edit, QStringLiteral("shouting"));
+	edit->selectAll();
+	bold->click();
+
+	/*
+	 * Moving the conversation to a hub that cannot carry the flag takes the formatting
+	 * with it rather than leaving bold text that would be sent as markers.
+	 */
+	QVERIFY(Qdc::RichText::hasMarkup(*edit->document()));
+
+	composer.setRichTextEnabled(false);
+	QVERIFY(!composer.isRichTextEnabled());
+	QVERIFY(!bold->isEnabled());
+	QVERIFY(!bold->isChecked());
+
+	/* The words stay; nothing about them is formatted any more. */
+	QVERIFY(!Qdc::RichText::hasMarkup(*edit->document()));
+	QCOMPARE(edit->toPlainText(), QStringLiteral("shouting"));
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 1);
+	QCOMPARE(sent.at(0).at(0).toString(), QStringLiteral("shouting"));
+	QCOMPARE(sent.at(0).at(1).toBool(), false);
 }
 
 void TestHubs::urlNormalisationFillsInSchemeAndPort()
@@ -795,6 +1134,75 @@ void TestHubs::nothingCanBeSentUntilTheHubHasLoggedUsIn()
 	/* And shuts again when the hub goes away. */
 	emit bridge->netStatusChanged(Qdc::NetStatus::Disconnected);
 	QVERIFY(!composer->isSendable());
+}
+
+void TestHubs::formattingIsOnlyOfferedWhereItCanBeSent()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+
+	QVERIFY(hubs.openHub(QStringLiteral("dchub://192.0.2.1:411")));
+
+	Qdc::Composer* nmdc = hubs.currentPane()->findChild<Qdc::Composer*>();
+	QVERIFY(nmdc);
+
+	/*
+	 * NMDC has nowhere to put the flag, so the controls are shut rather than sending
+	 * markers the far end would show as punctuation.
+	 */
+	QVERIFY(!nmdc->isRichTextEnabled());
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.2:412")));
+
+	Qdc::Composer* adc = hubs.currentPane()->findChild<Qdc::Composer*>();
+	QVERIFY(adc);
+	QVERIFY(adc->isRichTextEnabled());
+
+	/* A private conversation inherits it from the hub it is on. */
+	Qdc::ChatMessage direct;
+	direct.hubUrl = QStringLiteral("adc://192.0.2.2:412");
+	direct.from = user(QStringLiteral("bob"));
+	direct.context = QStringLiteral("bob");
+	direct.text = QStringLiteral("hello");
+	direct.privateMessage = true;
+	direct.received = QDateTime::currentDateTime();
+
+	emit hubs.currentPane()->hub()->chatReceived(direct);
+
+	Qdc::DmPane* dm = hubs.findChild<Qdc::DmPane*>();
+	QVERIFY(dm);
+
+	Qdc::Composer* dmComposer = dm->findChild<Qdc::Composer*>();
+	QVERIFY(dmComposer);
+	QVERIFY(dmComposer->isRichTextEnabled());
+}
+
+void TestHubs::aClickedHubLinkOpensTheHubItself()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	/*
+	 * A hub address is opened here rather than handed to the desktop, which would at
+	 * best start a second copy of QuickDC.
+	 */
+	emit pane->linkActivated(QUrl(QStringLiteral("adc://192.0.2.3:412")));
+
+	QCOMPARE(hubs.openHubs().size(), 2);
+	QVERIFY(hubs.openHubs().contains(QStringLiteral("adc://192.0.2.3:412")));
+
+	/* And the newly opened one is what is shown, since the click asked to go there. */
+	QVERIFY(hubs.currentPane());
+	QCOMPARE(hubs.currentPane()->hub()->url(), QStringLiteral("adc://192.0.2.3:412"));
+
+	/*
+	 * A scheme nothing may follow is dropped rather than passed on. Nothing renders one
+	 * as a link in the first place; this is the last gate before the desktop.
+	 */
+	emit pane->linkActivated(QUrl(QStringLiteral("file:///etc/passwd")));
+	QCOMPARE(hubs.openHubs().size(), 2);
 }
 
 void TestHubs::anEchoOfOurOwnPrivateMessageOpensTheirConversation()

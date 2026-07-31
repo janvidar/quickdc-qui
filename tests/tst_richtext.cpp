@@ -183,7 +183,12 @@ void TestRichText::boldItalicAndCodeRoundTrip()
 	const QString html = Qdc::RichText::renderMarkdown(markdown, options());
 	QVERIFY(html.contains(QStringLiteral("<b>it</b>")));
 	QVERIFY(html.contains(QStringLiteral("<i>Music</i>")));
-	QVERIFY(html.contains(QStringLiteral("font-family:monospace")));
+	/*
+	 * The family is whatever this system calls its fixed-pitch font, so the assertion is
+	 * that code is set in that one - not in a name written into the source.
+	 */
+	QVERIFY(html.contains(QStringLiteral("font-family:'%1'")
+	                      .arg(Qdc::RichText::monospaceFamily())));
 	QVERIFY(html.contains(QStringLiteral("ls -l")));
 
 	/* And the markers themselves are gone from what is displayed. */

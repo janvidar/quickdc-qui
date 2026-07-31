@@ -45,7 +45,7 @@ signals:
 	void directMessageRequested(const Qdc::UserInfo& user);
 
 protected:
-	void sendMessage(const QString& message) override;
+	void sendMessage(const QString& message, bool richText) override;
 
 private:
 	/** Rebuild the Info tab from what the hub has told us. */
@@ -105,7 +105,7 @@ signals:
 	void downloadRequested(const QString& name, quint64 size, const QString& tth);
 
 protected:
-	void sendMessage(const QString& message) override;
+	void sendMessage(const QString& message, bool richText) override;
 
 private:
 	/** As HubPane: a private message goes through the hub and waits on its login. */

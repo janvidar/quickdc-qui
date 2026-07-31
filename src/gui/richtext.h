@@ -53,6 +53,14 @@ bool isLinkable(const QUrl& url);
 bool isHubUrl(const QUrl& url);
 
 /**
+ * The family to set code in.
+ *
+ * Asked of the font database rather than written as "monospace", which is a fontconfig
+ * name and resolves to nothing on macOS - where it silently leaves code in the body font.
+ */
+QString monospaceFamily();
+
+/**
  * Which paragraph kind a block of the composer's document is.
  *
  * Stored on the block format under BlockKindProperty rather than inferred from margins
@@ -116,6 +124,17 @@ struct RenderOptions {
 	QString prefix;
 
 	int indent = 0;
+
+	/**
+	 * Ink for the message body, when it is not the palette's own.
+	 *
+	 * A line the hub generated is muted, so that it does not read as somebody speaking.
+	 * The prefix keeps its own colours either way.
+	 */
+	QColor body;
+
+	/** Narration - a hub notice, or a "/me" line - is set in italic throughout. */
+	bool italic = false;
 
 	RenderColours colours;
 };
