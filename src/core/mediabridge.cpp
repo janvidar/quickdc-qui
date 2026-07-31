@@ -71,6 +71,12 @@ Qdc::MediaBridge::MediaBridge(CoreThread* thread, QObject* parent)
 	if (!m_thread) return;
 
 	m_thread->invoke([this] { m_attacher = new Attacher(this); });
+
+	/* Remembered as they are offered, which is the only place both halves are known. */
+	connect(this, &MediaBridge::attached, this,
+	        [this](const QString& path, const QString& tth, quint64) {
+		m_offered.insert(tth, path);
+	});
 }
 
 Qdc::MediaBridge::~MediaBridge()
@@ -85,6 +91,11 @@ Qdc::MediaBridge::~MediaBridge()
 		delete m_attacher;
 		m_attacher = nullptr;
 	});
+}
+
+QString Qdc::MediaBridge::pathFor(const QString& tth) const
+{
+	return m_offered.value(tth);
 }
 
 void Qdc::MediaBridge::attach(const QString& path)

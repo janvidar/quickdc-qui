@@ -364,6 +364,7 @@ Qdc::Composer::Composer(QWidget* parent)
 	, m_quote(makeFormatButton(tr("❝"), tr("Quote"), false, false, false))
 	, m_codeBlock(makeFormatButton(tr("≣"), tr("Code block"), false, false, true))
 	, m_attach(makeFormatButton(tr("📎"), tr("Attach a file"), false, false, false))
+	, m_image(makeFormatButton(tr("🖼"), tr("Send a picture"), false, false, false))
 	, m_bullets(makeFormatButton(tr("•"), tr("Bulleted list"), false, false, false))
 	, m_numbers(makeFormatButton(tr("1."), tr("Numbered list"), false, false, false))
 	, m_link(makeFormatButton(tr("🔗"), tr("Link"), false, false, false))
@@ -379,7 +380,7 @@ Qdc::Composer::Composer(QWidget* parent)
 	 * can only be sent where a message may say it is markdown at all.
 	 */
 	m_formatButtons = {m_bold, m_italic, m_code, m_quote, m_codeBlock,
-	                   m_bullets, m_numbers, m_link, m_attach};
+	                   m_bullets, m_numbers, m_link, m_attach, m_image};
 
 	/*
 	 * Checkable, because each one reports whether its formatting is in force where the
@@ -388,6 +389,7 @@ Qdc::Composer::Composer(QWidget* parent)
 	for (QToolButton* button : m_formatButtons) button->setCheckable(true);
 	m_link->setCheckable(false);
 	m_attach->setCheckable(false);
+	m_image->setCheckable(false);
 
 	connect(m_bold, &QToolButton::clicked, this, &Composer::toggleBold);
 	connect(m_italic, &QToolButton::clicked, this, &Composer::toggleItalic);
@@ -405,7 +407,15 @@ Qdc::Composer::Composer(QWidget* parent)
 		toggleList(RichText::Number);
 	});
 	connect(m_link, &QToolButton::clicked, this, &Composer::insertLink);
-	connect(m_attach, &QToolButton::clicked, this, &Composer::attachRequested);
+	connect(m_attach, &QToolButton::clicked, this, [this] {
+		m_wantsMedia = false;
+		emit attachRequested();
+	});
+
+	connect(m_image, &QToolButton::clicked, this, [this] {
+		m_wantsMedia = true;
+		emit attachRequested();
+	});
 
 	connect(m_edit, &QTextEdit::cursorPositionChanged,
 	        this, &Composer::refreshFormatState);
@@ -821,6 +831,11 @@ void Qdc::Composer::flattenDocument()
 	m_edit->setCurrentCharFormat(QTextCharFormat());
 }
 
+bool Qdc::Composer::wantsMedia() const
+{
+	return m_wantsMedia;
+}
+
 void Qdc::Composer::insertAttachment(const RichText::Attachment& file)
 {
 	if (!file.isValid()) return;
@@ -831,6 +846,9 @@ void Qdc::Composer::insertAttachment(const RichText::Attachment& file)
 	format.setAnchor(true);
 	format.setAnchorHref(RichText::writeMagnet(file));
 	format.setFontUnderline(true);
+
+	/* A picture is shown where it was written; anything else is offered as a file. */
+	if (file.inlineMedia) format.setProperty(RichText::MediaProperty, true);
 
 	/* Its own words, so the link reads as the file rather than as whatever was selected
 	   when the button was pressed. */

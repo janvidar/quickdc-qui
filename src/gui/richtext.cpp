@@ -903,7 +903,10 @@ QString Qdc::RichText::toMarkdown(const QTextDocument& document)
 			if (format.isAnchor()
 			    && Qdc::RichText::isLinkable(QUrl(format.anchorHref(), QUrl::StrictMode)))
 			{
-				run = QStringLiteral("[%1](%2)").arg(run, format.anchorHref());
+				/* '!' asks for it to be shown rather than offered; see MediaProperty. */
+				run = format.property(MediaProperty).toBool()
+					? QStringLiteral("![%1](%2)").arg(run, format.anchorHref())
+					: QStringLiteral("[%1](%2)").arg(run, format.anchorHref());
 			}
 
 			line += run;

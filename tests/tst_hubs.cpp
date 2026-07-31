@@ -76,6 +76,7 @@ private slots:
 	void composerWritesListsAsMarkdown();
 	void emojiPickerGivesEveryEmojiRoomToDraw();
 	void anAttachedFileIsSentAsALinkToItsHash();
+	void aPictureIsSentAsMediaRatherThanAsAFile();
 	void composerFlattensFormattingWhereItCannotBeSent();
 
 	void filelistModelExposesTheTree();
@@ -929,6 +930,56 @@ void TestHubs::anAttachedFileIsSentAsALinkToItsHash()
 	   file either. */
 	composer.setRichTextEnabled(false);
 	QVERIFY(!attach->isEnabled());
+}
+
+void TestHubs::aPictureIsSentAsMediaRatherThanAsAFile()
+{
+	Qdc::Composer composer;
+	QSignalSpy sent(&composer, &Qdc::Composer::sendRequested);
+	QSignalSpy asked(&composer, &Qdc::Composer::attachRequested);
+
+	QToolButton* attach = formatButton(&composer, QStringLiteral("Attach a file"));
+	QToolButton* picture = formatButton(&composer, QStringLiteral("Send a picture"));
+	QVERIFY(attach);
+	QVERIFY(picture);
+
+	/* Both ask the same question; which one asked decides what the message says. */
+	attach->click();
+	QCOMPARE(asked.count(), 1);
+	QVERIFY(!composer.wantsMedia());
+
+	picture->click();
+	QCOMPARE(asked.count(), 2);
+	QVERIFY(composer.wantsMedia());
+
+	Qdc::RichText::Attachment shown;
+	shown.tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
+	shown.name = QStringLiteral("diagram.png");
+	shown.size = 524288;
+	shown.inlineMedia = true;
+
+	composer.insertAttachment(shown);
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 1);
+
+	/* The '!' is the whole difference: shown where it was written, not offered. */
+	QCOMPARE(sent.at(0).at(0).toString(),
+	         QStringLiteral("![diagram.png](magnet:?xt=urn:tree:tiger:%1"
+	                        "&dn=diagram.png&xl=524288)").arg(shown.tth));
+
+	/* And it reads back as media rather than as an attachment. */
+	const QString markdown = sent.at(0).at(0).toString();
+	QVERIFY(markdown.startsWith(QStringLiteral("![")));
+
+	Qdc::RichText::Attachment offered = shown;
+	offered.inlineMedia = false;
+
+	composer.insertAttachment(offered);
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 2);
+	QVERIFY(sent.at(1).at(0).toString().startsWith(QStringLiteral("[diagram.png]")));
 }
 
 void TestHubs::composerFlattensFormattingWhereItCannotBeSent()

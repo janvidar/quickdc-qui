@@ -4,12 +4,15 @@
 
 #include "hubsview.h"
 
+#include "fileactions.h"
+#include "composer.h"
 #include "hubheader.h"
 #include "hubpane.h"
 #include "richtext.h"
 #include "theme.h"
 #include "usermodel.h"
 
+#include <core/completed.h>
 #include <core/corethread.h>
 #include <core/configbridge.h>
 #include <core/favourites.h>
@@ -50,13 +53,14 @@ QString decorate(const QString& title, int unread)
 
 Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
                         FilelistBridge* filelists, TransferBridge* transfers,
-                        ConfigBridge* config, QWidget* parent)
+                        ConfigBridge* config, Completed* completed, QWidget* parent)
 	: View(parent)
 	, m_thread(thread)
 	, m_favourites(favourites)
 	, m_filelists(filelists)
 	, m_transfers(transfers)
 	, m_config(config)
+	, m_completed(completed)
 	, m_split(new QSplitter(Qt::Horizontal, this))
 	, m_tree(new QTreeWidget(this))
 	, m_stack(new QStackedWidget(this))
@@ -521,6 +525,10 @@ void Qdc::HubsView::attachFile(ChatPane* pane)
 
 	const QPointer<ChatPane> waiting(pane);
 
+	/* Which control asked decides both what may be chosen and what the message says. */
+	Composer* composer = pane->findChild<Composer*>();
+	const bool wantsMedia = composer && composer->wantsMedia();
+
 	/*
 	 * On the next turn of the event loop, and drawn by Qt rather than by the platform.
 	 *
@@ -534,18 +542,27 @@ void Qdc::HubsView::attachFile(ChatPane* pane)
 	 *
 	 * Qt's chooser is a widget like any other, so it lays itself out and draws.
 	 */
-	QTimer::singleShot(0, this, [this, waiting] {
+	QTimer::singleShot(0, this, [this, waiting, wantsMedia] {
+		/*
+		 * Only the formats Qt can draw are offered for a picture. A file it cannot
+		 * decode would arrive as an image that never appears, which is worse than
+		 * sending it as a plain attachment.
+		 */
+		const QString filter = wantsMedia
+			? tr("Pictures (*.png *.jpg *.jpeg *.gif *.bmp *.webp)") : QString();
+
 		const QString chosen = QFileDialog::getOpenFileName(window(),
-			tr("Attach a file"), QString(), QString(), nullptr,
-			QFileDialog::DontUseNativeDialog);
+			wantsMedia ? tr("Send a picture") : tr("Attach a file"), QString(),
+			filter, nullptr, QFileDialog::DontUseNativeDialog);
 
 		if (chosen.isEmpty() || !waiting) return;
 
-		offerFile(waiting, chosen);
+		offerFile(waiting, chosen, wantsMedia);
 	});
 }
 
-void Qdc::HubsView::offerFile(const QPointer<ChatPane>& pane, const QString& path)
+void Qdc::HubsView::offerFile(const QPointer<ChatPane>& pane, const QString& path,
+                              bool asMedia)
 {
 	if (path.isEmpty() || !m_media) return;
 
@@ -557,8 +574,8 @@ void Qdc::HubsView::offerFile(const QPointer<ChatPane>& pane, const QString& pat
 	QObject* pending = new QObject(this);
 
 	connect(m_media, &MediaBridge::attached, pending,
-	        [pane, path, pending](const QString& hashed, const QString& tth,
-	                              quint64 size) {
+	        [pane, path, pending, asMedia](const QString& hashed, const QString& tth,
+	                                       quint64 size) {
 		if (hashed != path) return;
 
 		if (pane)
@@ -567,6 +584,7 @@ void Qdc::HubsView::offerFile(const QPointer<ChatPane>& pane, const QString& pat
 			file.tth = tth;
 			file.name = QFileInfo(hashed).fileName();
 			file.size = size;
+			file.inlineMedia = asMedia;
 
 			pane->insertAttachment(file);
 		}
@@ -597,6 +615,23 @@ void Qdc::HubsView::followLink(const QUrl& url)
 	 */
 	if (const RichText::Attachment file = RichText::readMagnet(url); file.isValid())
 	{
+		/*
+		 * Here already, so there is nothing to fetch. Asked first because the obvious
+		 * thing to click is the file one has just sent, and queueing that would ask the
+		 * hub to find somebody with a file this client is itself the only source of -
+		 * which never finishes and sits in the queue looking broken.
+		 */
+		if (const QString here = localFileFor(file.tth); !here.isEmpty())
+		{
+			if (!FileActions::open(here))
+			{
+				QMessageBox::information(this, tr("Open"),
+					tr("'%1' is here but could not be opened.").arg(file.name));
+			}
+
+			return;
+		}
+
 		if (!m_transfers)
 		{
 			QMessageBox::information(this, tr("Download"),
@@ -689,6 +724,32 @@ void Qdc::HubsView::refreshBadge()
 	for (ChatPane* pane : m_panes) unread += pane->unreadCount();
 
 	setBadgeCount(unread);
+}
+
+QString Qdc::HubsView::localFileFor(const QString& tth) const
+{
+	if (tth.isEmpty()) return QString();
+
+	QString path;
+
+	/* Offered from here, which covers a click on one's own attachment. */
+	if (m_media) path = m_media->pathFor(tth);
+
+	if (path.isEmpty() && m_completed)
+	{
+		for (const CompletedDownload& done : m_completed->entries())
+		{
+			if (done.tth != tth) continue;
+
+			path = done.filename;
+			break;
+		}
+	}
+
+	if (path.isEmpty()) return QString();
+
+	/* A record is not the file: it may have been moved or deleted since. */
+	return QFileInfo(path).isFile() ? path : QString();
 }
 
 QString Qdc::HubsView::downloadDirectory() const

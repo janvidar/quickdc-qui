@@ -53,7 +53,8 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	, m_favourites(new Favourites(m_config, this))
 	, m_completed(new Completed(m_config, this))
 	, m_shares(new Shares(m_config, this))
-	, m_hubs(new HubsView(thread, m_favourites, m_filelists, m_transfers, m_config))
+	, m_hubs(new HubsView(thread, m_favourites, m_filelists, m_transfers, m_config,
+	                      m_completed))
 	, m_rail(new NavigationRail)
 	, m_stack(new QStackedWidget)
 {

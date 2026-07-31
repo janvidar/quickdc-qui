@@ -134,7 +134,16 @@ enum BlockKind {
  */
 enum Property {
 	CodeProperty = 0x1000,     /**< bool, on a char format: inline code. */
-	BlockKindProperty = 0x1001 /**< BlockKind, on a block format. */
+	BlockKindProperty = 0x1001, /**< BlockKind, on a block format. */
+
+	/**
+	 * bool, on a char format: this link is media to be shown in the message.
+	 *
+	 * The difference between a file offered and a picture shown is what the sender
+	 * meant, and nothing about the file itself - so it is recorded here rather than
+	 * guessed from the name.
+	 */
+	MediaProperty = 0x1002
 };
 
 /**

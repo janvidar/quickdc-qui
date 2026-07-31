@@ -124,6 +124,9 @@ public:
 	 */
 	void insertAttachment(const RichText::Attachment& file);
 
+	/** Whether the last thing asked for was a picture to show; see attachRequested(). */
+	bool wantsMedia() const;
+
 	void clear();
 	void focusInput();
 
@@ -199,6 +202,7 @@ private:
 	QToolButton* m_quote;
 	QToolButton* m_codeBlock;
 	QToolButton* m_attach;
+	QToolButton* m_image;
 	QToolButton* m_bullets;
 	QToolButton* m_numbers;
 	QToolButton* m_link;
@@ -207,6 +211,9 @@ private:
 	QList<QToolButton*> m_formatButtons;
 
 	bool m_richTextEnabled = true;
+
+	/** Which control asked for a file: the picture one, or the plain attachment. */
+	bool m_wantsMedia = false;
 };
 
 }

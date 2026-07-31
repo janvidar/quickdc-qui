@@ -5,6 +5,7 @@
 #ifndef HAVE_QUICKDC_QUI_MEDIABRIDGE_H
 #define HAVE_QUICKDC_QUI_MEDIABRIDGE_H
 
+#include <QHash>
 #include <QObject>
 #include <QString>
 
@@ -47,6 +48,15 @@ public:
 	 */
 	void attach(const QString& path);
 
+	/**
+	 * Where a file with this hash is, if this client is the one offering it.
+	 *
+	 * Only what was attached in this session; the core remembers the rest across
+	 * restarts. Empty when the hash is not ours, which is the usual case for a file
+	 * somebody else sent.
+	 */
+	QString pathFor(const QString& tth) const;
+
 signals:
 	/** @param size the file's length, which the message carries so a reader knows the
 	                cost before asking for it. */
@@ -62,6 +72,9 @@ private:
 
 	/** The core side half, built and destroyed inside jobs on the core thread. */
 	Attacher* m_attacher = nullptr;
+
+	/** What this client offered, by hash, so a click on one's own file finds it. */
+	QHash<QString, QString> m_offered;
 };
 
 }

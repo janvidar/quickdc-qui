@@ -24,7 +24,9 @@ class QTreeWidgetItem;
 namespace Qdc {
 
 class ChatPane;
+class Composer;
 class ConfigBridge;
+class Completed;
 class CoreThread;
 class MediaBridge;
 class DmPane;
@@ -58,9 +60,14 @@ public:
 	 * @param transfers where a file chosen in a browser is queued. May be null,
 	 *        and then choosing one does nothing.
 	 */
+	/**
+	 * @param completed what has already been downloaded, so a file that is here
+	 *        already is opened rather than queued again. May be null.
+	 */
 	HubsView(CoreThread* thread, Favourites* favourites,
 	         FilelistBridge* filelists, TransferBridge* transfers,
-	         ConfigBridge* config, QWidget* parent = nullptr);
+	         ConfigBridge* config, Completed* completed = nullptr,
+	         QWidget* parent = nullptr);
 	~HubsView() override;
 
 	QString title() const override;
@@ -165,7 +172,17 @@ private:
 	 * The pane is held weakly: hashing a large file takes a while, and the conversation
 	 * may be closed before it finishes.
 	 */
-	void offerFile(const QPointer<ChatPane>& pane, const QString& path);
+	void offerFile(const QPointer<ChatPane>& pane, const QString& path,
+	               bool asMedia);
+
+	/**
+	 * Where a file with this hash is on this machine, or empty.
+	 *
+	 * Somewhere it may be: offered from here, or downloaded earlier. A file that has
+	 * since been moved or deleted counts as not here, so the answer can be opened
+	 * without checking again.
+	 */
+	QString localFileFor(const QString& tth) const;
 
 	void showPane(ChatPane* pane);
 
@@ -189,6 +206,7 @@ private:
 	FilelistBridge* m_filelists;
 	TransferBridge* m_transfers;
 	ConfigBridge* m_config;
+	Completed* m_completed;
 
 	/** Hashes and offers a file somebody attached to a message. Made here, because
 	    attaching is not a per hub thing even though it is asked for in a conversation. */
