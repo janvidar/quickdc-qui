@@ -116,8 +116,9 @@ public slots:
 	void connectToHub();
 	void disconnectFromHub();
 
-	/** Public chat. Dropped with a systemError() if there is no session yet. */
 	/**
+	 * Public chat. Dropped with a systemError() if there is no session yet.
+	 *
 	 * @param richText the text is markdown. Only set it when the message really is
 	 *        formatted, and never on a hub that cannot carry the flag.
 	 */

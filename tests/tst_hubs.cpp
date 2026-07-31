@@ -73,6 +73,7 @@ private slots:
 	void unreadCountsReachTheRailBadge();
 	void aRichTextFlagReachesThePane();
 	void hubPasswordIsAskedForOnce();
+	void loopback();
 	void nothingCanBeSentUntilTheHubHasLoggedUsIn();
 	void formattingIsOnlyOfferedWhereItCanBeSent();
 	void aClickedHubLinkOpensTheHubItself();
@@ -1134,6 +1135,127 @@ void TestHubs::nothingCanBeSentUntilTheHubHasLoggedUsIn()
 	/* And shuts again when the hub goes away. */
 	emit bridge->netStatusChanged(Qdc::NetStatus::Disconnected);
 	QVERIFY(!composer->isSendable());
+}
+
+/*
+ * The whole path against a real hub: flag set on send, relayed, read, rendered.
+ *
+ * Skipped unless it is asked for, because it needs a hub to talk to - the core built
+ * here has no listening socket, so QuickDC's own hub is not one of the options. Run it
+ * as two processes, the reader first:
+ *
+ *   QDC_LOOPBACK=recv QDC_LOOPBACK_URL=adc://localhost:1511 \
+ *     QDC_LOOPBACK_NICK=qdc-reader tst_hubs loopback &
+ *   QDC_LOOPBACK=send QDC_LOOPBACK_URL=adc://localhost:1511 \
+ *     QDC_LOOPBACK_NICK=qdc-writer QDC_LOOPBACK_PEER=qdc-reader tst_hubs loopback
+ *
+ * Each process wants preference files of its own, which QTemporaryDir gives it, so the
+ * two arrive with different client ids and the hub takes both.
+ */
+void TestHubs::loopback()
+{
+	const QString role = qEnvironmentVariable("QDC_LOOPBACK");
+	if (role.isEmpty()) QSKIP("QDC_LOOPBACK is not set");
+
+	const QString url = qEnvironmentVariable("QDC_LOOPBACK_URL");
+	const QString nick = qEnvironmentVariable("QDC_LOOPBACK_NICK");
+
+	Qdc::ConfigBridge config(m_thread);
+	config.setString(Qdc::ConfigStore::Application, QStringLiteral("User"),
+	                 QStringLiteral("Nickname"), nick);
+	QVERIFY(config.save(Qdc::ConfigStore::Application));
+
+	Qdc::HubBridge hub(m_thread, url);
+
+	QSignalSpy chats(&hub, &Qdc::HubBridge::chatReceived);
+	QSignalSpy errors(&hub, &Qdc::HubBridge::systemError);
+
+	/* The id a private message has to be addressed by, learned as people arrive. */
+	QHash<QString, QString> idFor;
+	connect(&hub, &Qdc::HubBridge::userUpdated, this,
+	        [&idFor](const Qdc::UserInfo& who) { idFor.insert(who.nick, who.id); });
+
+	hub.connectToHub();
+
+	QTRY_COMPARE_WITH_TIMEOUT(hub.hubStatus(), Qdc::HubStatus::LoggedIn, 20000);
+	qDebug() << role << "logged in as" << nick << "on" << hub.hubName();
+
+	const QString rich =
+		QStringLiteral("**really** *quite* important, run `make -j8` first\n"
+		               "> and read the [notes](https://example.org/notes)");
+	const QString literal = QStringLiteral("plain text with *asterisks* kept");
+
+	const QString direct = QStringLiteral("privately, **this** matters");
+
+	if (role == QStringLiteral("send"))
+	{
+		const QString other = qEnvironmentVariable("QDC_LOOPBACK_PEER");
+
+		/* Time for the other side to finish logging in and be announced. */
+		QTRY_VERIFY_WITH_TIMEOUT(idFor.contains(other), 20000);
+
+		hub.sendChat(rich, true);
+		hub.sendChat(literal, false);
+		hub.sendPrivateChat(idFor.value(other), direct, true);
+
+		QTest::qWait(3000);
+	}
+	else
+	{
+		QTRY_VERIFY_WITH_TIMEOUT(chats.count() >= 3, 25000);
+	}
+
+	QCOMPARE(errors.count(), 0);
+
+	int sawRich = 0;
+	int sawLiteral = 0;
+	int sawDirect = 0;
+
+	for (const QList<QVariant>& emitted : chats)
+	{
+		const Qdc::ChatMessage message = emitted.at(0).value<Qdc::ChatMessage>();
+		if (!message.fromHub.isEmpty()) continue;
+
+		qDebug().noquote() << "  from" << message.from.nick
+		                   << "richText" << message.richText
+		                   << "text" << message.text;
+
+		if (message.text == rich)
+		{
+			++sawRich;
+			QVERIFY2(message.richText, "the RT1 flag did not survive the hub");
+
+			Qdc::RichText::RenderOptions options;
+			options.prefix = QStringLiteral("<b>%1</b> ").arg(message.from.nick);
+			options.indent = 40;
+
+			qDebug().noquote() << "  rendered:"
+			                   << Qdc::RichText::renderMarkdown(message.text, options);
+		}
+
+		if (message.text == literal)
+		{
+			++sawLiteral;
+			QVERIFY2(!message.richText,
+			         "an unflagged message arrived claiming to be markdown");
+		}
+
+		if (message.text == direct)
+		{
+			++sawDirect;
+			QVERIFY2(message.privateMessage, "a private message arrived as public chat");
+			QVERIFY2(message.richText, "the RT1 flag did not survive a private message");
+		}
+	}
+
+	/*
+	 * Both sides see all three: the sender by the hub's echo of its own messages, the
+	 * other by relay. The private one travels as a different command, so it is worth
+	 * seeing separately from public chat.
+	 */
+	QCOMPARE(sawRich, 1);
+	QCOMPARE(sawLiteral, 1);
+	QCOMPARE(sawDirect, 1);
 }
 
 void TestHubs::formattingIsOnlyOfferedWhereItCanBeSent()
