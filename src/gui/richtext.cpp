@@ -5,9 +5,11 @@
 #include "richtext.h"
 
 #include <QFontDatabase>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QTextBlock>
 #include <QTextDocument>
+#include <QTextList>
 #include <QTextFragment>
 
 namespace {
@@ -116,10 +118,31 @@ Qdc::RichText::BlockKind kind_of(const QTextBlock& block)
 	const QVariant kind =
 		block.blockFormat().property(Qdc::RichText::BlockKindProperty);
 
-	if (!kind.isValid()) return Qdc::RichText::Paragraph;
+	if (kind.isValid()) return static_cast<Qdc::RichText::BlockKind>(kind.toInt());
 
-	return static_cast<Qdc::RichText::BlockKind>(kind.toInt());
+	/*
+	 * A QTextList the property knows nothing about, which is what a paste from a browser
+	 * arrives as. Read rather than ignored, so a pasted list is still sent as one.
+	 */
+	if (const QTextList* list = block.textList())
+	{
+		switch (list->format().style())
+		{
+			case QTextListFormat::ListDecimal:
+			case QTextListFormat::ListLowerAlpha:
+			case QTextListFormat::ListUpperAlpha:
+			case QTextListFormat::ListLowerRoman:
+			case QTextListFormat::ListUpperRoman:
+				return Qdc::RichText::Number;
+
+			default:
+				return Qdc::RichText::Bullet;
+		}
+	}
+
+	return Qdc::RichText::Paragraph;
 }
+
 
 bool is_code(const QTextCharFormat& format)
 {
@@ -376,10 +399,36 @@ QString style_body(const QString& content, const Qdc::RichText::RenderOptions& o
 	return out;
 }
 
+/**
+ * Escape a line of prose that begins the way a block marker does.
+ *
+ * Somebody who types "- not a list" in a message that also carries formatting means the
+ * dash. Without this the far end would read the line as a bullet, because by then the
+ * only thing telling prose from markup is the marker itself.
+ *
+ * The shapes here are exactly the ones split_blocks() recognises, and no wider: "**bold"
+ * opens with a marker character but no reader would take it for a list, and escaping it
+ * would break the emphasis it actually is.
+ */
+QString protect_markers(const QString& line)
+{
+	static const QRegularExpression marker(
+		QStringLiteral("^\\s*(([-*+]\\s)|([0-9]{1,9}\\.\\s)|(>)|(```))"));
+
+	const QRegularExpressionMatch found = marker.match(line);
+	if (!found.hasMatch()) return line;
+
+	const int at = found.capturedStart(1);
+	return line.left(at) + QLatin1Char('\\') + line.mid(at);
+}
+
 /** One rendered block, and what sort it was. */
 struct Block {
 	Qdc::RichText::BlockKind kind = Qdc::RichText::Paragraph;
 	QString content;
+
+	/** Which item this is, for a numbered list. Zero for anything else. */
+	int ordinal = 0;
 };
 
 /**
@@ -477,6 +526,42 @@ QList<Block> split_blocks(const QString& markdown, Mode mode,
 			continue;
 		}
 
+		static const QRegularExpression bullet(QStringLiteral("^\\s*[-*+]\\s+(.*)$"));
+		static const QRegularExpression numbered(
+			QStringLiteral("^\\s*([0-9]{1,9})\\.\\s+(.*)$"));
+
+		const QRegularExpressionMatch asBullet = bullet.match(line);
+		const QRegularExpressionMatch asNumber = numbered.match(line);
+
+		if (asBullet.hasMatch() || asNumber.hasMatch())
+		{
+			flushParagraph();
+			flushQuote();
+
+			Block block;
+
+			if (asBullet.hasMatch())
+			{
+				block.kind = Qdc::RichText::Bullet;
+				block.content = scan_inline(asBullet.captured(1), mode, colours);
+			}
+			else
+			{
+				block.kind = Qdc::RichText::Number;
+
+				/*
+				 * The number as it was written, not a count of the items here: a sender
+				 * who numbered from three meant three, and a list that arrives split
+				 * across two messages still reads in order.
+				 */
+				block.ordinal = asNumber.captured(1).toInt();
+				block.content = scan_inline(asNumber.captured(2), mode, colours);
+			}
+
+			blocks.append(block);
+			continue;
+		}
+
 		if (trimmed.startsWith(QLatin1Char('>')))
 		{
 			flushParagraph();
@@ -550,6 +635,9 @@ QString Qdc::RichText::toMarkdown(const QTextDocument& document)
 {
 	QStringList out;
 
+	BlockKind previous = Paragraph;
+	int ordinal = 0;
+
 	for (QTextBlock block = document.begin(); block.isValid(); block = block.next())
 	{
 		const BlockKind kind = kind_of(block);
@@ -607,6 +695,30 @@ QString Qdc::RichText::toMarkdown(const QTextDocument& document)
 					out.append(QStringLiteral("> ") + part);
 				break;
 
+			case Bullet:
+				/*
+				 * A marker per line: a block may hold soft breaks, from a paste or from
+				 * an editor that puts two lines in one item, and each of those lines is
+				 * an item of its own once it is written down.
+				 */
+				for (const QString& part : line.split(QLatin1Char('\n')))
+					out.append(QStringLiteral("- ") + part);
+				break;
+
+			case Number:
+			{
+				/*
+				 * Numbered from where this run of items started rather than from the
+				 * block's position in the document, so a second list further down
+				 * starts at one again.
+				 */
+				if (previous != Number) ordinal = 0;
+
+				for (const QString& part : line.split(QLatin1Char('\n')))
+					out.append(QStringLiteral("%1. ").arg(++ordinal) + part);
+				break;
+			}
+
 			case CodeBlock:
 			{
 				const QString fence(qMax(3, longest_backtick_run(line) + 1),
@@ -619,9 +731,11 @@ QString Qdc::RichText::toMarkdown(const QTextDocument& document)
 
 			case Paragraph:
 			default:
-				out.append(line);
+				out.append(protect_markers(line));
 				break;
 		}
+
+		previous = kind;
 	}
 
 	/*
@@ -638,7 +752,26 @@ QString Qdc::RichText::toPlainText(const QString& markdown)
 	QStringList out;
 
 	for (const Block& block : split_blocks(markdown, Mode::Plain, RenderColours()))
-		out.append(block.content);
+	{
+		/*
+		 * A list keeps its markers here, where a quote does not: without them the items
+		 * run together as unrelated lines, and this is what a screen reader is given.
+		 */
+		switch (block.kind)
+		{
+			case Bullet:
+				out.append(QStringLiteral("\u2022 ") + block.content);
+				break;
+
+			case Number:
+				out.append(QStringLiteral("%1. ").arg(block.ordinal) + block.content);
+				break;
+
+			default:
+				out.append(block.content);
+				break;
+		}
+	}
 
 	return out.join(QLatin1Char('\n'));
 }
@@ -706,6 +839,22 @@ QString Qdc::RichText::renderMarkdown(const QString& markdown,
 					"<span style=\"font-family:'%1'; color:%2\">%3</span>")
 					.arg(monospaceFamily(), options.colours.code.name(), content);
 				break;
+
+			case Bullet:
+			case Number:
+			{
+				/*
+				 * The marker is drawn as part of the line rather than with a QTextList,
+				 * because the whole message is one hanging indent and a list Qt owns
+				 * would indent against the block instead of the text column.
+				 */
+				const QString marker = block.kind == Bullet
+					? QStringLiteral("&#8226;")
+					: QStringLiteral("%1.").arg(block.ordinal);
+
+				content = QStringLiteral("%1&nbsp;%2").arg(marker, content);
+				break;
+			}
 
 			case Paragraph:
 			default:

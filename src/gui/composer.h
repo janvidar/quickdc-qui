@@ -138,6 +138,18 @@ private:
 	/** Turn the selected blocks into a quote or a code block, or back to prose. */
 	void toggleBlockKind(RichText::BlockKind kind);
 
+	/**
+	 * Turn the selected blocks into a bulleted or numbered list, or back to prose.
+	 *
+	 * Separate from toggleBlockKind() because a list is a QTextList as well as a kind:
+	 * the items have to look like items while they are being typed, and Qt draws the
+	 * markers and keeps the numbering only for a list it owns.
+	 */
+	void toggleList(RichText::BlockKind kind);
+
+	/** What sort of block the cursor is in. */
+	RichText::BlockKind blockKindAtCursor() const;
+
 	/** Ask for an address and turn the selection into a link to it. */
 	void insertLink();
 
@@ -168,6 +180,8 @@ private:
 	QToolButton* m_code;
 	QToolButton* m_quote;
 	QToolButton* m_codeBlock;
+	QToolButton* m_bullets;
+	QToolButton* m_numbers;
 	QToolButton* m_link;
 
 	/** Everything that applies formatting, so it can be enabled as a group. */

@@ -25,6 +25,8 @@ private slots:
 	void formattingIsDetectedAsMarkup();
 	void boldItalicAndCodeRoundTrip();
 	void quoteAndCodeBlockRoundTrip();
+	void listsRoundTripAndKeepTheirNumbers();
+	void proseThatOpensLikeAMarkerStaysProse();
 	void literalMarkersSurviveAFormattedMessage();
 	void codeSpansContainingBackticksSurvive();
 	void linksRoundTripAndAreScopedToKnownSchemes();
@@ -231,6 +233,97 @@ void TestRichText::quoteAndCodeBlockRoundTrip()
 
 	QCOMPARE(Qdc::RichText::toPlainText(markdown),
 	         QStringLiteral("as you said\nagreed\n  indented();"));
+}
+
+void TestRichText::listsRoundTripAndKeepTheirNumbers()
+{
+	QTextDocument document;
+
+	QTextCursor cursor(&document);
+
+	const auto item = [&cursor](Qdc::RichText::BlockKind kind, const QString& text,
+	                            bool first) {
+		if (!first) cursor.insertBlock();
+
+		QTextBlockFormat format = cursor.blockFormat();
+		format.setProperty(Qdc::RichText::BlockKindProperty, kind);
+		cursor.setBlockFormat(format);
+
+		cursor.insertText(text);
+	};
+
+	item(Qdc::RichText::Bullet, QStringLiteral("first"), true);
+	item(Qdc::RichText::Bullet, QStringLiteral("second"), false);
+
+	QCOMPARE(Qdc::RichText::toMarkdown(document),
+	         QStringLiteral("- first\n- second"));
+
+	QTextDocument numbered;
+	cursor = QTextCursor(&numbered);
+
+	item(Qdc::RichText::Number, QStringLiteral("one"), true);
+	item(Qdc::RichText::Number, QStringLiteral("two"), false);
+	item(Qdc::RichText::Paragraph, QStringLiteral("prose between"), false);
+	item(Qdc::RichText::Number, QStringLiteral("one again"), false);
+
+	/* A list further down starts at one again rather than counting on. */
+	QCOMPARE(Qdc::RichText::toMarkdown(numbered),
+	         QStringLiteral("1. one\n2. two\nprose between\n1. one again"));
+
+	const QString html = Qdc::RichText::renderMarkdown(
+		QStringLiteral("- first\n- second"), options());
+
+	/* A bullet per item, and both indented to the same column. */
+	QCOMPARE(html.count(QStringLiteral("&#8226;")), 2);
+
+	const QString ordered = Qdc::RichText::renderMarkdown(
+		QStringLiteral("3. three\n4. four"), options());
+
+	/*
+	 * The numbers as the sender wrote them: a list that arrived split across two
+	 * messages still reads in order.
+	 */
+	QVERIFY(ordered.contains(QStringLiteral("3.")));
+	QVERIFY(ordered.contains(QStringLiteral("4.")));
+
+	QCOMPARE(Qdc::RichText::toPlainText(QStringLiteral("- first\n- second")),
+	         QStringLiteral("\u2022 first\n\u2022 second"));
+
+	/* Markup inside an item is still markup. */
+	const QString emphasised = Qdc::RichText::renderMarkdown(
+		QStringLiteral("- **loud** item"), options());
+	QVERIFY(emphasised.contains(QStringLiteral("<b>loud</b>")));
+}
+
+void TestRichText::proseThatOpensLikeAMarkerStaysProse()
+{
+	QTextDocument document;
+
+	QTextCursor cursor(&document);
+	QTextCharFormat bold;
+	bold.setFontWeight(QFont::Bold);
+
+	/*
+	 * The message carries formatting, so it goes out as markdown - and every plain line
+	 * in it has to survive that. A line somebody began with a dash is a dash.
+	 */
+	cursor.insertText(QStringLiteral("- not a list"));
+	cursor.insertBlock();
+	cursor.insertText(QStringLiteral("1. not numbered"));
+	cursor.insertBlock();
+	cursor.insertText(QStringLiteral("> not a quote"));
+	cursor.insertBlock();
+	cursor.insertText(QStringLiteral("really"), bold);
+
+	const QString markdown = Qdc::RichText::toMarkdown(document);
+
+	QCOMPARE(markdown,
+	         QStringLiteral("\\- not a list\n\\1. not numbered\n"
+	                        "\\> not a quote\n**really**"));
+
+	/* And it comes back out the way it went in. */
+	QCOMPARE(Qdc::RichText::toPlainText(markdown),
+	         QStringLiteral("- not a list\n1. not numbered\n> not a quote\nreally"));
 }
 
 void TestRichText::literalMarkersSurviveAFormattedMessage()

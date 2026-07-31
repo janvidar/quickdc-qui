@@ -20,7 +20,9 @@
 #include <QApplication>
 #include <QDir>
 #include <QStyleOptionViewItem>
+#include <QTextBlock>
 #include <QTextEdit>
+#include <QTextList>
 #include <QToolButton>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -63,6 +65,7 @@ private slots:
 
 	void composerFlagsOnlyWhatItActuallyFormatted();
 	void composerSerializesEachConstructToMarkdown();
+	void composerWritesListsAsMarkdown();
 	void composerFlattensFormattingWhereItCannotBeSent();
 
 	void filelistModelExposesTheTree();
@@ -719,6 +722,62 @@ void TestHubs::composerSerializesEachConstructToMarkdown()
 	         QStringLiteral("```\ncmake --build .\n```"));
 }
 
+void TestHubs::composerWritesListsAsMarkdown()
+{
+	Qdc::Composer composer;
+	QSignalSpy sent(&composer, &Qdc::Composer::sendRequested);
+
+	QTextEdit* edit = composer.findChild<QTextEdit*>();
+	QVERIFY(edit);
+
+	QToolButton* bullets = formatButton(&composer, QStringLiteral("Bulleted list"));
+	QToolButton* numbers = formatButton(&composer, QStringLiteral("Numbered list"));
+	QVERIFY(bullets);
+	QVERIFY(numbers);
+
+	/*
+	 * Typed the way a person would: turn the list on, then write the items. Shift+Return
+	 * is a new block in the composer, because plain Return sends.
+	 */
+	bullets->click();
+	QTest::keyClicks(edit, QStringLiteral("bread"));
+	QTest::keyClick(edit, Qt::Key_Return, Qt::ShiftModifier);
+	QTest::keyClicks(edit, QStringLiteral("milk"));
+
+	/* The items are a real list in the box, so they look like items while typing. */
+	QVERIFY(edit->textCursor().block().textList());
+	QVERIFY(bullets->isChecked());
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 1);
+	QCOMPARE(sent.at(0).at(0).toString(), QStringLiteral("- bread\n- milk"));
+	QCOMPARE(sent.at(0).at(1).toBool(), true);
+
+	numbers->click();
+	QTest::keyClicks(edit, QStringLiteral("first"));
+	QTest::keyClick(edit, Qt::Key_Return, Qt::ShiftModifier);
+	QTest::keyClicks(edit, QStringLiteral("second"));
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 2);
+	QCOMPARE(sent.at(1).at(0).toString(), QStringLiteral("1. first\n2. second"));
+
+	/* Pressing the same control again takes the list off and leaves the words. */
+	QTest::keyClicks(edit, QStringLiteral("plain again"));
+	bullets->click();
+	QVERIFY(bullets->isChecked());
+	bullets->click();
+	QVERIFY(!bullets->isChecked());
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 3);
+	QCOMPARE(sent.at(2).at(0).toString(), QStringLiteral("plain again"));
+	QCOMPARE(sent.at(2).at(1).toBool(), false);
+}
+
 void TestHubs::composerFlattensFormattingWhereItCannotBeSent()
 {
 	Qdc::Composer composer;
@@ -1182,8 +1241,10 @@ void TestHubs::loopback()
 
 	const QString rich =
 		QStringLiteral("**really** *quite* important, run `make -j8` first\n"
-		               "> and read the [notes](https://example.org/notes)");
+		               "> and read the [notes](https://example.org/notes)\n"
+		               "1. first\n2. second\n- and a bullet");
 	const QString literal = QStringLiteral("plain text with *asterisks* kept");
+	const QString emoji = qEnvironmentVariable("QDC_LOOPBACK_EMOJI");
 
 	const QString direct = QStringLiteral("privately, **this** matters");
 
@@ -1196,6 +1257,7 @@ void TestHubs::loopback()
 
 		hub.sendChat(rich, true);
 		hub.sendChat(literal, false);
+		if (!emoji.isEmpty()) hub.sendChat(emoji, false);
 		hub.sendPrivateChat(idFor.value(other), direct, true);
 
 		QTest::qWait(3000);
@@ -1238,6 +1300,12 @@ void TestHubs::loopback()
 			++sawLiteral;
 			QVERIFY2(!message.richText,
 			         "an unflagged message arrived claiming to be markdown");
+		}
+
+		if (!emoji.isEmpty() && message.text == emoji)
+		{
+			qDebug().noquote() << "  emoji round trip ok, utf8 ="
+			                   << message.text.toUtf8().toHex(' ');
 		}
 
 		if (message.text == direct)

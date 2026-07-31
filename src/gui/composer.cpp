@@ -20,6 +20,7 @@
 #include <QScrollBar>
 #include <QStringListModel>
 #include <QTextBlock>
+#include <QTextList>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidgetAction>
@@ -277,6 +278,19 @@ void Qdc::ComposerEdit::keyPressEvent(QKeyEvent* event)
 		return;
 	}
 
+	/*
+	 * Shift+Return is the only way to get a new line here, so inside a list it has to
+	 * mean the next item. QTextEdit would otherwise insert a soft break, which leaves
+	 * two lines sharing one bullet.
+	 */
+	if (isReturn && textCursor().block().textList())
+	{
+		QTextCursor cursor = textCursor();
+		cursor.insertBlock();
+		setTextCursor(cursor);
+		return;
+	}
+
 	QTextEdit::keyPressEvent(event);
 
 	const QString prefix = mentionPrefix();
@@ -308,6 +322,8 @@ Qdc::Composer::Composer(QWidget* parent)
 	, m_code(makeFormatButton(tr("< >"), tr("Code"), false, false, true))
 	, m_quote(makeFormatButton(tr("❝"), tr("Quote"), false, false, false))
 	, m_codeBlock(makeFormatButton(tr("≣"), tr("Code block"), false, false, true))
+	, m_bullets(makeFormatButton(tr("•"), tr("Bulleted list"), false, false, false))
+	, m_numbers(makeFormatButton(tr("1."), tr("Numbered list"), false, false, false))
 	, m_link(makeFormatButton(tr("🔗"), tr("Link"), false, false, false))
 {
 	m_edit->setPlaceholderText(tr("Write a message"));
@@ -316,7 +332,8 @@ Qdc::Composer::Composer(QWidget* parent)
 	bar->setContentsMargins(0, 0, 0, 0);
 	bar->setSpacing(2);
 
-	m_formatButtons = {m_bold, m_italic, m_code, m_quote, m_codeBlock, m_link};
+	m_formatButtons = {m_bold, m_italic, m_code, m_quote, m_codeBlock,
+	                   m_bullets, m_numbers, m_link};
 
 	/*
 	 * Checkable, because each one reports whether its formatting is in force where the
@@ -333,6 +350,12 @@ Qdc::Composer::Composer(QWidget* parent)
 	});
 	connect(m_codeBlock, &QToolButton::clicked, this, [this] {
 		toggleBlockKind(RichText::CodeBlock);
+	});
+	connect(m_bullets, &QToolButton::clicked, this, [this] {
+		toggleList(RichText::Bullet);
+	});
+	connect(m_numbers, &QToolButton::clicked, this, [this] {
+		toggleList(RichText::Number);
 	});
 	connect(m_link, &QToolButton::clicked, this, &Composer::insertLink);
 
@@ -588,6 +611,89 @@ void Qdc::Composer::toggleBlockKind(RichText::BlockKind kind)
 	refreshFormatState();
 }
 
+Qdc::RichText::BlockKind Qdc::Composer::blockKindAtCursor() const
+{
+	const QTextBlock block = m_edit->textCursor().block();
+
+	const QVariant kind = block.blockFormat().property(RichText::BlockKindProperty);
+	if (kind.isValid()) return static_cast<RichText::BlockKind>(kind.toInt());
+
+	if (const QTextList* list = block.textList())
+	{
+		return list->format().style() == QTextListFormat::ListDecimal
+			? RichText::Number : RichText::Bullet;
+	}
+
+	return RichText::Paragraph;
+}
+
+void Qdc::Composer::toggleList(RichText::BlockKind kind)
+{
+	QTextCursor cursor = m_edit->textCursor();
+
+	const int from = cursor.selectionStart();
+	const int to = cursor.selectionEnd();
+
+	const bool lifting = blockKindAtCursor() == kind;
+
+	cursor.beginEditBlock();
+	cursor.setPosition(from);
+
+	QTextList* list = nullptr;
+
+	while (true)
+	{
+		const QTextBlock block = cursor.block();
+
+		if (lifting)
+		{
+			if (QTextList* owner = block.textList()) owner->remove(block);
+
+			QTextBlockFormat format = cursor.blockFormat();
+			format.clearProperty(RichText::BlockKindProperty);
+			format.setIndent(0);
+			format.setLeftMargin(0);
+			cursor.setBlockFormat(format);
+		}
+		else
+		{
+			/*
+			 * One list for the whole run, so Qt numbers the items against each other
+			 * rather than restarting at every block.
+			 */
+			if (!list)
+			{
+				QTextListFormat listFormat;
+				listFormat.setStyle(kind == RichText::Number
+					? QTextListFormat::ListDecimal : QTextListFormat::ListDisc);
+				listFormat.setIndent(1);
+
+				list = cursor.createList(listFormat);
+			}
+			else
+			{
+				list->add(block);
+			}
+
+			/*
+			 * Merged rather than set: the block format is where list membership is
+			 * recorded, and replacing it would take the block out of the list again.
+			 */
+			QTextBlockFormat mark;
+			mark.setProperty(RichText::BlockKindProperty, kind);
+			cursor.mergeBlockFormat(mark);
+		}
+
+		if (cursor.block().position() + cursor.block().length() > to) break;
+		if (!cursor.movePosition(QTextCursor::NextBlock)) break;
+	}
+
+	cursor.endEditBlock();
+
+	m_edit->setFocus(Qt::OtherFocusReason);
+	refreshFormatState();
+}
+
 void Qdc::Composer::insertLink()
 {
 	QTextCursor cursor = m_edit->textCursor();
@@ -650,6 +756,10 @@ void Qdc::Composer::flattenDocument()
 
 	for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
 	{
+		/* Out of the list first, so no QTextList is left holding a block that is no
+		   longer an item of it. */
+		if (QTextList* list = block.textList()) list->remove(block);
+
 		QTextCursor at(block);
 		at.setBlockFormat(QTextBlockFormat());
 	}
@@ -662,11 +772,7 @@ void Qdc::Composer::flattenDocument()
 void Qdc::Composer::refreshFormatState()
 {
 	const QTextCharFormat format = m_edit->currentCharFormat();
-	const QTextBlockFormat block = m_edit->textCursor().blockFormat();
-
-	const QVariant kind = block.property(RichText::BlockKindProperty);
-	const RichText::BlockKind current = kind.isValid()
-		? static_cast<RichText::BlockKind>(kind.toInt()) : RichText::Paragraph;
+	const RichText::BlockKind current = blockKindAtCursor();
 
 	for (QToolButton* button : m_formatButtons)
 	{
@@ -679,6 +785,8 @@ void Qdc::Composer::refreshFormatState()
 		else if (button == m_quote) button->setChecked(current == RichText::Quote);
 		else if (button == m_codeBlock)
 			button->setChecked(current == RichText::CodeBlock);
+		else if (button == m_bullets) button->setChecked(current == RichText::Bullet);
+		else if (button == m_numbers) button->setChecked(current == RichText::Number);
 	}
 }
 

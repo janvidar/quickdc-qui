@@ -32,9 +32,11 @@ namespace Qdc {
  *     ```                 > quote             [text](url)
  *     block               > continues         bare://url
  *     ```
+ *     - bullet            1. numbered
+ *     - another           2. and on
  *
- * No headings, lists, tables or images. Nothing that nests except emphasis inside a
- * quote. A remote user cannot introduce anything outside this set.
+ * No headings, tables or images, and no nesting except emphasis inside a quote or a list
+ * item. A remote user cannot introduce anything outside this set.
  */
 namespace RichText {
 
@@ -69,7 +71,13 @@ QString monospaceFamily();
 enum BlockKind {
 	Paragraph = 0,
 	Quote,
-	CodeBlock
+	CodeBlock,
+
+	/** One item of a bulleted list; each item is a block of its own. */
+	Bullet,
+
+	/** One item of a numbered list. The number is not stored: it is the position. */
+	Number
 };
 
 /**
