@@ -209,6 +209,19 @@ private:
 	/** The largest picture that may be fetched without asking, in bytes. */
 	quint64 mediaSizeLimit() const;
 
+	/**
+	 * Read the settings that every arriving message would otherwise consult.
+	 *
+	 * Held in hand because a configuration read is a blocking trip to the core thread:
+	 * asking on the message path stopped the interface for as long as the core's current
+	 * turn took, once per message. Called when something writes the settings, not when
+	 * they are wanted.
+	 */
+	void reloadMediaPolicy();
+
+	/** Remember what one hub has decided for itself, if anything. */
+	void loadHubMediaPolicy(const QString& hubUrl);
+
 	void showPane(ChatPane* pane);
 
 	/** Sum every pane's unread count into the rail badge. */
@@ -236,6 +249,14 @@ private:
 	/** Hashes and offers a file somebody attached to a message. Made here, because
 	    attaching is not a per hub thing even though it is asked for in a conversation. */
 	MediaBridge* m_media = nullptr;
+
+	/* The settings an arriving message needs, kept in hand; see reloadMediaPolicy(). */
+	bool m_fetchMedia = false;
+	quint64 m_mediaLimit = 0;
+	QString m_downloadDir;
+
+	/** Hubs that have decided for themselves, by address. Absent means no opinion. */
+	QHash<QString, bool> m_hubFetchMedia;
 
 	QSplitter* m_split;
 	QTreeWidget* m_tree;

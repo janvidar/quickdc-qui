@@ -92,6 +92,17 @@ public:
 	 */
 	void notifyChanged();
 
+signals:
+	/**
+	 * A store was written.
+	 *
+	 * For anything that keeps a setting in hand rather than asking for it again. Every
+	 * read here is a blocking trip to the core thread, so a setting consulted on a busy
+	 * path - as each arriving message consults whether pictures are fetched - has to be
+	 * held in memory and refreshed when this says it changed.
+	 */
+	void saved(Qdc::ConfigStore store);
+
 private:
 	CoreThread* m_thread;
 };

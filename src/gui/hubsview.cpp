@@ -121,6 +121,18 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 
 	connect(m_connect, &QPushButton::clicked, this, &HubsView::promptForHub);
 
+	reloadMediaPolicy();
+
+	/*
+	 * Either store: the general settings live in one and what a single hub decided lives
+	 * in the other, and reloadMediaPolicy() picks up both.
+	 */
+	if (m_config)
+	{
+		connect(m_config, &ConfigBridge::saved,
+		        this, [this](ConfigStore) { reloadMediaPolicy(); });
+	}
+
 	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(m_tree, &QTreeWidget::customContextMenuRequested,
 	        this, &HubsView::showHubMenu);
@@ -245,6 +257,8 @@ bool Qdc::HubsView::openHub(const QString& url)
 
 	m_entries.append(entry);
 	adopt(entry->pane, entry->item);
+
+	loadHubMediaPolicy(bridge->url());
 
 	if (m_favourites) entry->pane->setFavourite(m_favourites->contains(bridge->url()));
 
@@ -778,30 +792,49 @@ void Qdc::HubsView::refreshBadge()
 
 bool Qdc::HubsView::fetchesMediaOn(const QString& hubUrl) const
 {
-	if (!m_config) return false;
-
-	/*
-	 * A hub that has been decided about individually answers for itself; anything else
-	 * follows the general setting. The per hub value lives in the session store, which
-	 * already keeps one group per hub address.
-	 */
-	if (!hubUrl.isEmpty()
-	    && m_config->contains(ConfigStore::Session, hubUrl, MEDIA_FETCH))
-	{
-		return m_config->getBool(ConfigStore::Session, hubUrl, MEDIA_FETCH);
-	}
-
-	return m_config->getBool(ConfigStore::Application, CHAT_MEDIA, MEDIA_FETCH);
+	/* A hub that has decided for itself answers for itself; the rest follow the general
+	   setting. Both are already in hand - see reloadMediaPolicy(). */
+	return m_hubFetchMedia.value(hubUrl, m_fetchMedia);
 }
 
 quint64 Qdc::HubsView::mediaSizeLimit() const
 {
-	if (!m_config) return 0;
+	return m_mediaLimit;
+}
 
-	const int configured = m_config->getNumber(ConfigStore::Application, CHAT_MEDIA,
-	                                          MEDIA_LIMIT, MEDIA_LIMIT_DEFAULT);
+void Qdc::HubsView::reloadMediaPolicy()
+{
+	if (!m_config) return;
 
-	return static_cast<quint64>(qMax(0, configured));
+	m_fetchMedia = m_config->getBool(ConfigStore::Application, CHAT_MEDIA, MEDIA_FETCH);
+
+	const int limit = m_config->getNumber(ConfigStore::Application, CHAT_MEDIA,
+	                                     MEDIA_LIMIT, MEDIA_LIMIT_DEFAULT);
+	m_mediaLimit = static_cast<quint64>(qMax(0, limit));
+
+	const QString configured = m_config->getString(ConfigStore::Application,
+		QStringLiteral("Downloads"), QStringLiteral("Directory")).trimmed();
+
+	m_downloadDir = configured.isEmpty() ? QStringLiteral("~/.quickdc/downloads")
+	                                     : configured;
+
+	/* What each open hub decided, so a message needs no reading at all. */
+	for (const Entry* entry : m_entries)
+		if (entry->bridge) loadHubMediaPolicy(entry->bridge->url());
+}
+
+void Qdc::HubsView::loadHubMediaPolicy(const QString& hubUrl)
+{
+	if (!m_config || hubUrl.isEmpty()) return;
+
+	if (!m_config->contains(ConfigStore::Session, hubUrl, MEDIA_FETCH))
+	{
+		m_hubFetchMedia.remove(hubUrl);
+		return;
+	}
+
+	m_hubFetchMedia.insert(hubUrl,
+		m_config->getBool(ConfigStore::Session, hubUrl, MEDIA_FETCH));
 }
 
 void Qdc::HubsView::showHubMenu(const QPoint& at)
@@ -855,6 +888,7 @@ void Qdc::HubsView::showHubMenu(const QPoint& at)
 		return;
 
 	m_config->save(ConfigStore::Session);
+	loadHubMediaPolicy(hubUrl);
 }
 
 void Qdc::HubsView::fetchMediaIn(const ChatMessage& message)
@@ -918,14 +952,9 @@ QString Qdc::HubsView::localFileFor(const QString& tth) const
 
 QString Qdc::HubsView::downloadDirectory() const
 {
-	/* The core's own default, from QUICKDC_DOWNLOAD_DIR. */
-	const QString fallback = QStringLiteral("~/.quickdc/downloads");
-	if (!m_config) return fallback;
-
-	const QString configured = m_config->getString(ConfigStore::Application,
-		QStringLiteral("Downloads"), QStringLiteral("Directory")).trimmed();
-
-	return configured.isEmpty() ? fallback : configured;
+	/* Read when the settings change rather than per download; see reloadMediaPolicy(). */
+	return m_downloadDir.isEmpty() ? QStringLiteral("~/.quickdc/downloads")
+	                               : m_downloadDir;
 }
 
 void Qdc::HubsView::promptForHub()

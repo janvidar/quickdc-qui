@@ -324,7 +324,13 @@ void Qdc::TransferBridge::setPriority(const QString& filename, Priority priority
 
 	const QByteArray name = filename.toUtf8();
 
-	m_thread->invoke([this, &name, priority] {
+	/*
+	 * Posted, not waited for. Nothing here reads an answer, and a click that waited
+	 * would freeze the window for as long as the core's current turn takes.
+	 *
+	 * The captures are by value because the job outlives this call.
+	 */
+	m_thread->post([this, name, priority] {
 		QuickDC::Core* core = m_thread->core();
 		if (!core || !core->queue) return;
 
@@ -345,7 +351,7 @@ void Qdc::TransferBridge::removeFromQueue(const QString& filename, bool deletePa
 
 	const QByteArray name = filename.toUtf8();
 
-	m_thread->invoke([this, &name, deletePartial] {
+	m_thread->post([this, name, deletePartial] {
 		QuickDC::Core* core = m_thread->core();
 		if (!core || !core->queue) return;
 
@@ -374,11 +380,18 @@ void Qdc::TransferBridge::enqueue(const QString& filename, const QString& tth,
 	const QByteArray name = filename.toUtf8();
 	const QByteArray hash = tth.toUtf8();
 
-	m_thread->invoke([this, &name, &hash, size] {
+	/*
+	 * Posted for the same reason, and this one matters most: a picture arriving in chat
+	 * is queued from the message path, so waiting here stopped the interface once per
+	 * message on a hub where people send pictures.
+	 */
+	m_thread->post([this, name, hash, size] {
 		QuickDC::Core* core = m_thread->core();
 		if (!core || !core->queue) return;
 
 		core->queue->add(name.constData(),
 		                 hash.isEmpty() ? nullptr : hash.constData(), size);
+
+		/* The queue's own event reports the new entry, which refreshes the figures. */
 	});
 }

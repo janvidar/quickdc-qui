@@ -195,6 +195,8 @@ bool Qdc::ConfigBridge::save(ConfigStore store)
 		if (preferences) written = preferences->write();
 	});
 
+	if (written) emit saved(store);
+
 	return written;
 }
 

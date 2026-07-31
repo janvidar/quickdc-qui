@@ -37,6 +37,7 @@
 #include <QSignalSpy>
 #include <QTimer>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTest>
 
 /**
@@ -96,6 +97,7 @@ private slots:
 	void formattingIsOnlyOfferedWhereItCanBeSent();
 	void aClickedHubLinkOpensTheHubItself();
 	void picturesAreFetchedOnlyWhereThatWasAskedFor();
+	void anArrivingMessageDoesNotWaitForTheCore();
 	void theAttachButtonAsksForAFile();
 	void everyControlLooksDisabledWhenItIs();
 	void anEchoOfOurOwnPrivateMessageOpensTheirConversation();
@@ -1658,6 +1660,7 @@ void TestHubs::picturesAreFetchedOnlyWhereThatWasAskedFor()
 	 */
 	config.setBool(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
 	               QStringLiteral("Fetch automatically"), false);
+	config.save(Qdc::ConfigStore::Application);
 
 	const int before = queued();
 	sendPicture(1024);
@@ -1668,6 +1671,7 @@ void TestHubs::picturesAreFetchedOnlyWhereThatWasAskedFor()
 	               QStringLiteral("Fetch automatically"), true);
 	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
 	                 QStringLiteral("Maximum size"), 2048);
+	config.save(Qdc::ConfigStore::Application);
 
 	sendPicture(1024);
 	QCOMPARE(queued(), before + 1);
@@ -1695,6 +1699,7 @@ void TestHubs::picturesAreFetchedOnlyWhereThatWasAskedFor()
 	/* This hub says no, whatever the general setting is. */
 	config.setBool(Qdc::ConfigStore::Session, hubs.currentPane()->hub()->url(),
 	               QStringLiteral("Fetch automatically"), false);
+	config.save(Qdc::ConfigStore::Session);
 
 	Qdc::RichText::Attachment second;
 	second.tth = QStringLiteral("F6ED42THAKQCOCNHJOUCMOEOX4GOCT25D5WM7SY");
@@ -1714,6 +1719,7 @@ void TestHubs::picturesAreFetchedOnlyWhereThatWasAskedFor()
 	/* And a file that was offered rather than shown is never fetched by itself. */
 	config.remove(Qdc::ConfigStore::Session, hubs.currentPane()->hub()->url(),
 	              QStringLiteral("Fetch automatically"));
+	config.save(Qdc::ConfigStore::Session);
 
 	Qdc::ChatMessage offered = refused;
 	offered.text = QStringLiteral("[another.png](%1)")
@@ -1721,6 +1727,51 @@ void TestHubs::picturesAreFetchedOnlyWhereThatWasAskedFor()
 
 	emit hubs.currentPane()->hub()->chatReceived(offered);
 	QCOMPARE(queued(), before + 1);
+}
+
+void TestHubs::anArrivingMessageDoesNotWaitForTheCore()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::TransferBridge transfers(m_thread, this);
+
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, &transfers, &config);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	Qdc::RichText::Attachment picture;
+	picture.tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
+	picture.name = QStringLiteral("photo.png");
+	picture.size = 1024;
+
+	Qdc::ChatMessage message;
+	message.hubUrl = pane->hub()->url();
+	message.from = user(QStringLiteral("alice"));
+	message.received = QDateTime::currentDateTime();
+	message.richText = true;
+	message.text = QStringLiteral("look: ![a photo](%1)")
+		.arg(Qdc::RichText::writeMagnet(picture));
+
+	/*
+	 * The core thread is held, as a transfer or a finished hash holds it. Delivering a
+	 * message must not wait for it: whether pictures are fetched here, how big they may
+	 * be and where downloads go are all settings, and reading a setting is a blocking
+	 * trip to that thread. Asked once per message, they stopped the interface for as
+	 * long as the core's turn took - on a busy hub, continuously.
+	 */
+	m_thread->post([] { QThread::msleep(1500); });
+
+	QElapsedTimer timer;
+	timer.start();
+
+	emit pane->hub()->chatReceived(message);
+
+	const qint64 spent = timer.elapsed();
+
+	QVERIFY2(spent < 100,
+	         qPrintable(QStringLiteral("delivering a message took %1 ms while the core "
+	                                   "was busy").arg(spent)));
 }
 
 void TestHubs::formattingIsOnlyOfferedWhereItCanBeSent()
