@@ -666,6 +666,24 @@ void TestHubs::composerFlagsOnlyWhatItActuallyFormatted()
 	QCOMPARE(sent.count(), 2);
 	QCOMPARE(sent.at(1).at(0).toString(), QStringLiteral("**really**"));
 	QCOMPARE(sent.at(1).at(1).toBool(), true);
+
+	/* Both at once on one word, which is one run carrying both formats. */
+	QToolButton* italic = formatButton(&composer, QStringLiteral("Italic"));
+	QVERIFY(italic);
+
+	QTest::keyClicks(edit, QStringLiteral("very"));
+	edit->selectAll();
+	bold->click();
+	edit->selectAll();
+	italic->click();
+
+	QVERIFY(bold->isChecked());
+	QVERIFY(italic->isChecked());
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 3);
+	QCOMPARE(sent.at(2).at(0).toString(), QStringLiteral("***very***"));
 }
 
 void TestHubs::composerSerializesEachConstructToMarkdown()

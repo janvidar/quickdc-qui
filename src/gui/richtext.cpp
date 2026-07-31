@@ -331,25 +331,69 @@ QString scan_inline(const QString& text, Mode mode,
 
 		if (c == QLatin1Char('*'))
 		{
-			const bool strong = (i + 1 < n && text.at(i + 1) == QLatin1Char('*'));
-			const QString marker = strong ? QStringLiteral("**")
-			                              : QStringLiteral("*");
-			const int end = text.indexOf(marker, i + marker.size());
+			/*
+			 * Counted rather than tested for one or two, because bold inside italic is
+			 * three of them: a scanner that only knew "**" read the first two of "***"
+			 * as the whole marker and then matched a closing pair inside the word.
+			 */
+			int run = 0;
+			while (i + run < n && text.at(i + run) == QLatin1Char('*')) ++run;
 
-			if (end > 0 && end > i + marker.size())
+			/* One marker is italic, two bold, three both. More than three is somebody
+			   leaning on the key, and is taken as the strongest we have. */
+			const int strength = qMin(run, 3);
+			const int from = i + run;
+
+			/*
+			 * Emphasis cannot open on whitespace. Without this a lone asterisk - "2 * 3"
+			 * or a dash-like line - pairs up with the next real one and italicises
+			 * everything in between.
+			 */
+			const bool opens = from < n && !text.at(from).isSpace();
+
+			int closing = -1;
+			int closeLength = 0;
+
+			for (int at = from; opens && at < n; )
 			{
-				const QString body =
-					text.mid(i + marker.size(), end - i - marker.size());
+				/* An escaped marker is somebody's asterisk, not the end of emphasis. */
+				if (text.at(at) == QLatin1Char('\\')) { at += 2; continue; }
+
+				if (text.at(at) != QLatin1Char('*')) { ++at; continue; }
+
+				int length = 0;
+				while (at + length < n && text.at(at + length) == QLatin1Char('*'))
+					++length;
+
+				/* Nor can it close on whitespace, for the same reason. */
+				if (length >= strength && at > from && !text.at(at - 1).isSpace())
+				{
+					closing = at;
+					closeLength = qMin(length, run);
+					break;
+				}
+
+				at += length;
+			}
+
+			if (closing > from)
+			{
+				const QString body = text.mid(from, closing - from);
 
 				flush();
 
 				const QString inner = scan_inline(body, mode, colours);
-				out += (mode == Mode::Plain)
-					? inner
-					: (strong ? QStringLiteral("<b>%1</b>").arg(inner)
-					          : QStringLiteral("<i>%1</i>").arg(inner));
 
-				i = end + marker.size();
+				if (mode == Mode::Plain)
+					out += inner;
+				else if (strength >= 3)
+					out += QStringLiteral("<b><i>%1</i></b>").arg(inner);
+				else if (strength == 2)
+					out += QStringLiteral("<b>%1</b>").arg(inner);
+				else
+					out += QStringLiteral("<i>%1</i>").arg(inner);
+
+				i = closing + closeLength;
 				continue;
 			}
 		}
@@ -397,6 +441,33 @@ QString style_body(const QString& content, const Qdc::RichText::RenderOptions& o
 	if (options.italic) out = QStringLiteral("<i>%1</i>").arg(out);
 
 	return out;
+}
+
+/**
+ * Put emphasis markers around a run, leaving any whitespace at its edges outside them.
+ *
+ * Markdown cannot emphasise a leading or trailing space - a marker beside whitespace is
+ * not read as one - so "* hi *" would arrive as literal asterisks. Moving them inwards
+ * keeps the run's own spacing and still says what was meant.
+ */
+QString wrap_emphasis(const QString& text, const QString& marker)
+{
+	int lead = 0;
+	while (lead < text.size() && text.at(lead).isSpace()) ++lead;
+
+	/* Nothing but whitespace: there is no word here to emphasise. */
+	if (lead == text.size()) return text;
+
+	int trail = 0;
+	while (trail < text.size() - lead
+	       && text.at(text.size() - 1 - trail).isSpace())
+	{
+		++trail;
+	}
+
+	const QString core = text.mid(lead, text.size() - lead - trail);
+
+	return text.left(lead) + marker + core + marker + text.right(trail);
 }
 
 /**
@@ -669,8 +740,8 @@ QString Qdc::RichText::toMarkdown(const QTextDocument& document)
 
 			if (!is_code(format))
 			{
-				if (format.fontItalic()) run = QStringLiteral("*%1*").arg(run);
-				if (is_bold(format)) run = QStringLiteral("**%1**").arg(run);
+				if (format.fontItalic()) run = wrap_emphasis(run, QStringLiteral("*"));
+				if (is_bold(format)) run = wrap_emphasis(run, QStringLiteral("**"));
 			}
 
 			/*

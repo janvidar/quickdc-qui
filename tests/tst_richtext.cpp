@@ -24,6 +24,7 @@ private slots:
 	void plainTextCarriesNoMarkup();
 	void formattingIsDetectedAsMarkup();
 	void boldItalicAndCodeRoundTrip();
+	void boldAndItalicTogetherRoundTrip();
 	void quoteAndCodeBlockRoundTrip();
 	void listsRoundTripAndKeepTheirNumbers();
 	void proseThatOpensLikeAMarkerStaysProse();
@@ -196,6 +197,90 @@ void TestRichText::boldItalicAndCodeRoundTrip()
 	/* And the markers themselves are gone from what is displayed. */
 	QCOMPARE(Qdc::RichText::toPlainText(markdown),
 	         QStringLiteral("found it in Music as ls -l"));
+}
+
+void TestRichText::boldAndItalicTogetherRoundTrip()
+{
+	QTextDocument document;
+
+	QTextCharFormat both;
+	both.setFontWeight(QFont::Bold);
+	both.setFontItalic(true);
+
+	QTextCharFormat plain;
+	QTextCharFormat bold;
+	bold.setFontWeight(QFont::Bold);
+
+	appendRun(document, QStringLiteral("this is "), plain);
+	appendRun(document, QStringLiteral("very"), both);
+	appendRun(document, QStringLiteral(" important"), plain);
+
+	const QString markdown = Qdc::RichText::toMarkdown(document);
+	QCOMPARE(markdown, QStringLiteral("this is ***very*** important"));
+
+	const QString html = Qdc::RichText::renderMarkdown(markdown, options());
+
+	/*
+	 * Both, and with nothing left over. A scanner that took "***" for "**" used to emit
+	 * the third asterisk as text and lose the italic with it.
+	 */
+	QVERIFY2(html.contains(QStringLiteral("<b><i>very</i></b>")), qPrintable(html));
+	QVERIFY2(!html.contains(QStringLiteral("*")), qPrintable(html));
+
+	QCOMPARE(Qdc::RichText::toPlainText(markdown),
+	         QStringLiteral("this is very important"));
+
+	/* Bold next to bold-and-italic, which is five markers in a row on the wire. */
+	QTextDocument run;
+	appendRun(run, QStringLiteral("loud"), bold);
+	appendRun(run, QStringLiteral("louder"), both);
+
+	const QString together = Qdc::RichText::toMarkdown(run);
+	QCOMPARE(together, QStringLiteral("**loud*****louder***"));
+
+	const QString rendered = Qdc::RichText::renderMarkdown(together, options());
+	QVERIFY2(rendered.contains(QStringLiteral("<b>loud</b>")), qPrintable(rendered));
+	QVERIFY2(rendered.contains(QStringLiteral("<b><i>louder</i></b>")),
+	         qPrintable(rendered));
+
+	/* And a sender who nested them by hand rather than as one run. */
+	const QString nested = Qdc::RichText::renderMarkdown(
+		QStringLiteral("**all *of* it**"), options());
+
+	QVERIFY2(nested.contains(QStringLiteral("<i>of</i>")), qPrintable(nested));
+	QVERIFY2(nested.contains(QStringLiteral("<b>all ")), qPrintable(nested));
+
+	/*
+	 * A marker with whitespace after it opens nothing, so arithmetic and a stray
+	 * asterisk stay as they were typed rather than swallowing the rest of the line.
+	 */
+	const QString lone = Qdc::RichText::renderMarkdown(
+		QStringLiteral("2 * 3 and *this* only"), options());
+
+	QVERIFY2(lone.contains(QStringLiteral("2 * 3 and <i>this</i> only")),
+	         qPrintable(lone));
+
+	/* Leaning on the key is still emphasis, with nothing spilled either side. */
+	const QString heavy = Qdc::RichText::renderMarkdown(
+		QStringLiteral("****four****"), options());
+
+	QVERIFY2(heavy.contains(QStringLiteral("<b><i>four</i></b>")), qPrintable(heavy));
+	QVERIFY2(!heavy.contains(QStringLiteral("*")), qPrintable(heavy));
+
+	/*
+	 * Emphasis on a run that has spaces at its edges: the markers move inside them,
+	 * because markdown beside whitespace is not a marker at all.
+	 */
+	QTextDocument padded;
+	appendRun(padded, QStringLiteral("keep "), plain);
+	appendRun(padded, QStringLiteral(" spaced "), both);
+	appendRun(padded, QStringLiteral("out"), plain);
+
+	const QString spaced = Qdc::RichText::toMarkdown(padded);
+	QCOMPARE(spaced, QStringLiteral("keep  ***spaced*** out"));
+
+	QVERIFY(Qdc::RichText::renderMarkdown(spaced, options())
+	        .contains(QStringLiteral("<b><i>spaced</i></b>")));
 }
 
 void TestRichText::quoteAndCodeBlockRoundTrip()
