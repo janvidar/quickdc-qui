@@ -18,6 +18,7 @@
 #include <QPainter>
 #include <QBuffer>
 #include <QImage>
+#include <QFileInfo>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QPushButton>
@@ -199,6 +200,30 @@ void Qdc::ComposerEdit::insertFromMimeData(const QMimeData* source)
 		return;
 	}
 
+	/*
+	 * Files, whether dropped in or pasted. What arrives is a name, and a name is not
+	 * what a message can carry - so the files themselves are offered, exactly as if they
+	 * had been chosen from the button. An address that is not a file stays text.
+	 */
+	if (source->hasUrls())
+	{
+		QStringList files;
+
+		for (const QUrl& url : source->urls())
+		{
+			if (!url.isLocalFile()) continue;
+
+			const QString path = url.toLocalFile();
+			if (QFileInfo(path).isFile()) files.append(path);
+		}
+
+		if (!files.isEmpty())
+		{
+			emit filesDropped(files);
+			return;
+		}
+	}
+
 	if (source->hasImage())
 	{
 		const QImage image = qvariant_cast<QImage>(source->imageData());
@@ -281,6 +306,25 @@ void Qdc::ComposerEdit::insertFromMimeData(const QMimeData* source)
 
 	out.endEditBlock();
 	setTextCursor(out);
+}
+
+bool Qdc::ComposerEdit::canInsertFromMimeData(const QMimeData* source) const
+{
+	if (!source) return false;
+
+	/*
+	 * Said here as well, or a drag carrying only a file is refused before it lands:
+	 * QTextEdit judges a drop by whether it could insert text from it.
+	 */
+	if (source->hasImage()) return true;
+
+	if (source->hasUrls())
+	{
+		for (const QUrl& url : source->urls())
+			if (url.isLocalFile()) return true;
+	}
+
+	return QTextEdit::canInsertFromMimeData(source);
 }
 
 QString Qdc::ComposerEdit::mentionPrefix() const
@@ -467,6 +511,11 @@ Qdc::Composer::Composer(QWidget* parent)
 	connect(m_edit, &ComposerEdit::imagePasted, this,
 	        [this](const QByteArray& data, const QString& suffix) {
 		if (m_richTextEnabled) emit imagePasted(data, suffix);
+	});
+
+	connect(m_edit, &ComposerEdit::filesDropped, this,
+	        [this](const QStringList& paths) {
+		if (m_richTextEnabled) emit filesDropped(paths);
 	});
 
 	connect(m_edit, &QTextEdit::cursorPositionChanged,

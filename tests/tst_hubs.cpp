@@ -88,6 +88,7 @@ private slots:
 	void aPictureIsSentAsMediaRatherThanAsAFile();
 	void aPastedPictureIsOfferedLikeAChosenFile();
 	void aPastedPictureIsWrittenDownWhereItCanBeServed();
+	void aDroppedFileIsOfferedRatherThanNamed();
 	void composerFlattensFormattingWhereItCannotBeSent();
 
 	void filelistModelExposesTheTree();
@@ -1194,6 +1195,59 @@ void TestHubs::aPastedPictureIsWrittenDownWhereItCanBeServed()
 	QVERIFY(kept.open(QIODevice::ReadOnly));
 	QCOMPARE(kept.readAll(), png);
 	kept.close();
+}
+
+void TestHubs::aDroppedFileIsOfferedRatherThanNamed()
+{
+	if (QGuiApplication::platformName() != QLatin1String("offscreen"))
+		QSKIP("this uses the clipboard, so it runs only on the offscreen platform");
+
+	/* Two real files, because a drop carries what is there rather than a name. */
+	const QString picture = m_dir.path() + QStringLiteral("/dropped.png");
+	const QString document = m_dir.path() + QStringLiteral("/dropped.pdf");
+
+	QImage made(12, 8, QImage::Format_RGB32);
+	made.fill(Qt::darkYellow);
+	QVERIFY(made.save(picture));
+
+	QFile pdf(document);
+	QVERIFY(pdf.open(QIODevice::WriteOnly));
+	pdf.write("%PDF-1.4 not really");
+	pdf.close();
+
+	Qdc::Composer composer;
+	composer.setRichTextEnabled(true);
+	composer.setSendable(true);
+
+	QSignalSpy dropped(&composer, &Qdc::Composer::filesDropped);
+
+	QTextEdit* edit = composer.findChild<QTextEdit*>();
+	QVERIFY(edit);
+
+	QMimeData* files = new QMimeData;
+	files->setUrls({QUrl::fromLocalFile(picture), QUrl::fromLocalFile(document)});
+	QGuiApplication::clipboard()->setMimeData(files);
+
+	QVERIFY2(edit->canPaste(), "a drag carrying only files would be refused");
+
+	edit->paste();
+
+	QCOMPARE(dropped.count(), 1);
+	QCOMPARE(dropped.at(0).at(0).toStringList(), QStringList({picture, document}));
+
+	/* And the names were not typed into the box, which is what used to happen. */
+	QCOMPARE(edit->toPlainText(), QString());
+
+	/* An address that is not a file is an address, and still goes in as text. */
+	QMimeData* link = new QMimeData;
+	link->setUrls({QUrl(QStringLiteral("https://example.org/page"))});
+	link->setText(QStringLiteral("https://example.org/page"));
+	QGuiApplication::clipboard()->setMimeData(link);
+
+	edit->paste();
+
+	QCOMPARE(dropped.count(), 1);
+	QCOMPARE(edit->toPlainText(), QStringLiteral("https://example.org/page"));
 }
 
 void TestHubs::composerFlattensFormattingWhereItCannotBeSent()

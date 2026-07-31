@@ -567,6 +567,10 @@ void Qdc::HubsView::adopt(ChatPane* pane, QTreeWidgetItem* item)
 		offerPastedImage(pane, data, suffix);
 	});
 
+	connect(pane, &ChatPane::filesDropped, this, [this, pane](const QStringList& paths) {
+		offerDroppedFiles(pane, paths);
+	});
+
 	/*
 	 * A picture in a message is drawn only if this client already has the file, which is
 	 * something only this view can answer - it knows what was offered from here and what
@@ -631,6 +635,25 @@ void Qdc::HubsView::attachFile(ChatPane* pane)
 
 		offerFile(waiting, chosen, wantsMedia);
 	});
+}
+
+void Qdc::HubsView::offerDroppedFiles(ChatPane* pane, const QStringList& paths)
+{
+	if (!pane || paths.isEmpty()) return;
+
+	if (!m_media) m_media = new MediaBridge(m_thread, m_config, this);
+
+	for (const QString& path : paths)
+	{
+		/*
+		 * Shown if this machine can decode it, offered as a file otherwise. Asked of the
+		 * file rather than of its name, because an extension is a guess and the answer
+		 * decides whether the far end is told to draw something.
+		 */
+		const bool picture = !QImageReader::imageFormat(path).isEmpty();
+
+		offerFile(QPointer<ChatPane>(pane), path, picture);
+	}
 }
 
 void Qdc::HubsView::offerPastedImage(ChatPane* pane, const QByteArray& data,

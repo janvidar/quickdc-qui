@@ -177,6 +177,15 @@ private:
 	void offerPastedImage(ChatPane* pane, const QByteArray& data, const QString& suffix);
 
 	/**
+	 * Offer files that were dropped into a conversation.
+	 *
+	 * A picture is offered to be shown and everything else to be fetched, decided by
+	 * whether this machine can decode it - which is the same question the picture button
+	 * asks of what it will accept.
+	 */
+	void offerDroppedFiles(ChatPane* pane, const QStringList& paths);
+
+	/**
 	 * Hash a chosen file, offer it, and put a link to it in the conversation that asked.
 	 *
 	 * The pane is held weakly: hashing a large file takes a while, and the conversation

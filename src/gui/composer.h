@@ -58,8 +58,24 @@ signals:
 	 */
 	void imagePasted(const QByteArray& data, const QString& suffix);
 
+	/**
+	 * Files were dropped in, or pasted as files rather than as bytes.
+	 *
+	 * Local files only. A web address dragged from a browser is an address, and goes in
+	 * as text the way it always did.
+	 */
+	void filesDropped(const QStringList& paths);
+
 protected:
 	void keyPressEvent(QKeyEvent* event) override;
+
+	/**
+	 * Whether a drop or a paste is something this box can take.
+	 *
+	 * Asked before a drag is accepted at all, so a file dragged over the box has to be
+	 * recognised here or the drop never happens.
+	 */
+	bool canInsertFromMimeData(const QMimeData* source) const override;
 
 	/**
 	 * Keep only the formatting a message can carry.
@@ -166,6 +182,9 @@ signals:
 
 	/** A picture was pasted into the box; see ComposerEdit::imagePasted(). */
 	void imagePasted(const QByteArray& data, const QString& suffix);
+
+	/** Files were dropped into the box; see ComposerEdit::filesDropped(). */
+	void filesDropped(const QStringList& paths);
 
 private:
 	/** Apply or lift a character format across the selection, or the word under it. */

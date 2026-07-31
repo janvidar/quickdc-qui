@@ -97,6 +97,9 @@ signals:
 	 */
 	void imagePasted(const QByteArray& data, const QString& suffix);
 
+	/** Files were dropped into this conversation's box; see Composer::filesDropped(). */
+	void filesDropped(const QStringList& paths);
+
 protected:
 	/**
 	 * Where the composer's text goes. Called with non-empty, trimmed text.
