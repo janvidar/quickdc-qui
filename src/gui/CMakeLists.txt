@@ -41,6 +41,8 @@ add_library(qdcgui STATIC
     glyphs.h
     progressdelegate.cpp
     progressdelegate.h
+    richtext.cpp
+    richtext.h
     settingsview.cpp
     settingsview.h
     theme.cpp
