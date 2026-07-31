@@ -1573,37 +1573,44 @@ void TestHubs::theAttachButtonAsksForAFile()
 
 	QSignalSpy asked(pane, &Qdc::ChatPane::attachRequested);
 
+	/*
+	 * Looked at from a timer, because the chooser runs its own event loop: nothing in
+	 * this function gets another turn until the chooser is closed again, so whatever is
+	 * to be checked has to be checked from inside it.
+	 *
+	 * What is checked is that a chooser is really on screen and big enough to use. Asking
+	 * only whether one exists was not enough: this has failed three ways, and two of them
+	 * left an object behind that answered yes - one dismissed by the press that opened it,
+	 * and one an empty placeholder a hundred pixels wide because the platform declined to
+	 * draw the real thing.
+	 */
+	bool visible = false;
+	QSize seen;
+
+	QTimer::singleShot(500, [&visible, &seen] {
+		for (QWidget* top : QApplication::topLevelWidgets())
+		{
+			QFileDialog* chooser = qobject_cast<QFileDialog*>(top);
+			if (!chooser || !chooser->isVisible()) continue;
+
+			visible = true;
+			seen = chooser->size();
+			chooser->reject();
+		}
+	});
+
 	attach->click();
 	QCOMPARE(asked.count(), 1);
 
-	/*
-	 * Still standing after the press that opened it. A chooser run as a nested loop from
-	 * inside the click is dismissed by that same click on macOS, and the only sign was a
-	 * button that appeared to do nothing at all - so it is not enough to know that a
-	 * chooser was created.
-	 */
-	QFileDialog* chooser = nullptr;
+	QTest::qWait(2000);
 
-	for (QWidget* top : QApplication::topLevelWidgets())
-	{
-		QFileDialog* candidate = qobject_cast<QFileDialog*>(top);
-		if (candidate && candidate->isVisible()) chooser = candidate;
-	}
+	QVERIFY2(visible, "no chooser was on screen after the button was pressed");
+	QVERIFY2(seen.width() > 200 && seen.height() > 150,
+	         qPrintable(QStringLiteral("the chooser was only %1x%2")
+	                    .arg(seen.width()).arg(seen.height())));
 
-	QVERIFY2(chooser, "no chooser is up after the button was pressed");
-
-	/*
-	 * A window of its own, not a sheet. A window modal chooser is drawn as a sheet on
-	 * macOS, and a sheet that does not appear still stops its window taking input - so
-	 * the application looks hung while nothing is on screen to explain why.
-	 */
-	QCOMPARE(chooser->windowModality(), Qt::NonModal);
-
-	/* Choosing nothing must leave the conversation alone. */
+	/* Choosing nothing leaves the conversation alone. */
 	QSignalSpy sent(composer, &Qdc::Composer::sendRequested);
-	chooser->reject();
-	QTest::qWait(50);
-
 	QCOMPARE(sent.count(), 0);
 	QCOMPARE(composer->findChild<QTextEdit*>()->toPlainText(), QString());
 }

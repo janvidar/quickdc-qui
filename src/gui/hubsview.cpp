@@ -28,6 +28,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSplitter>
+#include <QTimer>
 #include <QStackedWidget>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -104,6 +105,7 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	m_stack->addWidget(m_empty);
 
 	connect(m_connect, &QPushButton::clicked, this, &HubsView::promptForHub);
+
 
 	QWidget* side = new QWidget(this);
 
@@ -517,33 +519,30 @@ void Qdc::HubsView::attachFile(ChatPane* pane)
 
 	if (!m_media) m_media = new MediaBridge(m_thread, this);
 
-	/*
-	 * A window of its own, and not modal.
-	 *
-	 * Two things go wrong otherwise, and both look like a button that does nothing. A
-	 * chooser run as a nested event loop from inside the press that asked for it is
-	 * dismissed by that same press. And a window modal one is presented as a sheet on
-	 * macOS: when the sheet does not appear, the window it belongs to stops taking input
-	 * anyway, which reads as the whole application hanging.
-	 *
-	 * Nothing here needs to block. Chat keeps arriving while somebody decides which file
-	 * to send, and it should keep arriving on screen too.
-	 */
-	QFileDialog* chooser = new QFileDialog(window(), tr("Attach a file"));
-	chooser->setFileMode(QFileDialog::ExistingFile);
-	chooser->setAttribute(Qt::WA_DeleteOnClose);
-	chooser->setWindowModality(Qt::NonModal);
-
 	const QPointer<ChatPane> waiting(pane);
 
-	connect(chooser, &QFileDialog::fileSelected, this,
-	        [this, waiting](const QString& chosen) {
+	/*
+	 * On the next turn of the event loop, and drawn by Qt rather than by the platform.
+	 *
+	 * Both halves of that were arrived at the hard way, and each failure looked like a
+	 * button that does nothing. A chooser opened from inside the press that asked for it
+	 * is dismissed again by that same press. A window modal one becomes a sheet on macOS
+	 * that never appears, while its window stops taking input, which reads as a hang.
+	 * And the platform's own panel is refused outright here: asked for modally it returns
+	 * at once with nothing chosen, and shown without modality it leaves nothing but an
+	 * empty placeholder a hundred pixels wide.
+	 *
+	 * Qt's chooser is a widget like any other, so it lays itself out and draws.
+	 */
+	QTimer::singleShot(0, this, [this, waiting] {
+		const QString chosen = QFileDialog::getOpenFileName(window(),
+			tr("Attach a file"), QString(), QString(), nullptr,
+			QFileDialog::DontUseNativeDialog);
+
+		if (chosen.isEmpty() || !waiting) return;
+
 		offerFile(waiting, chosen);
 	});
-
-	chooser->show();
-	chooser->raise();
-	chooser->activateWindow();
 }
 
 void Qdc::HubsView::offerFile(const QPointer<ChatPane>& pane, const QString& path)
