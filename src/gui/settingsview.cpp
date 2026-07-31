@@ -34,6 +34,9 @@ const QString CHAT_MEDIA = QStringLiteral("Chat media");
 /** The limit is kept in bytes and shown in mebibytes. */
 constexpr int MIB = 1024 * 1024;
 
+/** About six months, matching HubsView. Zero keeps them for ever. */
+constexpr int MEDIA_KEEP_DAYS = 180;
+
 /** The core's own defaults, so an unset field shows what is really in force. */
 constexpr int DEFAULT_PORT = 1411;
 constexpr int DEFAULT_SLOTS = 3;
@@ -299,11 +302,20 @@ QWidget* Qdc::SettingsView::buildDirectories()
 	m_mediaLimit->setToolTip(tr("Larger pictures are left for you to fetch by hand"));
 	connect(m_mediaLimit, &QSpinBox::valueChanged, this, &SettingsView::markModified);
 
+	m_mediaKeep = new QSpinBox(group);
+	m_mediaKeep->setRange(0, 3650);
+	m_mediaKeep->setSuffix(tr(" days"));
+	m_mediaKeep->setSpecialValueText(tr("keep for ever"));
+	m_mediaKeep->setToolTip(tr("Pictures you paste in are kept this long, in case "
+	                           "somebody follows a link to one later"));
+	connect(m_mediaKeep, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+
 	QFormLayout* form = new QFormLayout(group);
 	form->addRow(tr("Save downloads to"), downloadRow);
 	form->addRow(tr("Shared folders"), shareRow);
 	form->addRow(QString(), m_fetchMedia);
 	form->addRow(tr("Fetch pictures up to"), m_mediaLimit);
+	form->addRow(tr("Keep pictures you send for"), m_mediaKeep);
 
 	/*
 	 * Said here rather than in a tooltip, because both facts change what somebody would
@@ -398,12 +410,15 @@ void Qdc::SettingsView::load()
 
 	const QVariantHash media = m_config->readGroup(ConfigStore::Application, CHAT_MEDIA, {
 		{QStringLiteral("Fetch automatically"), false},
-		{QStringLiteral("Maximum size"), 2 * MIB}
+		{QStringLiteral("Maximum size"), 2 * MIB},
+		{QStringLiteral("Keep pasted for days"), MEDIA_KEEP_DAYS}
 	});
 
 	m_fetchMedia->setChecked(media.value(QStringLiteral("Fetch automatically")).toBool());
 	m_mediaLimit->setValue(
 		qMax(0, media.value(QStringLiteral("Maximum size")).toInt() / MIB));
+	m_mediaKeep->setValue(
+		qMax(0, media.value(QStringLiteral("Keep pasted for days")).toInt()));
 
 	refreshShareList();
 
@@ -450,6 +465,8 @@ bool Qdc::SettingsView::save()
 	                  QStringLiteral("Fetch automatically"), m_fetchMedia->isChecked());
 	m_config->setNumber(ConfigStore::Application, CHAT_MEDIA,
 	                    QStringLiteral("Maximum size"), m_mediaLimit->value() * MIB);
+	m_config->setNumber(ConfigStore::Application, CHAT_MEDIA,
+	                    QStringLiteral("Keep pasted for days"), m_mediaKeep->value());
 
 	const bool written = m_config->save(ConfigStore::Application);
 

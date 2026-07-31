@@ -21,6 +21,7 @@
 #include <core/mediabridge.h>
 
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QDesktopServices>
@@ -48,9 +49,26 @@ namespace {
 const QString CHAT_MEDIA = QStringLiteral("Chat media");
 const QString MEDIA_FETCH = QStringLiteral("Fetch automatically");
 const QString MEDIA_LIMIT = QStringLiteral("Maximum size");
+const QString MEDIA_KEEP = QStringLiteral("Keep pasted for days");
 
 /** Two megabytes: enough for a photograph, small enough to arrive unnoticed. */
 constexpr int MEDIA_LIMIT_DEFAULT = 2 * 1024 * 1024;
+
+/**
+ * How long a pasted picture is kept: about six months.
+ *
+ * A round number rather than a considered one. It is long enough that following a link
+ * in a conversation somebody comes back to is expected to work, and short enough that
+ * the folder does not grow for the life of the installation. Nothing depends on the
+ * exact value, and zero keeps everything.
+ */
+constexpr int MEDIA_KEEP_DEFAULT = 180;
+
+/** Where a pasted picture is kept; see HubsView::offerPastedImage(). */
+QString pasted_media_folder()
+{
+	return QDir::homePath() + QStringLiteral("/.quickdc/media");
+}
 
 constexpr int TREE_WIDTH = 220;
 constexpr int TREE_MINIMUM = 150;
@@ -125,6 +143,7 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	connect(m_connect, &QPushButton::clicked, this, &HubsView::promptForHub);
 
 	reloadMediaPolicy();
+	sweepPastedMedia();
 
 	/*
 	 * Either store: the general settings live in one and what a single hub decided lives
@@ -656,6 +675,33 @@ void Qdc::HubsView::offerDroppedFiles(ChatPane* pane, const QStringList& paths)
 	}
 }
 
+void Qdc::HubsView::sweepPastedMedia()
+{
+	if (m_mediaKeepDays <= 0) return;
+
+	const QDir folder(pasted_media_folder());
+	if (!folder.exists()) return;
+
+	const QDateTime cutoff =
+		QDateTime::currentDateTime().addDays(-m_mediaKeepDays);
+
+	/*
+	 * Only what this client wrote there, matched by the name it gives them: the folder is
+	 * QuickDC's, but deleting whatever happens to be in it would be somebody else's file
+	 * gone.
+	 */
+	const QFileInfoList kept = folder.entryInfoList({QStringLiteral("pasted-*")},
+	                                                QDir::Files);
+
+	for (const QFileInfo& one : kept)
+	{
+		if (one.lastModified() >= cutoff) continue;
+
+		if (!QFile::remove(one.absoluteFilePath()))
+			qWarning() << "a pasted picture could not be removed:" << one.fileName();
+	}
+}
+
 void Qdc::HubsView::offerPastedImage(ChatPane* pane, const QByteArray& data,
                                     const QString& suffix)
 {
@@ -663,7 +709,7 @@ void Qdc::HubsView::offerPastedImage(ChatPane* pane, const QByteArray& data,
 
 	if (!m_media) m_media = new MediaBridge(m_thread, m_config, this);
 
-	const QString folder = QDir::homePath() + QStringLiteral("/.quickdc/media");
+	const QString folder = pasted_media_folder();
 
 	if (!QDir().mkpath(folder))
 	{
@@ -888,6 +934,9 @@ void Qdc::HubsView::reloadMediaPolicy()
 
 	m_downloadDir = configured.isEmpty() ? QStringLiteral("~/.quickdc/downloads")
 	                                     : configured;
+
+	m_mediaKeepDays = qMax(0, m_config->getNumber(ConfigStore::Application, CHAT_MEDIA,
+	                                              MEDIA_KEEP, MEDIA_KEEP_DEFAULT));
 
 	/* What each open hub decided, so a message needs no reading at all. */
 	for (const Entry* entry : m_entries)

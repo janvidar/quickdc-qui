@@ -241,6 +241,19 @@ private:
 	/** Remember what one hub has decided for itself, if anything. */
 	void loadHubMediaPolicy(const QString& hubUrl);
 
+	/**
+	 * Throw away pasted pictures nobody is likely to ask for any more.
+	 *
+	 * A pasted picture is kept because a link to it in an old message may still be
+	 * followed, so the folder only ever grows. There is no way to know when the last
+	 * message naming one has scrolled out of somebody's history - nothing keeps
+	 * scrollback across restarts - so age is the only measure available.
+	 *
+	 * The core drops the matching entry by itself the next time it starts: an attachment
+	 * whose file has gone cannot be confirmed, so it is forgotten.
+	 */
+	void sweepPastedMedia();
+
 	void showPane(ChatPane* pane);
 
 	/** Sum every pane's unread count into the rail badge. */
@@ -272,6 +285,7 @@ private:
 	/* The settings an arriving message needs, kept in hand; see reloadMediaPolicy(). */
 	bool m_fetchMedia = false;
 	quint64 m_mediaLimit = 0;
+	int m_mediaKeepDays = 0;
 	QString m_downloadDir;
 
 	/** Hubs that have decided for themselves, by address. Absent means no opinion. */

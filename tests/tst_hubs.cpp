@@ -89,6 +89,7 @@ private slots:
 	void aPastedPictureIsOfferedLikeAChosenFile();
 	void aPastedPictureIsWrittenDownWhereItCanBeServed();
 	void aDroppedFileIsOfferedRatherThanNamed();
+	void oldPastedPicturesAreSweptAway();
 	void composerFlattensFormattingWhereItCannotBeSent();
 
 	void filelistModelExposesTheTree();
@@ -1248,6 +1249,82 @@ void TestHubs::aDroppedFileIsOfferedRatherThanNamed()
 
 	QCOMPARE(dropped.count(), 1);
 	QCOMPARE(edit->toPlainText(), QStringLiteral("https://example.org/page"));
+}
+
+void TestHubs::oldPastedPicturesAreSweptAway()
+{
+	/* The home directory is pointed at the temporary one, as the paste test does. */
+	const QByteArray realHome = qgetenv("HOME");
+	qputenv("HOME", m_dir.path().toUtf8());
+
+	const QString folder = m_dir.path() + QStringLiteral("/.quickdc/media");
+	QVERIFY(QDir().mkpath(folder));
+
+	const auto write = [&folder](const QString& name, int daysOld) {
+		const QString path = folder + QLatin1Char('/') + name;
+
+		QFile made(path);
+		if (!made.open(QIODevice::WriteOnly)) return QString();
+		made.write("picture");
+		made.close();
+
+		/*
+		 * Aged by hand in a second pass, and after the write: closing flushes, and the
+		 * flush sets the modification time back to now - which is the only thing saying
+		 * how old a picture is.
+		 */
+		QFile aged(path);
+		if (!aged.open(QIODevice::ReadWrite)) return QString();
+
+		aged.setFileTime(QDateTime::currentDateTime().addDays(-daysOld),
+		                 QFileDevice::FileModificationTime);
+		aged.close();
+
+		return path;
+	};
+
+	const QString old = write(QStringLiteral("pasted-20240101-120000.png"), 200);
+	const QString recent = write(QStringLiteral("pasted-20260101-120000.png"), 5);
+	const QString other = write(QStringLiteral("something-else.png"), 400);
+
+	QVERIFY(!old.isEmpty() && !recent.isEmpty() && !other.isEmpty());
+
+	Qdc::ConfigBridge config(m_thread);
+	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
+	                 QStringLiteral("Keep pasted for days"), 180);
+	config.save(Qdc::ConfigStore::Application);
+
+
+	{
+		/* Swept when the view is built, which is when the application starts. */
+		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+		Q_UNUSED(hubs);
+	}
+
+	QVERIFY2(!QFile::exists(old), "a picture older than the limit was kept");
+	QVERIFY2(QFile::exists(recent), "a recent picture was thrown away");
+
+	/*
+	 * And only what this client wrote. The folder is QuickDC's, but deleting anything
+	 * that happens to be in it would be somebody else's file gone.
+	 */
+	QVERIFY2(QFile::exists(other), "a file this client did not write was removed");
+
+	/* Zero keeps everything, however old. */
+	const QString again = write(QStringLiteral("pasted-20240101-130000.png"), 500);
+
+	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
+	                 QStringLiteral("Keep pasted for days"), 0);
+	config.save(Qdc::ConfigStore::Application);
+
+	{
+		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+		Q_UNUSED(hubs);
+	}
+
+	QVERIFY2(QFile::exists(again), "everything should be kept when there is no limit");
+
+	qputenv("HOME", realHome);
 }
 
 void TestHubs::composerFlattensFormattingWhereItCannotBeSent()
