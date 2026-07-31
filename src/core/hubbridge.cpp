@@ -190,16 +190,23 @@ public:
 	void EventNetStatus(enum StatusNetwork netstate) override
 	{
 		const NetStatus status = convert(netstate);
-		report([status](HubBridge* bridge) {
+
+		/*
+		 * Asked of the core here, on the core thread, and carried over as a plain
+		 * bool: this is the only place it can be asked safely, and the answer is
+		 * the socket's own rather than a guess made from the status.
+		 *
+		 * Guessing does not work. The obvious rule - secure once the handshake is
+		 * reported, not secure otherwise - reads correctly for a moment and is
+		 * then wrong for the rest of the connection, because the ADC session
+		 * reports being connected again after its handshake, so the last thing
+		 * said about a TLS connection is "connected".
+		 */
+		const bool secure = isSecure();
+
+		report([status, secure](HubBridge* bridge) {
 			bridge->m_netStatus = status;
 
-			/*
-			 * TLS is tracked here because this is the only place it is ever
-			 * reported. Anything other than the handshake succeeding clears it:
-			 * a plain Connected means the session never negotiated any, and
-			 * every disconnection and error ends whatever there was.
-			 */
-			const bool secure = (status == NetStatus::TlsConnected);
 			if (secure != bridge->m_secure)
 			{
 				bridge->m_secure = secure;
