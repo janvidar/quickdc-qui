@@ -11,6 +11,7 @@
 #include <samurai/io/net/url.h>
 
 #include <QMetaObject>
+#include <QUrl>
 
 namespace {
 
@@ -234,7 +235,8 @@ public:
 		});
 	}
 
-	void EventChat(const QuickDC::User* user, const char* message, bool action) override
+	void EventChat(const QuickDC::User* user, const char* message, bool action,
+	               bool richText) override
 	{
 		ChatMessage chat;
 		chat.hubUrl   = from_utf8(getUrl());
@@ -242,6 +244,7 @@ public:
 		chat.text     = from_utf8(message);
 		chat.received = QDateTime::currentDateTime();
 		chat.action   = action;
+		chat.richText = richText;
 
 		report([chat](HubBridge* bridge) {
 			emit bridge->chatReceived(chat);
@@ -255,7 +258,7 @@ public:
 	 */
 	void EventPrivateChat(const QuickDC::User* from, const QuickDC::User*,
 	                      const char* message, const char* userContextID,
-	                      bool action) override
+	                      bool action, bool richText) override
 	{
 		ChatMessage chat;
 		chat.hubUrl         = from_utf8(getUrl());
@@ -264,6 +267,7 @@ public:
 		chat.context        = from_utf8(userContextID);
 		chat.received       = QDateTime::currentDateTime();
 		chat.action         = action;
+		chat.richText       = richText;
 		chat.privateMessage = true;
 
 		if (chat.context.isEmpty())
@@ -378,7 +382,7 @@ public:
 	 * goes through the protected session, the only route to it that api/hub.h
 	 * offers.
 	 */
-	void sendPrivateChat(const char* userId, const char* message)
+	void sendPrivateChat(const char* userId, const char* message, bool richText)
 	{
 		const QuickDC::User* user = session ? session->getUser(userId) : nullptr;
 
@@ -388,7 +392,7 @@ public:
 			return;
 		}
 
-		sendPrivateChatMessage(user, message);
+		sendPrivateChatMessage(user, message, richText);
 	}
 
 private:
@@ -517,6 +521,18 @@ bool Qdc::HubBridge::isSecure() const
 	return m_secure;
 }
 
+bool Qdc::HubBridge::supportsRichText() const
+{
+	/*
+	 * Decided from the scheme rather than from anything the hub says, because the flag
+	 * is carried between clients and the hub only relays it. An ADC hub that has never
+	 * heard of RTF1 passes the message through untouched.
+	 */
+	const QString scheme = QUrl(m_url).scheme().toLower();
+
+	return scheme == QStringLiteral("adc") || scheme == QStringLiteral("adcs");
+}
+
 void Qdc::HubBridge::setFollowRedirects(bool follow)
 {
 	m_followRedirects.store(follow, std::memory_order_relaxed);
@@ -589,23 +605,27 @@ void Qdc::HubBridge::disconnectFromHub()
 	m_thread->post([this] { m_session->disconnect(); });
 }
 
-void Qdc::HubBridge::sendChat(const QString& message)
+void Qdc::HubBridge::sendChat(const QString& message, bool richText)
 {
 	if (!m_session || !m_thread) return;
 
 	const QByteArray utf8 = message.toUtf8();
-	m_thread->post([this, utf8] { m_session->sendChatMessage(utf8.constData()); });
+
+	m_thread->post([this, utf8, richText] {
+		m_session->sendChatMessage(utf8.constData(), richText);
+	});
 }
 
-void Qdc::HubBridge::sendPrivateChat(const QString& userId, const QString& message)
+void Qdc::HubBridge::sendPrivateChat(const QString& userId, const QString& message,
+                                    bool richText)
 {
 	if (!m_session || !m_thread) return;
 
 	const QByteArray id = userId.toUtf8();
 	const QByteArray utf8 = message.toUtf8();
 
-	m_thread->post([this, id, utf8] {
-		m_session->sendPrivateChat(id.constData(), utf8.constData());
+	m_thread->post([this, id, utf8, richText] {
+		m_session->sendPrivateChat(id.constData(), utf8.constData(), richText);
 	});
 }
 

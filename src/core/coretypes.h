@@ -147,6 +147,15 @@ struct ChatMessage {
 	/** A "/me" style line, to be rendered as narration rather than speech. */
 	bool action = false;
 
+	/**
+	 * The text is markdown and should be rendered as such.
+	 *
+	 * Carried by ADC's RT1 flag. Without it the text is literal, which is what lets
+	 * somebody type *asterisks* and have them arrive as asterisks - so this is not a
+	 * hint to be guessed at when it is absent.
+	 */
+	bool richText = false;
+
 	bool privateMessage = false;
 };
 

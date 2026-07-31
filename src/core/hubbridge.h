@@ -82,6 +82,15 @@ public:
 	bool isSecure() const;
 
 	/**
+	 * Whether a message on this hub can say that it is markdown.
+	 *
+	 * ADC has room for the flag; NMDC has none, so formatting there would be sent as
+	 * markers nobody asked for and read back literally. The composer greys its
+	 * controls out rather than losing them silently.
+	 */
+	bool supportsRichText() const;
+
+	/**
 	 * Whether to follow a redirect the hub asks for.
 	 *
 	 * The core wants an answer inside the callback, on the core thread, and
@@ -108,13 +117,18 @@ public slots:
 	void disconnectFromHub();
 
 	/** Public chat. Dropped with a systemError() if there is no session yet. */
-	void sendChat(const QString& message);
+	/**
+	 * @param richText the text is markdown. Only set it when the message really is
+	 *        formatted, and never on a hub that cannot carry the flag.
+	 */
+	void sendChat(const QString& message, bool richText = false);
 
 	/**
 	 * @param userId the id the core knows the user by - a CID on ADC, a nickname
 	 *        on NMDC. This is UserInfo::id, not UserInfo::nick.
 	 */
-	void sendPrivateChat(const QString& userId, const QString& message);
+	void sendPrivateChat(const QString& userId, const QString& message,
+	                     bool richText = false);
 
 	/** Answer a hub that asked for one, after authenticationRequired(). */
 	void sendPassword(const QString& password);

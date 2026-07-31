@@ -52,6 +52,7 @@ private slots:
 	void favouritesShrinkWithoutLeavingATail();
 
 	void urlNormalisationFillsInSchemeAndPort();
+	void onlyAdcHubsCanCarryRichText();
 
 	void filelistModelExposesTheTree();
 	void filelistModelFilterKeepsAncestors();
@@ -59,6 +60,7 @@ private slots:
 	void openingTheSameHubTwiceReusesThePane();
 	void privateMessagesOpenAConversation();
 	void unreadCountsReachTheRailBadge();
+	void aRichTextFlagReachesThePane();
 	void hubPasswordIsAskedForOnce();
 	void nothingCanBeSentUntilTheHubHasLoggedUsIn();
 	void anEchoOfOurOwnPrivateMessageOpensTheirConversation();
@@ -394,6 +396,27 @@ void TestHubs::favouritesShrinkWithoutLeavingATail()
 	QVERIFY(reloaded.contains(QStringLiteral("dchub://h2.example.org:411")));
 }
 
+void TestHubs::onlyAdcHubsCanCarryRichText()
+{
+	/*
+	 * The flag rides on an ADC message argument, so only an ADC hub can carry it. The
+	 * composer greys its formatting out on NMDC rather than sending markers the far end
+	 * will show literally.
+	 */
+	Qdc::HubBridge adc(m_thread, QStringLiteral("adc://192.0.2.1:412"), this);
+	QVERIFY(adc.supportsRichText());
+
+	Qdc::HubBridge adcs(m_thread, QStringLiteral("adcs://192.0.2.1:412"), this);
+	QVERIFY(adcs.supportsRichText());
+
+	Qdc::HubBridge nmdc(m_thread, QStringLiteral("dchub://192.0.2.1:411"), this);
+	QVERIFY(!nmdc.supportsRichText());
+
+	/* The shorthand becomes dchub, so it cannot either. */
+	Qdc::HubBridge shorthand(m_thread, QStringLiteral("192.0.2.1"), this);
+	QVERIFY(!shorthand.supportsRichText());
+}
+
 void TestHubs::urlNormalisationFillsInSchemeAndPort()
 {
 	using Qdc::HubBridge;
@@ -610,6 +633,41 @@ void TestHubs::privateMessagesOpenAConversation()
 	emit bridge->chatReceived(another);
 
 	QCOMPARE(hubs.paneCount(), 3);
+}
+
+void TestHubs::aRichTextFlagReachesThePane()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	Qdc::HubBridge* bridge = pane->hub();
+	QVERIFY(bridge);
+
+	Qdc::ChatModel* model = pane->findChild<Qdc::ChatModel*>();
+	QVERIFY(model);
+
+	Qdc::ChatMessage rich;
+	rich.from = user(QStringLiteral("alice"));
+	rich.text = QStringLiteral("**found it**");
+	rich.richText = true;
+	emit bridge->chatReceived(rich);
+
+	Qdc::ChatMessage literal;
+	literal.from = user(QStringLiteral("bob"));
+	literal.text = QStringLiteral("weighs *about* 3kg");
+	emit bridge->chatReceived(literal);
+
+	QCOMPARE(model->rowCount(), 2);
+
+	/*
+	 * The flag is what decides how the line is read, so it has to survive the trip
+	 * rather than being inferred from the text at the far end.
+	 */
+	QVERIFY(model->at(0).richText);
+	QVERIFY(!model->at(1).richText);
 }
 
 void TestHubs::unreadCountsReachTheRailBadge()
