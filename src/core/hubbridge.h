@@ -84,9 +84,15 @@ public:
 	/**
 	 * Whether a message on this hub can say that it is markdown.
 	 *
-	 * ADC has room for the flag; NMDC has none, so formatting there would be sent as
-	 * markers nobody asked for and read back literally. The composer greys its
-	 * controls out rather than losing them silently.
+	 * Negotiated, not assumed: the client offers the RTF0 extension in its SUP and only
+	 * a hub that answers with the same has agreed to carry the flag - which is how a hub
+	 * operator decides whether markdown, and the media a message may point at, are
+	 * allowed here at all. False until that answer has been read, false for the rest of
+	 * a session on a hub that stayed quiet, and false on NMDC, which has nowhere to put
+	 * a flag in the first place.
+	 *
+	 * Follow richTextSupportChanged() rather than asking once: nothing is known about a
+	 * hub until it has been spoken to.
 	 */
 	bool supportsRichText() const;
 
@@ -136,6 +142,14 @@ public slots:
 
 signals:
 	void netStatusChanged(Qdc::NetStatus status);
+
+	/**
+	 * The hub agreed to carry markdown, or the session that had agreed has ended.
+	 *
+	 * Emitted only on a change, and false again on disconnection: the next connection
+	 * negotiates from nothing, and what one hub allowed says nothing about the next.
+	 */
+	void richTextSupportChanged(bool supported);
 	void hubStatusChanged(Qdc::HubStatus status);
 	void hubNameChanged(const QString& name);
 	void secureChanged(bool secure);
@@ -179,6 +193,9 @@ private:
 
 	/** Owned by the core thread; only ever read or written from a job there. */
 	HubSession* m_session = nullptr;
+
+	/** What the hub answered about RTF0; see supportsRichText(). */
+	bool m_richText = false;
 
 	NetStatus m_netStatus = NetStatus::Invalid;
 	HubStatus m_hubStatus = HubStatus::None;

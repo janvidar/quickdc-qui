@@ -65,7 +65,7 @@ private slots:
 	void favouritesShrinkWithoutLeavingATail();
 
 	void urlNormalisationFillsInSchemeAndPort();
-	void onlyAdcHubsCanCarryRichText();
+	void noHubCarriesRichTextUntilItAnnouncesTheExtension();
 
 	void composerFlagsOnlyWhatItActuallyFormatted();
 	void composerSerializesEachConstructToMarkdown();
@@ -614,23 +614,29 @@ void TestHubs::favouritesShrinkWithoutLeavingATail()
 	QVERIFY(reloaded.contains(QStringLiteral("dchub://h2.example.org:411")));
 }
 
-void TestHubs::onlyAdcHubsCanCarryRichText()
+void TestHubs::noHubCarriesRichTextUntilItAnnouncesTheExtension()
 {
 	/*
-	 * The flag rides on an ADC message argument, so only an ADC hub can carry it. The
-	 * composer greys its formatting out on NMDC rather than sending markers the far end
-	 * will show literally.
+	 * Negotiated, not assumed. A client offers the RTF0 extension in its SUP and only a
+	 * hub that answers with the same has agreed to carry a message flagged as markdown -
+	 * which is how a hub operator decides whether it happens here at all. Nothing is
+	 * known about a hub that has not been spoken to yet, so the answer starts out no.
 	 */
 	Qdc::HubBridge adc(m_thread, QStringLiteral("adc://192.0.2.1:412"), this);
-	QVERIFY(adc.supportsRichText());
+	QVERIFY(!adc.supportsRichText());
 
-	Qdc::HubBridge adcs(m_thread, QStringLiteral("adcs://192.0.2.1:412"), this);
-	QVERIFY(adcs.supportsRichText());
+	QSignalSpy agreed(&adc, &Qdc::HubBridge::richTextSupportChanged);
 
+	emit adc.richTextSupportChanged(true);
+	QCOMPARE(agreed.count(), 1);
+
+	/*
+	 * NMDC never gets the chance: there is nowhere in the protocol to put the flag, so
+	 * the extension cannot be offered and the answer stays no for the whole session.
+	 */
 	Qdc::HubBridge nmdc(m_thread, QStringLiteral("dchub://192.0.2.1:411"), this);
 	QVERIFY(!nmdc.supportsRichText());
 
-	/* The shorthand becomes dchub, so it cannot either. */
 	Qdc::HubBridge shorthand(m_thread, QStringLiteral("192.0.2.1"), this);
 	QVERIFY(!shorthand.supportsRichText());
 }
@@ -1326,7 +1332,17 @@ void TestHubs::loopback()
 	hub.connectToHub();
 
 	QTRY_COMPARE_WITH_TIMEOUT(hub.hubStatus(), Qdc::HubStatus::LoggedIn, 20000);
-	qDebug() << role << "logged in as" << nick << "on" << hub.hubName();
+
+	/*
+	 * What the hub answered about RTF0 decides everything below: on a hub that announced
+	 * it the flag travels, and on one that did not the same message goes out as plain
+	 * text. Both are correct, so the test asserts whichever the hub chose rather than
+	 * insisting on one.
+	 */
+	const bool agreed = hub.supportsRichText();
+
+	qDebug() << role << "logged in as" << nick << "on" << hub.hubName()
+	         << "- rich text agreed:" << agreed;
 
 	const QString rich =
 		QStringLiteral("**really** *quite* important, run `make -j8` first\n"
@@ -1374,7 +1390,9 @@ void TestHubs::loopback()
 		if (message.text == rich)
 		{
 			++sawRich;
-			QVERIFY2(message.richText, "the RT1 flag did not survive the hub");
+
+			QCOMPARE(message.richText, agreed);
+			if (!agreed) continue;
 
 			Qdc::RichText::RenderOptions options;
 			options.prefix = QStringLiteral("<b>%1</b> ").arg(message.from.nick);
@@ -1401,7 +1419,7 @@ void TestHubs::loopback()
 		{
 			++sawDirect;
 			QVERIFY2(message.privateMessage, "a private message arrived as public chat");
-			QVERIFY2(message.richText, "the RT1 flag did not survive a private message");
+			QCOMPARE(message.richText, agreed);
 		}
 	}
 
@@ -1424,19 +1442,26 @@ void TestHubs::formattingIsOnlyOfferedWhereItCanBeSent()
 	Qdc::Composer* nmdc = hubs.currentPane()->findChild<Qdc::Composer*>();
 	QVERIFY(nmdc);
 
-	/*
-	 * NMDC has nowhere to put the flag, so the controls are shut rather than sending
-	 * markers the far end would show as punctuation.
-	 */
+	/* NMDC has nowhere to put the flag, so the controls are shut for good. */
 	QVERIFY(!nmdc->isRichTextEnabled());
 
 	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.2:412")));
 
-	Qdc::Composer* adc = hubs.currentPane()->findChild<Qdc::Composer*>();
+	Qdc::ChatPane* pane = hubs.currentPane();
+	Qdc::Composer* adc = pane->findChild<Qdc::Composer*>();
 	QVERIFY(adc);
+
+	/* An ADC hub that has not answered yet is no different: nothing has been agreed. */
+	QVERIFY(!adc->isRichTextEnabled());
+
+	emit pane->hub()->richTextSupportChanged(true);
 	QVERIFY(adc->isRichTextEnabled());
 
-	/* A private conversation inherits it from the hub it is on. */
+	/*
+	 * A private conversation on the same hub answers to the same agreement. Driven by
+	 * the signal here rather than by the bridge's own state, which only a hub that has
+	 * really answered can set - the loopback test covers that half against a live hub.
+	 */
 	Qdc::ChatMessage direct;
 	direct.hubUrl = QStringLiteral("adc://192.0.2.2:412");
 	direct.from = user(QStringLiteral("bob"));
@@ -1445,14 +1470,24 @@ void TestHubs::formattingIsOnlyOfferedWhereItCanBeSent()
 	direct.privateMessage = true;
 	direct.received = QDateTime::currentDateTime();
 
-	emit hubs.currentPane()->hub()->chatReceived(direct);
+	emit pane->hub()->chatReceived(direct);
 
 	Qdc::DmPane* dm = hubs.findChild<Qdc::DmPane*>();
 	QVERIFY(dm);
 
 	Qdc::Composer* dmComposer = dm->findChild<Qdc::Composer*>();
 	QVERIFY(dmComposer);
+
+	emit pane->hub()->richTextSupportChanged(true);
 	QVERIFY(dmComposer->isRichTextEnabled());
+
+	/*
+	 * The session ending takes the agreement with it: the next connection negotiates
+	 * again, and what this hub allowed says nothing about what the next one will.
+	 */
+	emit pane->hub()->richTextSupportChanged(false);
+	QVERIFY(!adc->isRichTextEnabled());
+	QVERIFY(!dmComposer->isRichTextEnabled());
 }
 
 void TestHubs::aClickedHubLinkOpensTheHubItself()

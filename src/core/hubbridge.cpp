@@ -16,6 +16,30 @@
 namespace {
 
 /**
+ * Whether a network status means the session is over.
+ *
+ * Asked so that what a hub agreed to does not outlive the connection it was agreed on:
+ * the next one negotiates again, and until it has, nothing is known.
+ */
+bool session_ended(Qdc::NetStatus status)
+{
+	switch (status)
+	{
+		case Qdc::NetStatus::Disconnected:
+		case Qdc::NetStatus::TlsDisconnected:
+		case Qdc::NetStatus::ErrorTimeout:
+		case Qdc::NetStatus::ErrorConnectionRefused:
+		case Qdc::NetStatus::ErrorHostNotFound:
+		case Qdc::NetStatus::ErrorIO:
+		case Qdc::NetStatus::TlsError:
+			return true;
+
+		default:
+			return false;
+	}
+}
+
+/**
  * How long a hub has to log us in before we say something.
  *
  * Generous: a login is a handful of round trips and is normally done inside a
@@ -214,6 +238,12 @@ public:
 				emit bridge->secureChanged(secure);
 			}
 
+			if (session_ended(status) && bridge->m_richText)
+			{
+				bridge->m_richText = false;
+				emit bridge->richTextSupportChanged(false);
+			}
+
 			emit bridge->netStatusChanged(status);
 		});
 	}
@@ -224,6 +254,23 @@ public:
 		report([status](HubBridge* bridge) {
 			bridge->m_hubStatus = status;
 			emit bridge->hubStatusChanged(status);
+		});
+	}
+
+	void EventHubExtension(const char* /* fourcc */) override
+	{
+		/*
+		 * Asked of the core rather than matched against a name here: which extension
+		 * carries markdown is the protocol's business, and this is the thread where the
+		 * core can be asked at all.
+		 */
+		const bool rich = supportsRichText();
+
+		report([rich](HubBridge* bridge) {
+			if (rich == bridge->m_richText) return;
+
+			bridge->m_richText = rich;
+			emit bridge->richTextSupportChanged(rich);
 		});
 	}
 
@@ -523,14 +570,7 @@ bool Qdc::HubBridge::isSecure() const
 
 bool Qdc::HubBridge::supportsRichText() const
 {
-	/*
-	 * Decided from the scheme rather than from anything the hub says, because the flag
-	 * is carried between clients and the hub only relays it. An ADC hub that has never
-	 * heard of RTF1 passes the message through untouched.
-	 */
-	const QString scheme = QUrl(m_url).scheme().toLower();
-
-	return scheme == QStringLiteral("adc") || scheme == QStringLiteral("adcs");
+	return m_richText;
 }
 
 void Qdc::HubBridge::setFollowRedirects(bool follow)

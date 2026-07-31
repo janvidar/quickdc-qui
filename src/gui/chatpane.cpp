@@ -65,10 +65,17 @@ Qdc::ChatPane::ChatPane(HubBridge* hub, QWidget* parent)
 	connect(m_header, &HubHeader::closeRequested, this, &ChatPane::closeRequested);
 
 	/*
-	 * Only a protocol that can flag a message as markdown gets the formatting controls.
-	 * On NMDC they are disabled rather than sending markers the far end would show
-	 * literally.
+	 * Formatting is offered only where the hub has agreed to carry the flag that says a
+	 * message is markdown - which it does by answering the RTF0 extension. Until then,
+	 * and on a hub that never answers, the controls are disabled rather than sending
+	 * markers the far end would show literally.
 	 */
+	if (m_hub)
+	{
+		connect(m_hub, &HubBridge::richTextSupportChanged,
+		        m_composer, &Composer::setRichTextEnabled);
+	}
+
 	m_composer->setRichTextEnabled(m_hub && m_hub->supportsRichText());
 }
 
