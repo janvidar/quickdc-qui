@@ -71,6 +71,7 @@ private slots:
 	void composerSerializesEachConstructToMarkdown();
 	void composerWritesListsAsMarkdown();
 	void emojiPickerGivesEveryEmojiRoomToDraw();
+	void anAttachedFileIsSentAsALinkToItsHash();
 	void composerFlattensFormattingWhereItCannotBeSent();
 
 	void filelistModelExposesTheTree();
@@ -871,6 +872,59 @@ void TestHubs::emojiPickerGivesEveryEmojiRoomToDraw()
 	QVERIFY2(cells > 0, "the picker did not open");
 	QCOMPARE(cramped, 0);
 	QVERIFY2(!ragged, "the grid is not made of equal cells");
+}
+
+void TestHubs::anAttachedFileIsSentAsALinkToItsHash()
+{
+	Qdc::Composer composer;
+	QSignalSpy sent(&composer, &Qdc::Composer::sendRequested);
+	QSignalSpy asked(&composer, &Qdc::Composer::attachRequested);
+
+	QToolButton* attach = formatButton(&composer, QStringLiteral("Attach a file"));
+	QVERIFY(attach);
+
+	/*
+	 * The button only asks. Choosing the file and hashing it belong to whoever owns the
+	 * connection, because neither is anything a text box can do.
+	 */
+	attach->click();
+	QCOMPARE(asked.count(), 1);
+	QCOMPARE(sent.count(), 0);
+
+	Qdc::RichText::Attachment file;
+	file.tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
+	file.name = QStringLiteral("diagram.png");
+	file.size = 524288;
+
+	QTextEdit* edit = composer.findChild<QTextEdit*>();
+	QVERIFY(edit);
+
+	QTest::keyClicks(edit, QStringLiteral("have a look: "));
+	composer.insertAttachment(file);
+	QTest::keyClicks(edit, QStringLiteral("tell me what you think"));
+
+	writeAndSend(&composer, QString());
+
+	QCOMPARE(sent.count(), 1);
+
+	/* The file is named by its hash, and the message says it is markdown. */
+	QCOMPARE(sent.at(0).at(1).toBool(), true);
+	QCOMPARE(sent.at(0).at(0).toString(),
+	         QStringLiteral("have a look: [diagram.png](magnet:?xt=urn:tree:tiger:%1"
+	                        "&dn=diagram.png&xl=524288) tell me what you think")
+			.arg(file.tth));
+
+	/* What arrives is read back as the same file. */
+	const Qdc::RichText::Attachment read = Qdc::RichText::readMagnet(
+		QUrl(Qdc::RichText::writeMagnet(file)));
+
+	QCOMPARE(read.tth, file.tth);
+	QCOMPARE(read.size, file.size);
+
+	/* Attaching is formatting, so a hub that cannot carry the flag cannot carry a
+	   file either. */
+	composer.setRichTextEnabled(false);
+	QVERIFY(!attach->isEnabled());
 }
 
 void TestHubs::composerFlattensFormattingWhereItCannotBeSent()

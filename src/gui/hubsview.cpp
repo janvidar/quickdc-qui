@@ -15,13 +15,17 @@
 #include <core/favourites.h>
 #include <core/transferbridge.h>
 #include <core/hubbridge.h>
+#include <core/mediabridge.h>
 
 #include <QDesktopServices>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QLabel>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -501,12 +505,88 @@ void Qdc::HubsView::adopt(ChatPane* pane, QTreeWidgetItem* item)
 	});
 
 	connect(pane, &ChatPane::linkActivated, this, &HubsView::followLink);
+
+	connect(pane, &ChatPane::attachRequested, this, [this, pane] {
+		attachFile(pane);
+	});
+}
+
+void Qdc::HubsView::attachFile(ChatPane* pane)
+{
+	if (!pane) return;
+
+	if (!m_media) m_media = new MediaBridge(m_thread, this);
+
+	const QString chosen = QFileDialog::getOpenFileName(this, tr("Attach a file"));
+	if (chosen.isEmpty()) return;
+
+	/*
+	 * Hashing reads the whole file, so the answer comes back later. The connection is
+	 * made for this one attachment and taken down again with it: several may be waiting
+	 * at once, and each belongs to the conversation that asked.
+	 */
+	const QPointer<ChatPane> waiting(pane);
+
+	auto* ready = new QObject(this);
+
+	connect(m_media, &MediaBridge::attached, ready,
+	        [this, waiting, chosen, ready](const QString& path, const QString& tth,
+	                                       quint64 size) {
+		if (path != chosen) return;
+
+		if (waiting)
+		{
+			RichText::Attachment file;
+			file.tth = tth;
+			file.name = QFileInfo(path).fileName();
+			file.size = size;
+
+			waiting->insertAttachment(file);
+		}
+
+		ready->deleteLater();
+	});
+
+	connect(m_media, &MediaBridge::attachFailed, ready,
+	        [this, waiting, chosen, ready](const QString& path, const QString& reason) {
+		if (path != chosen) return;
+
+		if (waiting) waiting->postNotice(reason);
+		ready->deleteLater();
+	});
+
+	m_media->attach(chosen);
 }
 
 void Qdc::HubsView::followLink(const QUrl& url)
 {
 	/* Nothing else may be followed, whatever a message claimed. */
 	if (!RichText::isLinkable(url)) return;
+
+	/*
+	 * A file somebody offered. Handled before anything else, because handing a magnet to
+	 * the desktop would open whatever else on this machine claims the scheme - and the
+	 * file is on the hub, not on the web.
+	 */
+	if (const RichText::Attachment file = RichText::readMagnet(url); file.isValid())
+	{
+		if (!m_transfers)
+		{
+			QMessageBox::information(this, tr("Download"),
+				tr("'%1' cannot be downloaded: there is no transfer manager.")
+					.arg(file.name));
+			return;
+		}
+
+		/*
+		 * Into the download directory under the name the sender gave, which readMagnet()
+		 * has already reduced to a name. The queue finds somebody who has the hash the
+		 * same way it does for a file chosen from a file list.
+		 */
+		const QString target = downloadDirectory() + QLatin1Char('/') + file.name;
+		m_transfers->enqueue(target, file.tth, file.size);
+		return;
+	}
 
 	if (RichText::isHubUrl(url))
 	{

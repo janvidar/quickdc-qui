@@ -5,6 +5,8 @@
 #include "richtext.h"
 
 #include <QFontDatabase>
+#include <QFileInfo>
+#include <QUrlQuery>
 #include <QRegularExpression>
 #include <QStringList>
 #include <QTextBlock>
@@ -232,6 +234,35 @@ QString wrap_link(const QString& label, const QUrl& url, Mode mode,
  * links and emphasis has to be decided at each position, and a code span has to swallow
  * whatever is inside it without the other rules getting a look.
  */
+/**
+ * Draw an attachment as a chip: what the file is called, and how big it is.
+ *
+ * A hash is not something anybody can read, so the link's own text is never shown. The
+ * name comes from the URI and the size beside it is what tells somebody whether they
+ * want it - which is the whole decision, since nothing has been fetched yet.
+ */
+QString chip_for(const Qdc::RichText::Attachment& file, const QUrl& url, Mode mode,
+                 const Qdc::RichText::RenderColours& colours)
+{
+	const QString size = file.size > 0
+		? Qdc::RichText::describeSize(file.size) : QStringLiteral("size unknown");
+
+	if (mode == Mode::Plain)
+		return QStringLiteral("%1 (%2)").arg(file.name, size);
+
+	/*
+	 * An anchor, so a click reaches the feed the same way any other link does, and the
+	 * only thing that has to know a magnet from a web address is whoever follows it.
+	 */
+	return QStringLiteral(
+		"<a href=\"%1\" style=\"color:%2; text-decoration:none\">"
+		"<span style=\"background-color:%3; color:%2\">"
+		"&nbsp;\U0001F4C4&nbsp;%4&nbsp;&middot;&nbsp;%5&nbsp;</span></a>")
+		.arg(url.toString(QUrl::FullyEncoded).toHtmlEscaped(),
+		     colours.chip.name(), colours.chipBack.name(),
+		     file.name.toHtmlEscaped(), size.toHtmlEscaped());
+}
+
 QString scan_inline(const QString& text, Mode mode,
                     const Qdc::RichText::RenderColours& colours)
 {
@@ -293,9 +324,18 @@ QString scan_inline(const QString& text, Mode mode,
 			}
 		}
 
-		if (c == QLatin1Char('['))
+		/*
+		 * "![alt](...)" is the sender asking for the media to be shown in the message
+		 * rather than offered as a file. Nothing is fetched here - a chip is drawn until
+		 * somebody asks for it - so the two forms differ only in what the sender meant.
+		 */
+		const bool media = (c == QLatin1Char('!') && i + 1 < n
+		                    && text.at(i + 1) == QLatin1Char('['));
+
+		if (c == QLatin1Char('[') || media)
 		{
-			const int close = text.indexOf(QLatin1Char(']'), i + 1);
+			const int opens = media ? i + 1 : i;
+			const int close = text.indexOf(QLatin1Char(']'), opens + 1);
 
 			if (close > 0 && close + 1 < n
 			    && text.at(close + 1) == QLatin1Char('('))
@@ -304,11 +344,22 @@ QString scan_inline(const QString& text, Mode mode,
 
 				if (stop > 0)
 				{
-					const QString label = text.mid(i + 1, close - i - 1);
+					const QString label = text.mid(opens + 1, close - opens - 1);
 					const QUrl url(text.mid(close + 2, stop - close - 2).trimmed(),
 					               QUrl::StrictMode);
 
-					if (Qdc::RichText::isLinkable(url))
+					const Qdc::RichText::Attachment file =
+						Qdc::RichText::readMagnet(url);
+
+					if (file.isValid())
+					{
+						flush();
+						out += chip_for(file, url, mode, colours);
+						i = stop + 1;
+						continue;
+					}
+
+					if (!media && Qdc::RichText::isLinkable(url))
 					{
 						flush();
 						out += wrap_link(scan_inline(label, mode, colours), url, mode,
@@ -666,10 +717,110 @@ QString Qdc::RichText::monospaceFamily()
 
 bool Qdc::RichText::isLinkable(const QUrl& url)
 {
-	if (!url.isValid() || url.host().isEmpty()) return false;
+	if (!url.isValid()) return false;
 
 	const QString scheme = url.scheme().toLower();
+
+	/*
+	 * A magnet names a file by its hash and has no host to check, so it is judged by
+	 * whether the hash is there and of the right shape. One without a usable hash is
+	 * not a link at all: there would be nothing to ask anybody for.
+	 */
+	if (scheme == QStringLiteral("magnet")) return readMagnet(url).isValid();
+
+	if (url.host().isEmpty()) return false;
+
 	return external_schemes().contains(scheme) || hub_schemes().contains(scheme);
+}
+
+Qdc::RichText::Attachment Qdc::RichText::readMagnet(const QUrl& url)
+{
+	Attachment file;
+
+	if (url.scheme().toLower() != QStringLiteral("magnet")) return file;
+
+	/*
+	 * The query is read with the delimiters magnet uses. QUrl::query() would otherwise
+	 * hand back the whole thing for us to split by hand.
+	 */
+	const QUrlQuery query(url.query(QUrl::FullyDecoded));
+
+	for (const auto& [key, value] : query.queryItems(QUrl::FullyDecoded))
+	{
+		if (key.compare(QStringLiteral("xt"), Qt::CaseInsensitive) == 0)
+		{
+			static const QString prefix = QStringLiteral("urn:tree:tiger:");
+
+			if (value.startsWith(prefix, Qt::CaseInsensitive))
+				file.tth = value.mid(prefix.size()).trimmed().toUpper();
+		}
+		else if (key.compare(QStringLiteral("dn"), Qt::CaseInsensitive) == 0)
+		{
+			/*
+			 * Taken as a name and never as a path: a sender does not get to say where
+			 * anything lands, and "../" in a display name is somebody trying to.
+			 */
+			file.name = QFileInfo(value).fileName().trimmed();
+		}
+		else if (key.compare(QStringLiteral("xl"), Qt::CaseInsensitive) == 0)
+		{
+			bool number = false;
+			const quint64 size = value.toULongLong(&number);
+			if (number) file.size = size;
+		}
+	}
+
+	/*
+	 * A tiger tree root is 39 base32 characters. Checked rather than assumed, because
+	 * this value is about to be handed to a search and a transfer.
+	 */
+	static const QRegularExpression base32(QStringLiteral("^[A-Z2-7]{39}$"));
+	if (!base32.match(file.tth).hasMatch()) file.tth.clear();
+
+	if (file.name.isEmpty()) file.name = file.tth;
+
+	return file;
+}
+
+QString Qdc::RichText::writeMagnet(const Attachment& file)
+{
+	if (!file.isValid()) return QString();
+
+	QUrlQuery query;
+	query.addQueryItem(QStringLiteral("xt"),
+	                   QStringLiteral("urn:tree:tiger:") + file.tth);
+
+	if (!file.name.isEmpty()) query.addQueryItem(QStringLiteral("dn"), file.name);
+	if (file.size > 0)
+		query.addQueryItem(QStringLiteral("xl"), QString::number(file.size));
+
+	QUrl url;
+	url.setScheme(QStringLiteral("magnet"));
+	url.setQuery(query);
+
+	return url.toString(QUrl::FullyEncoded);
+}
+
+QString Qdc::RichText::describeSize(quint64 bytes)
+{
+	static const QStringList units = {
+		QStringLiteral("bytes"), QStringLiteral("KiB"), QStringLiteral("MiB"),
+		QStringLiteral("GiB"), QStringLiteral("TiB")
+	};
+
+	double size = static_cast<double>(bytes);
+	int unit = 0;
+
+	while (size >= 1024.0 && unit + 1 < units.size())
+	{
+		size /= 1024.0;
+		++unit;
+	}
+
+	/* Whole bytes, and one decimal above that: "700 bytes", "1.0 MiB". */
+	return unit == 0
+		? QStringLiteral("%1 %2").arg(bytes).arg(units.at(unit))
+		: QStringLiteral("%1 %2").arg(size, 0, 'f', 1).arg(units.at(unit));
 }
 
 bool Qdc::RichText::isHubUrl(const QUrl& url)

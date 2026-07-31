@@ -26,6 +26,7 @@ namespace Qdc {
 class ChatPane;
 class ConfigBridge;
 class CoreThread;
+class MediaBridge;
 class DmPane;
 class Favourites;
 class FilelistBridge;
@@ -149,6 +150,15 @@ private:
 	 */
 	void followLink(const QUrl& url);
 
+	/**
+	 * Ask for a file, offer it, and put it in the message that asked.
+	 *
+	 * The pane is remembered until the hashing finishes, which may be a while for a
+	 * large file, and the link goes into that conversation even if another is on screen
+	 * by then.
+	 */
+	void attachFile(ChatPane* pane);
+
 	void showPane(ChatPane* pane);
 
 	/** Sum every pane's unread count into the rail badge. */
@@ -171,6 +181,10 @@ private:
 	FilelistBridge* m_filelists;
 	TransferBridge* m_transfers;
 	ConfigBridge* m_config;
+
+	/** Hashes and offers a file somebody attached to a message. Made here, because
+	    attaching is not a per hub thing even though it is asked for in a conversation. */
+	MediaBridge* m_media = nullptr;
 
 	QSplitter* m_split;
 	QTreeWidget* m_tree;

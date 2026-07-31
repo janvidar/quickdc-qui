@@ -115,6 +115,15 @@ public:
 	void setRichTextEnabled(bool enabled);
 	bool isRichTextEnabled() const;
 
+	/**
+	 * Put a file somebody chose into the message, as a link to its hash.
+	 *
+	 * The document holds an ordinary anchor whose target is the magnet URI, so it
+	 * serializes as a markdown link and needs no special case on the way out. Only the
+	 * name is shown: a hash is not something anybody reads.
+	 */
+	void insertAttachment(const RichText::Attachment& file);
+
 	void clear();
 	void focusInput();
 
@@ -125,6 +134,15 @@ signals:
 	 * @param richText the text is markdown and the message should say so.
 	 */
 	void sendRequested(const QString& message, bool richText);
+
+	/**
+	 * Somebody wants to attach a file.
+	 *
+	 * Only asked for here. Choosing the file, hashing it and offering it to the hub all
+	 * belong to whoever owns the connection, and the answer comes back through
+	 * insertAttachment().
+	 */
+	void attachRequested();
 
 private:
 	/** Apply or lift a character format across the selection, or the word under it. */
@@ -180,6 +198,7 @@ private:
 	QToolButton* m_code;
 	QToolButton* m_quote;
 	QToolButton* m_codeBlock;
+	QToolButton* m_attach;
 	QToolButton* m_bullets;
 	QToolButton* m_numbers;
 	QToolButton* m_link;

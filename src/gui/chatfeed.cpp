@@ -56,6 +56,9 @@ Qdc::RichText::RenderColours markup_colours()
 	colours.quoteBar = current.border;
 	colours.link = current.accent;
 
+	colours.chip = current.contentText;
+	colours.chipBack = current.contentAlt;
+
 	return colours;
 }
 

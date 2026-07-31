@@ -7,6 +7,8 @@
 
 #include <core/coretypes.h>
 
+#include "richtext.h"
+
 #include <QWidget>
 
 class QSplitter;
@@ -59,6 +61,9 @@ public:
 	/** A note from the client rather than from the hub: an error, a status. */
 	void postNotice(const QString& text);
 
+	/** Put a chosen file into the message being written; see Composer. */
+	void insertAttachment(const RichText::Attachment& file);
+
 signals:
 	void unreadChanged(int count);
 
@@ -67,6 +72,14 @@ signals:
 
 	/** A link in a message was clicked; see ChatFeed::linkActivated(). */
 	void linkActivated(const QUrl& url);
+
+	/**
+	 * Somebody pressed the attach button in this conversation.
+	 *
+	 * Which file, and what has to happen to it before it can be named in a message, is
+	 * decided by whoever owns the connections - see HubsView.
+	 */
+	void attachRequested();
 
 protected:
 	/**

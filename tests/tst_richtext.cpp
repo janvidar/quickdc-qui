@@ -31,6 +31,7 @@ private slots:
 	void literalMarkersSurviveAFormattedMessage();
 	void codeSpansContainingBackticksSurvive();
 	void linksRoundTripAndAreScopedToKnownSchemes();
+	void magnetAttachmentsBecomeChips();
 	void bareUrlsAreLinkedWithoutTrailingPunctuation();
 	void remoteTextCannotInjectMarkup();
 	void plainRenderingKeepsLineBreaksAndMarkers();
@@ -507,6 +508,73 @@ void TestRichText::linksRoundTripAndAreScopedToKnownSchemes()
 		QStringLiteral("[click](javascript:alert(1))"), options());
 	QVERIFY(!hostile.contains(QStringLiteral("<a ")));
 	QVERIFY(hostile.contains(QStringLiteral("javascript")));
+}
+
+void TestRichText::magnetAttachmentsBecomeChips()
+{
+	const QString tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
+
+	Qdc::RichText::Attachment made;
+	made.tth = tth;
+	made.name = QStringLiteral("notes.pdf");
+	made.size = 1048576;
+
+	const QString uri = Qdc::RichText::writeMagnet(made);
+	QVERIFY2(uri.startsWith(QStringLiteral("magnet:?")), qPrintable(uri));
+
+	/* And back again, with nothing lost on the way. */
+	const Qdc::RichText::Attachment read = Qdc::RichText::readMagnet(QUrl(uri));
+	QVERIFY(read.isValid());
+	QCOMPARE(read.tth, tth);
+	QCOMPARE(read.name, QStringLiteral("notes.pdf"));
+	QCOMPARE(read.size, 1048576u);
+
+	/* A magnet is linkable although it has no host at all; nonsense in one is not. */
+	QVERIFY(Qdc::RichText::isLinkable(QUrl(uri)));
+	QVERIFY(!Qdc::RichText::isLinkable(
+		QUrl(QStringLiteral("magnet:?xt=urn:sha1:nothing&dn=x"))));
+	QVERIFY(!Qdc::RichText::isLinkable(QUrl(QStringLiteral("magnet:?dn=nameless"))));
+
+	const QString html = Qdc::RichText::renderMarkdown(
+		QStringLiteral("here: [notes.pdf](%1)").arg(uri), options());
+
+	/*
+	 * The chip says what the file is and how big it is. The hash is not shown - nobody
+	 * can read one - but it is what the anchor carries, so a click knows what to ask for.
+	 */
+	QVERIFY2(html.contains(QStringLiteral("notes.pdf")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("1.0 MiB")), qPrintable(html));
+	QVERIFY2(html.contains(tth), qPrintable(html));
+
+	/* The image form is the same file offered for showing, and renders as a chip too
+	   until somebody asks for it. */
+	const QString shown = Qdc::RichText::renderMarkdown(
+		QStringLiteral("![a diagram](%1)").arg(uri), options());
+
+	QVERIFY2(shown.contains(QStringLiteral("notes.pdf")), qPrintable(shown));
+	QVERIFY2(!shown.contains(QStringLiteral("![")), qPrintable(shown));
+
+	/* Stripped of markup it still reads as a file somebody offered. */
+	QCOMPARE(Qdc::RichText::toPlainText(
+		QStringLiteral("[notes.pdf](%1)").arg(uri)),
+		QStringLiteral("notes.pdf (1.0 MiB)"));
+
+	QCOMPARE(Qdc::RichText::describeSize(0), QStringLiteral("0 bytes"));
+	QCOMPARE(Qdc::RichText::describeSize(700), QStringLiteral("700 bytes"));
+	QCOMPARE(Qdc::RichText::describeSize(1024), QStringLiteral("1.0 KiB"));
+	QCOMPARE(Qdc::RichText::describeSize(3ull * 1024 * 1024 * 1024),
+	         QStringLiteral("3.0 GiB"));
+
+	/*
+	 * A display name is a name and never a path: a sender who writes one is trying to
+	 * choose where the file lands, which is not theirs to choose.
+	 */
+	const Qdc::RichText::Attachment sneaky = Qdc::RichText::readMagnet(
+		QUrl(QStringLiteral("magnet:?xt=urn:tree:tiger:%1&dn=../../.ssh/authorized_keys")
+			.arg(tth)));
+
+	QVERIFY(sneaky.isValid());
+	QCOMPARE(sneaky.name, QStringLiteral("authorized_keys"));
 }
 
 void TestRichText::bareUrlsAreLinkedWithoutTrailingPunctuation()

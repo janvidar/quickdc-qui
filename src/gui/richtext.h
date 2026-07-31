@@ -7,6 +7,7 @@
 
 #include <QColor>
 #include <QString>
+#include <QtTypes>
 #include <QUrl>
 
 class QTextDocument;
@@ -53,6 +54,49 @@ bool isLinkable(const QUrl& url);
 
 /** A hub address, which QuickDC opens itself rather than handing to the desktop. */
 bool isHubUrl(const QUrl& url);
+
+/**
+ * A file offered in a message, named by its hash rather than by where it is.
+ *
+ * The wire form is an ADC magnet URI, which is what lets a message point at a file
+ * without anybody having to agree on a location for it:
+ *
+ *     [notes.pdf](magnet:?xt=urn:tree:tiger:VN6...&dn=notes.pdf&xl=1048576)
+ *
+ * The hash is the whole address. Whoever has the file answers a search for that hash,
+ * and until somebody asks, nothing has been transferred.
+ */
+struct Attachment {
+	/** Tiger tree root, base32, as it appears in the URI. Empty if there was none. */
+	QString tth;
+
+	/** The name to show, from 'dn'. Never a path: a sender does not choose where a
+	    file lands here. */
+	QString name;
+
+	/** Bytes, from 'xl'. Zero when the sender left it out. */
+	quint64 size = 0;
+
+	/** Whether the sender meant it to be shown in the message rather than offered. */
+	bool inlineMedia = false;
+
+	bool isValid() const { return !tth.isEmpty(); }
+};
+
+/**
+ * Read a magnet URI, or return something isValid() says no to.
+ *
+ * Only the three parameters a chat attachment needs are read - xt, dn and xl - and only
+ * a tiger tree hash of the right shape is accepted. Anything else in the URI is ignored
+ * rather than trusted.
+ */
+Attachment readMagnet(const QUrl& url);
+
+/** A magnet URI for a file, as a message carries it. */
+QString writeMagnet(const Attachment& file);
+
+/** A file size for a person to read: "1.0 MiB", not "1048576". */
+QString describeSize(quint64 bytes);
 
 /**
  * The family to set code in.
@@ -118,6 +162,10 @@ struct RenderColours {
 	QColor quote;      /**< Ink for a quoted line. */
 	QColor quoteBar;   /**< The rule down its left edge. */
 	QColor link;
+
+	/** The chip an attachment is drawn as. */
+	QColor chip;
+	QColor chipBack;
 };
 
 /**

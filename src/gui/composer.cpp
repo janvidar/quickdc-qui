@@ -322,6 +322,7 @@ Qdc::Composer::Composer(QWidget* parent)
 	, m_code(makeFormatButton(tr("< >"), tr("Code"), false, false, true))
 	, m_quote(makeFormatButton(tr("❝"), tr("Quote"), false, false, false))
 	, m_codeBlock(makeFormatButton(tr("≣"), tr("Code block"), false, false, true))
+	, m_attach(makeFormatButton(tr("📎"), tr("Attach a file"), false, false, false))
 	, m_bullets(makeFormatButton(tr("•"), tr("Bulleted list"), false, false, false))
 	, m_numbers(makeFormatButton(tr("1."), tr("Numbered list"), false, false, false))
 	, m_link(makeFormatButton(tr("🔗"), tr("Link"), false, false, false))
@@ -332,8 +333,12 @@ Qdc::Composer::Composer(QWidget* parent)
 	bar->setContentsMargins(0, 0, 0, 0);
 	bar->setSpacing(2);
 
+	/*
+	 * Attaching belongs with the formatting: a file is offered as a markdown link, so it
+	 * can only be sent where a message may say it is markdown at all.
+	 */
 	m_formatButtons = {m_bold, m_italic, m_code, m_quote, m_codeBlock,
-	                   m_bullets, m_numbers, m_link};
+	                   m_bullets, m_numbers, m_link, m_attach};
 
 	/*
 	 * Checkable, because each one reports whether its formatting is in force where the
@@ -341,6 +346,7 @@ Qdc::Composer::Composer(QWidget* parent)
 	 */
 	for (QToolButton* button : m_formatButtons) button->setCheckable(true);
 	m_link->setCheckable(false);
+	m_attach->setCheckable(false);
 
 	connect(m_bold, &QToolButton::clicked, this, &Composer::toggleBold);
 	connect(m_italic, &QToolButton::clicked, this, &Composer::toggleItalic);
@@ -358,6 +364,7 @@ Qdc::Composer::Composer(QWidget* parent)
 		toggleList(RichText::Number);
 	});
 	connect(m_link, &QToolButton::clicked, this, &Composer::insertLink);
+	connect(m_attach, &QToolButton::clicked, this, &Composer::attachRequested);
 
 	connect(m_edit, &QTextEdit::cursorPositionChanged,
 	        this, &Composer::refreshFormatState);
@@ -767,6 +774,34 @@ void Qdc::Composer::flattenDocument()
 	cursor.endEditBlock();
 
 	m_edit->setCurrentCharFormat(QTextCharFormat());
+}
+
+void Qdc::Composer::insertAttachment(const RichText::Attachment& file)
+{
+	if (!file.isValid()) return;
+
+	QTextCursor cursor = m_edit->textCursor();
+
+	QTextCharFormat format;
+	format.setAnchor(true);
+	format.setAnchorHref(RichText::writeMagnet(file));
+	format.setFontUnderline(true);
+
+	/* Its own words, so the link reads as the file rather than as whatever was selected
+	   when the button was pressed. */
+	cursor.clearSelection();
+	cursor.insertText(file.name, format);
+
+	QTextCharFormat plain;
+	plain.setAnchor(false);
+	plain.setAnchorHref(QString());
+	plain.setFontUnderline(false);
+
+	cursor.insertText(QStringLiteral(" "), plain);
+
+	m_edit->setTextCursor(cursor);
+	m_edit->setCurrentCharFormat(plain);
+	m_edit->setFocus(Qt::OtherFocusReason);
 }
 
 void Qdc::Composer::refreshFormatState()

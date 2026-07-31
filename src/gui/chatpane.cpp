@@ -62,6 +62,7 @@ Qdc::ChatPane::ChatPane(HubBridge* hub, QWidget* parent)
 
 	connect(m_composer, &Composer::sendRequested, this, &ChatPane::sendMessage);
 	connect(m_feed, &ChatFeed::linkActivated, this, &ChatPane::linkActivated);
+	connect(m_composer, &Composer::attachRequested, this, &ChatPane::attachRequested);
 	connect(m_header, &HubHeader::closeRequested, this, &ChatPane::closeRequested);
 
 	/*
@@ -87,6 +88,11 @@ Qdc::HubBridge* Qdc::ChatPane::hub() const
 Qdc::HubHeader* Qdc::ChatPane::header() const
 {
 	return m_header;
+}
+
+void Qdc::ChatPane::insertAttachment(const RichText::Attachment& file)
+{
+	m_composer->insertAttachment(file);
 }
 
 QTabWidget* Qdc::ChatPane::tabs() const
