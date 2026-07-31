@@ -345,14 +345,21 @@ void Qdc::HubsView::route(Entry& entry, const ChatMessage& message)
 
 		/*
 		 * An echo of something we sent names us as the sender, so the context is
-		 * the only reliable identity for the conversation.
+		 * the only reliable identity for the conversation. Whoever it names is
+		 * looked up among the people on the hub, since all the context carries is
+		 * an id - on ADC a session id, which is no kind of title for a window.
 		 */
 		if (user.id != context)
 		{
-			user = UserInfo();
-			user.id = context;
-			user.nick = context;
-			user.sourceId = context;
+			user = entry.pane->users()->byId(context);
+
+			if (user.id.isEmpty())
+			{
+				user = UserInfo();
+				user.id = context;
+				user.nick = context;
+				user.sourceId = context;
+			}
 		}
 
 		pane = openDm(entry, user);

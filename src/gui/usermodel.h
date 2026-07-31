@@ -66,6 +66,14 @@ public:
 	/** An empty record if there is no such row. */
 	UserInfo at(int row) const;
 
+	/**
+	 * By the id the core knows them by. An empty record if nobody here has it.
+	 *
+	 * For naming a conversation opened by a message rather than by picking
+	 * someone out of the list, where all that arrives is the id.
+	 */
+	UserInfo byId(const QString& id) const;
+
 	/** For the composer's mention completion, in displayed order. */
 	QStringList nicknames() const;
 

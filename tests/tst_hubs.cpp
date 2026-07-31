@@ -12,6 +12,7 @@
 #include <gui/chatpane.h>
 #include <gui/composer.h>
 #include <gui/filelistview.h>
+#include <gui/hubpane.h>
 #include <gui/hubsview.h>
 #include <gui/usermodel.h>
 
@@ -60,6 +61,7 @@ private slots:
 	void unreadCountsReachTheRailBadge();
 	void hubPasswordIsAskedForOnce();
 	void nothingCanBeSentUntilTheHubHasLoggedUsIn();
+	void anEchoOfOurOwnPrivateMessageOpensTheirConversation();
 
 private:
 	Qdc::UserInfo user(const QString& nick, bool op = false) const;
@@ -735,6 +737,52 @@ void TestHubs::nothingCanBeSentUntilTheHubHasLoggedUsIn()
 	/* And shuts again when the hub goes away. */
 	emit bridge->netStatusChanged(Qdc::NetStatus::Disconnected);
 	QVERIFY(!composer->isSendable());
+}
+
+void TestHubs::anEchoOfOurOwnPrivateMessageOpensTheirConversation()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("dchub://192.0.2.1:411")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	Qdc::HubBridge* bridge = pane->hub();
+	QVERIFY(bridge);
+
+	emit bridge->userUpdated(user(QStringLiteral("bob")));
+	QCOMPARE(hubs.paneCount(), 1);
+
+	/*
+	 * A private message of ours, echoed back by the hub: we are named as the
+	 * sender, and only the context says who it was addressed to. It belongs in a
+	 * conversation with them - filing it under the sender puts our own messages
+	 * in a conversation with ourselves.
+	 */
+	Qdc::ChatMessage echoed;
+	echoed.from = user(QStringLiteral("me"));
+	echoed.context = QStringLiteral("bob");
+	echoed.privateMessage = true;
+	echoed.text = QStringLiteral("hello bob");
+	emit bridge->chatReceived(echoed);
+
+	QCOMPARE(hubs.paneCount(), 2);
+
+	const QList<Qdc::DmPane*> conversations = hubs.findChildren<Qdc::DmPane*>();
+	QCOMPARE(conversations.size(), 1);
+
+	/* Named for them, not for their id - the context carries only the id. */
+	QCOMPARE(conversations.first()->paneTitle(), QStringLiteral("bob"));
+
+	/* And their reply joins it rather than starting a second. */
+	Qdc::ChatMessage reply;
+	reply.from = user(QStringLiteral("bob"));
+	reply.context = QStringLiteral("bob");
+	reply.privateMessage = true;
+	reply.text = QStringLiteral("hi back");
+	emit bridge->chatReceived(reply);
+
+	QCOMPARE(hubs.paneCount(), 2);
 }
 
 #include "tst_hubs.moc"

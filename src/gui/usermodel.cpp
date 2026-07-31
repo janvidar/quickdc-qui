@@ -269,6 +269,14 @@ Qdc::UserInfo Qdc::UserModel::at(int row) const
 	return m_users.at(row);
 }
 
+Qdc::UserInfo Qdc::UserModel::byId(const QString& id) const
+{
+	const auto found = m_rows.constFind(id);
+	if (found == m_rows.constEnd()) return UserInfo();
+
+	return at(found.value());
+}
+
 QStringList Qdc::UserModel::nicknames() const
 {
 	QStringList names;
