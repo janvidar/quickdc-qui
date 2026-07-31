@@ -906,8 +906,14 @@ QString Qdc::HubsView::localFileFor(const QString& tth) const
 
 	if (path.isEmpty()) return QString();
 
+	/*
+	 * Resolved before it is used: a completed download is recorded under the name it was
+	 * configured with, tilde and all, and nothing in Qt expands that.
+	 */
+	const QString here = FileActions::resolve(path);
+
 	/* A record is not the file: it may have been moved or deleted since. */
-	return QFileInfo(path).isFile() ? path : QString();
+	return QFileInfo(here).isFile() ? here : QString();
 }
 
 QString Qdc::HubsView::downloadDirectory() const

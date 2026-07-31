@@ -46,6 +46,7 @@ private slots:
 	void completedStoreIgnoresAnImmediateRepeat();
 
 	void viewShowsQueueContents();
+	void aRecordedNameReachesTheFileItNames();
 
 private:
 	/** Ask the bridge for fresh figures and wait for them; see the comment there. */
@@ -499,6 +500,40 @@ void TestTransfers::viewShowsQueueContents()
 	QTRY_COMPARE(view.queueRowCount(), 0);
 
 	completed.clear();
+}
+
+void TestTransfers::aRecordedNameReachesTheFileItNames()
+{
+	/*
+	 * The core records a download under the name it was configured with, and the default
+	 * download directory begins with a tilde. Every action on a finished download - open
+	 * it, show it, delete it, and deciding whether a picture in chat can be drawn - goes
+	 * through here, and all of them answered no for as long as the tilde was passed to Qt
+	 * unexpanded.
+	 */
+	QCOMPARE(Qdc::FileActions::resolve(QStringLiteral("~")), QDir::homePath());
+	QCOMPARE(Qdc::FileActions::resolve(QStringLiteral("~/.quickdc/downloads/film.mkv")),
+	         QDir::homePath() + QStringLiteral("/.quickdc/downloads/film.mkv"));
+
+	/* An absolute path is already where it says it is. */
+	QCOMPARE(Qdc::FileActions::resolve(QStringLiteral("/tmp/film.mkv")),
+	         QStringLiteral("/tmp/film.mkv"));
+
+	/* A tilde inside a name is part of the name, not a home directory. */
+	QCOMPARE(Qdc::FileActions::resolve(QStringLiteral("/tmp/~backup")),
+	         QStringLiteral("/tmp/~backup"));
+
+	QCOMPARE(Qdc::FileActions::resolve(QString()), QString());
+
+	/* And a real file is found through the tilde form. */
+	const QString made = scratch(QStringLiteral("recorded.bin"));
+	QFile file(made);
+	QVERIFY(file.open(QIODevice::WriteOnly));
+	file.write("here");
+	file.close();
+
+	QVERIFY(Qdc::FileActions::exists(made));
+	QVERIFY(!Qdc::FileActions::exists(QStringLiteral("~/.quickdc/nothing-here.bin")));
 }
 
 QTEST_MAIN(TestTransfers)

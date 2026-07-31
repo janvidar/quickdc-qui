@@ -20,6 +20,20 @@ namespace Qdc {
  */
 namespace FileActions {
 
+/**
+ * A recorded filename as an actual path on this machine.
+ *
+ * The core keeps a download's name in the form it was configured with, and the default
+ * download directory is "~/.quickdc/downloads" - so a tilde arrives here unexpanded.
+ * Nothing in Qt expands it: QFileInfo("~/x") describes a relative path in a directory
+ * called "~", so every question about the file answers no and every action on it fails
+ * quietly.
+ *
+ * Only for reaching the file. A name handed back to the core - to identify a queue entry,
+ * say - must be passed on exactly as it came.
+ */
+QString resolve(const QString& path);
+
 /** @return false if the file is gone, or nothing would open it. */
 bool open(const QString& path);
 

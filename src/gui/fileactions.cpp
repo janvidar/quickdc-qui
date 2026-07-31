@@ -10,28 +10,36 @@
 #include <QProcess>
 #include <QUrl>
 
+QString Qdc::FileActions::resolve(const QString& path)
+{
+	if (path == QStringLiteral("~")) return QDir::homePath();
+	if (!path.startsWith(QStringLiteral("~/"))) return path;
+
+	return QDir::homePath() + path.mid(1);
+}
+
 bool Qdc::FileActions::exists(const QString& path)
 {
-	return !path.isEmpty() && QFileInfo::exists(path);
+	return !path.isEmpty() && QFileInfo::exists(resolve(path));
 }
 
 bool Qdc::FileActions::open(const QString& path)
 {
 	if (!exists(path)) return false;
-	return QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+	return QDesktopServices::openUrl(QUrl::fromLocalFile(resolve(path)));
 }
 
 bool Qdc::FileActions::remove(const QString& path)
 {
 	if (!exists(path)) return false;
-	return QFile::remove(path);
+	return QFile::remove(resolve(path));
 }
 
 bool Qdc::FileActions::reveal(const QString& path)
 {
 	if (!exists(path)) return false;
 
-	const QFileInfo info(path);
+	const QFileInfo info(resolve(path));
 
 #if defined(Q_OS_MACOS)
 	/*

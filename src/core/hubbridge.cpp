@@ -645,11 +645,24 @@ void Qdc::HubBridge::disconnectFromHub()
 	m_thread->post([this] { m_session->disconnect(); });
 }
 
+QString Qdc::HubBridge::textForHub(const QString& message, bool richText)
+{
+	if (!richText || message.isEmpty()) return message;
+
+	/* The prefixes hubs actually use. A message beginning with one is a command to
+	   them, whatever it says afterwards. */
+	static const QString prefixes = QStringLiteral("+!");
+
+	if (!prefixes.contains(message.at(0))) return message;
+
+	return QLatin1Char(' ') + message;
+}
+
 void Qdc::HubBridge::sendChat(const QString& message, bool richText)
 {
 	if (!m_session || !m_thread) return;
 
-	const QByteArray utf8 = message.toUtf8();
+	const QByteArray utf8 = textForHub(message, richText).toUtf8();
 
 	m_thread->post([this, utf8, richText] {
 		m_session->sendChatMessage(utf8.constData(), richText);
@@ -662,7 +675,7 @@ void Qdc::HubBridge::sendPrivateChat(const QString& userId, const QString& messa
 	if (!m_session || !m_thread) return;
 
 	const QByteArray id = userId.toUtf8();
-	const QByteArray utf8 = message.toUtf8();
+	const QByteArray utf8 = textForHub(message, richText).toUtf8();
 
 	m_thread->post([this, id, utf8, richText] {
 		m_session->sendPrivateChat(id.constData(), utf8.constData(), richText);

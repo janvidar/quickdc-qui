@@ -58,6 +58,23 @@ public:
 	static QString normalisedUrl(const QString& url);
 
 	/**
+	 * A message as it has to go on the wire so that no hub reads it as a command.
+	 *
+	 * Hubs take a leading character as a command prefix, answer the sender, and relay
+	 * nothing: '+' is QuickDC's own and '!' is uhub's, among others. Markdown writes a
+	 * picture as "![name](...)", so an image at the start of a message was swallowed by
+	 * the hub with "Command not found" coming back to the sender and nothing at all
+	 * reaching anybody else.
+	 *
+	 * A leading space is the whole fix. It costs nothing to look at - a picture is drawn
+	 * on its own line anyway - and the alternative is a message that never arrives.
+	 *
+	 * Only for markdown. Plain text is left exactly as typed, because somebody who
+	 * begins a plain message with '+' or '!' is addressing the hub on purpose.
+	 */
+	static QString textForHub(const QString& message, bool richText);
+
+	/**
 	 * The address as given. Note that this is not the canonical form the core
 	 * uses internally, which is only known once the session exists.
 	 */
