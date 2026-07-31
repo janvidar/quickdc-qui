@@ -43,16 +43,21 @@ public:
 	~TransferBridge() override;
 
 	/**
-	 * Every transfer in flight, taken in one pass on the core thread.
+	 * Every transfer in flight, as of the last snapshot.
 	 *
-	 * Blocks until that pass completes, which is a job's turn away rather than a
-	 * reactor turn away, so it is fine to call from a repeating timer. Empty if
-	 * the core is not running.
+	 * Returns immediately: these are the figures the core thread last handed over,
+	 * not a fresh reading. Nothing here waits for the core, because the core thread
+	 * is busy for as long as its current turn takes - a transfer moving chunks, a
+	 * hash being collected, a name being looked up - and an interface that waited
+	 * for that stopped drawing for exactly as long.
+	 *
+	 * Ask for new figures with refresh() and draw again when snapshotChanged() says
+	 * they have arrived. Empty until the first snapshot completes.
 	 */
 	QVector<TransferInfo> activeTransfers() const;
 
 	/**
-	 * The download queue, likewise.
+	 * The download queue, from the same snapshot.
 	 *
 	 * Empty both when nothing is queued and when the core was built without a
 	 * queue file, which the lighter constructor allows.
@@ -61,6 +66,14 @@ public:
 
 	/** How many queued files are being fetched from someone right now. */
 	quint32 activeTransferCount() const;
+
+	/**
+	 * Ask the core thread for fresh figures.
+	 *
+	 * Returns at once. One reading is in flight at a time, so calling this from a
+	 * timer faster than the core can answer costs nothing extra.
+	 */
+	void refresh();
 
 public slots:
 	/**
@@ -99,8 +112,18 @@ signals:
 	/**
 	 * The queue gained or lost an entry. Carries nothing: a table wants the whole
 	 * snapshot anyway, and the events arrive in bursts as the queue is processed.
+	 *
+	 * A fresh reading is asked for when this happens, so the figures behind
+	 * queueSnapshot() are updated a moment later - see snapshotChanged().
 	 */
 	void queueChanged();
+
+	/**
+	 * New figures have arrived and the accessors above will report them.
+	 *
+	 * Emitted whether or not anything differs, so a view may simply draw again.
+	 */
+	void snapshotChanged();
 
 	/**
 	 * A download finished, matched its hash, and is now at 'filename'.
@@ -128,6 +151,14 @@ private:
 	/** Owned by the core thread; only touched from a job there. */
 	TransferReporter* m_reporter = nullptr;
 	QueueReporter* m_queueReporter = nullptr;
+
+	/** The last figures the core thread handed over; see activeTransfers(). */
+	QVector<TransferInfo> m_active;
+	QVector<QueueEntry> m_queue;
+	quint32 m_activeCount = 0;
+
+	/** Whether a reading has been asked for and not yet arrived. */
+	bool m_reading = false;
 };
 
 }

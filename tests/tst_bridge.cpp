@@ -10,6 +10,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -35,6 +36,8 @@ private slots:
 
 	void coreIsOnlyReachableFromItsOwnThread();
 	void jobsRunInOrderOnTheCoreThread();
+	void invokeDoesNotWaitForThePollInterval();
+	void snapshotsDoNotWaitForABusyCore();
 	void configRoundTripsThroughTheStore();
 	void configWritesTheFileItWasGiven();
 	void hubBridgeReportsErrorsOnTheCallingThread();
@@ -107,6 +110,73 @@ void TestBridge::jobsRunInOrderOnTheCoreThread()
 	QCOMPARE(order.size(), 8);
 	for (int n = 0; n < 8; ++n)
 		QCOMPARE(order.at(n), n);
+}
+
+void TestBridge::invokeDoesNotWaitForThePollInterval()
+{
+	/*
+	 * The reactor blocks in its poll for a quarter of a second at a time. A job posted
+	 * from another thread is supposed to wake it, so invoke() costs no more than the job
+	 * itself - and every view that asks the core for a snapshot on a timer depends on
+	 * that. Without the wake, each ask blocks the interface for up to a full interval,
+	 * and two such timers are enough to stall it altogether.
+	 */
+	QElapsedTimer timer;
+	timer.start();
+
+	const int rounds = 10;
+
+	for (int n = 0; n < rounds; ++n)
+	{
+		int answered = 0;
+		QVERIFY(m_thread->invoke([&answered] { ++answered; }));
+		QCOMPARE(answered, 1);
+	}
+
+	const qint64 each = timer.elapsed() / rounds;
+
+	qWarning() << "invoke() took" << each << "ms on average over" << rounds << "calls";
+
+	QVERIFY2(each < 50,
+	         qPrintable(QStringLiteral("invoke() averaged %1 ms, which is the reactor's "
+	                                   "poll interval rather than the job's own cost")
+	                    .arg(each)));
+}
+
+void TestBridge::snapshotsDoNotWaitForABusyCore()
+{
+	Qdc::TransferBridge transfers(m_thread, this);
+
+	/*
+	 * The core thread is held for a good while, as it would be by a transfer moving
+	 * chunks or a finished hash being collected. Everything a view asks of the bridge
+	 * has to answer anyway: a view that waited here stopped drawing for as long as the
+	 * core was busy, which is what made the window appear to hang.
+	 */
+	m_thread->post([] { QThread::msleep(1500); });
+
+	QElapsedTimer timer;
+	timer.start();
+
+	const QVector<Qdc::TransferInfo> active = transfers.activeTransfers();
+	const QVector<Qdc::QueueEntry> queued = transfers.queueSnapshot();
+	const quint32 count = transfers.activeTransferCount();
+	transfers.refresh();
+
+	const qint64 spent = timer.elapsed();
+
+	QVERIFY2(spent < 100,
+	         qPrintable(QStringLiteral("asking the bridge took %1 ms while the core was "
+	                                   "busy").arg(spent)));
+
+	/* Whatever it reported, it reported without waiting. */
+	QVERIFY(active.isEmpty());
+	QVERIFY(queued.isEmpty());
+	QCOMPARE(count, 0u);
+
+	/* And the figures do arrive, once the core is free again. */
+	QSignalSpy fresh(&transfers, &Qdc::TransferBridge::snapshotChanged);
+	QVERIFY(fresh.wait(10000));
 }
 
 void TestBridge::configRoundTripsThroughTheStore()

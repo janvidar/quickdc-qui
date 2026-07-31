@@ -197,6 +197,7 @@ private:
 
 		QMetaObject::invokeMethod(bridge, [bridge] {
 			emit bridge->queueChanged();
+			bridge->refresh();
 		}, Qt::QueuedConnection);
 	}
 
@@ -253,61 +254,68 @@ Qdc::TransferBridge::~TransferBridge()
 
 QVector<Qdc::TransferInfo> Qdc::TransferBridge::activeTransfers() const
 {
-	QVector<TransferInfo> transfers;
-	if (!m_thread) return transfers;
-
-	m_thread->invoke([this, &transfers] {
-		QuickDC::Core* core = m_thread->core();
-		if (!core || !core->transfers) return;
-
-		/*
-		 * first()/next() walk one iterator that lives in the manager, so this
-		 * has to run to completion before anything else uses it. On the core
-		 * thread, inside a job, nothing can.
-		 */
-		for (QuickDC::Transfer* transfer = core->transfers->first();
-		     transfer;
-		     transfer = core->transfers->next())
-		{
-			transfers.append(convert(transfer));
-		}
-	});
-
-	return transfers;
+	return m_active;
 }
 
 QVector<Qdc::QueueEntry> Qdc::TransferBridge::queueSnapshot() const
 {
-	QVector<QueueEntry> entries;
-	if (!m_thread) return entries;
-
-	m_thread->invoke([this, &entries] {
-		QuickDC::Core* core = m_thread->core();
-		if (!core || !core->queue) return;
-
-		std::vector<QuickDC::QueueStatus> status;
-		core->queue->getStatus(status);
-
-		entries.reserve(static_cast<qsizetype>(status.size()));
-		for (const QuickDC::QueueStatus& entry : status)
-			entries.append(convert(entry));
-	});
-
-	return entries;
+	return m_queue;
 }
 
 quint32 Qdc::TransferBridge::activeTransferCount() const
 {
-	quint32 count = 0;
-	if (!m_thread) return count;
+	return m_activeCount;
+}
 
-	m_thread->invoke([this, &count] {
+void Qdc::TransferBridge::refresh()
+{
+	if (!m_thread || m_reading) return;
+
+	m_reading = true;
+
+	/*
+	 * Posted rather than waited on. Everything the core is asked for is gathered in
+	 * one pass on its own thread and carried back as plain values, which is the same
+	 * rule every event here follows: copy what the core lent us, then hand the copy
+	 * to the thread that will draw it.
+	 */
+	m_thread->post([this] {
 		QuickDC::Core* core = m_thread->core();
-		if (core && core->queue)
-			count = static_cast<quint32>(core->queue->countActiveTransfers());
-	});
 
-	return count;
+		QVector<TransferInfo> active;
+		QVector<QueueEntry> queued;
+		quint32 count = 0;
+
+		if (core && core->transfers)
+		{
+			for (QuickDC::Transfer* transfer = core->transfers->first(); transfer;
+			     transfer = core->transfers->next())
+			{
+				active.append(convert(transfer));
+			}
+		}
+
+		if (core && core->queue)
+		{
+			std::vector<QuickDC::QueueStatus> status;
+			core->queue->getStatus(status);
+
+			queued.reserve(static_cast<qsizetype>(status.size()));
+			for (const QuickDC::QueueStatus& entry : status)
+				queued.append(convert(entry));
+
+			count = static_cast<quint32>(core->queue->countActiveTransfers());
+		}
+
+		QMetaObject::invokeMethod(this, [this, active, queued, count] {
+			m_active = active;
+			m_queue = queued;
+			m_activeCount = count;
+			m_reading = false;
+
+			emit snapshotChanged();
+		}, Qt::QueuedConnection);
+	});
 }
 
 void Qdc::TransferBridge::setPriority(const QString& filename, Priority priority)

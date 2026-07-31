@@ -156,7 +156,15 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 	});
 
 	m_poll->setInterval(POLL_INTERVAL_MS);
-	connect(m_poll, &QTimer::timeout, this, &TransfersView::refreshActive);
+
+	/*
+	 * The timer asks; the answer arrives on a signal. Reading the figures straight out
+	 * of the core meant waiting for whatever its thread was in the middle of, which
+	 * stopped this window drawing for as long as that took.
+	 */
+	connect(m_poll, &QTimer::timeout, this, [this] {
+		if (m_transfers) m_transfers->refresh();
+	});
 
 	if (m_completed)
 	{
@@ -166,8 +174,11 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 
 	if (m_transfers)
 	{
-		connect(m_transfers, &TransferBridge::queueChanged,
-		        this, &TransfersView::refreshQueue);
+		connect(m_transfers, &TransferBridge::snapshotChanged, this, [this] {
+			refreshQueue();
+			refreshActive();
+			refreshCounters();
+		});
 
 		connect(m_transfers, &TransferBridge::transferStarted, this,
 		        [this](const TransferInfo& transfer) {
@@ -179,7 +190,9 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 		const auto ended = [this](const TransferInfo& transfer) {
 			m_live.remove(transfer.id);
 			refreshCounters();
-			refreshActive();
+
+			/* Asked for rather than read: the figures follow on snapshotChanged(). */
+			if (m_transfers) m_transfers->refresh();
 		};
 
 		connect(m_transfers, &TransferBridge::transferFinished, this, ended);
@@ -247,6 +260,9 @@ int Qdc::TransfersView::completedRowCount() const
 void Qdc::TransfersView::showEvent(QShowEvent* event)
 {
 	View::showEvent(event);
+
+	/* So the tables are not a second out of date the moment they appear. */
+	if (m_transfers) m_transfers->refresh();
 
 	refreshQueue();
 	refreshActive();

@@ -104,7 +104,11 @@ Qdc::HomeView::HomeView(ConfigBridge* config, Favourites* favourites,
 	layout->addWidget(scroll);
 
 	m_poll->setInterval(POLL_INTERVAL_MS);
-	connect(m_poll, &QTimer::timeout, this, &HomeView::refreshActivity);
+
+	/* The timer asks the core for figures; drawing waits for them to arrive. */
+	connect(m_poll, &QTimer::timeout, this, [this] {
+		if (m_transfers) m_transfers->refresh();
+	});
 
 	if (m_favourites)
 	{
@@ -130,6 +134,10 @@ Qdc::HomeView::HomeView(ConfigBridge* config, Favourites* favourites,
 		connect(m_transfers, &TransferBridge::transferStopped,
 		        this, &HomeView::refreshActivity);
 		connect(m_transfers, &TransferBridge::transferError,
+		        this, &HomeView::refreshActivity);
+
+		/* And drawn again whenever fresh figures arrive from the core. */
+		connect(m_transfers, &TransferBridge::snapshotChanged,
 		        this, &HomeView::refreshActivity);
 	}
 
@@ -423,6 +431,8 @@ int Qdc::HomeView::recentCount() const
 void Qdc::HomeView::showEvent(QShowEvent* event)
 {
 	View::showEvent(event);
+
+	if (m_transfers) m_transfers->refresh();
 
 	refresh();
 	m_poll->start();

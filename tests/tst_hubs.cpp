@@ -1639,7 +1639,18 @@ void TestHubs::picturesAreFetchedOnlyWhereThatWasAskedFor()
 		emit hubs.currentPane()->hub()->chatReceived(message);
 	};
 
-	const auto queued = [&transfers] { return transfers.queueSnapshot().size(); };
+	/*
+	 * Asked for and waited for, because the bridge reports the figures it was last given
+	 * rather than reading the core when asked - which is what keeps a view from stalling
+	 * on the core's thread.
+	 */
+	const auto queued = [&transfers] {
+		QSignalSpy fresh(&transfers, &Qdc::TransferBridge::snapshotChanged);
+		transfers.refresh();
+		fresh.wait(5000);
+
+		return transfers.queueSnapshot().size();
+	};
 
 	/*
 	 * Off by default. Fetching means asking a stranger's client for a file the moment

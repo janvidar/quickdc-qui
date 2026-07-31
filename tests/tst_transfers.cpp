@@ -48,6 +48,9 @@ private slots:
 	void viewShowsQueueContents();
 
 private:
+	/** Ask the bridge for fresh figures and wait for them; see the comment there. */
+	QVector<Qdc::QueueEntry> snapshot();
+
 	QString scratch(const QString& name) const;
 
 	QTemporaryDir m_dir;
@@ -85,16 +88,31 @@ void TestTransfers::cleanupTestCase()
 	if (m_thread) m_thread->shutdown();
 }
 
+QVector<Qdc::QueueEntry> TestTransfers::snapshot()
+{
+	/*
+	 * The bridge no longer reads the core when asked - it asks the core thread and
+	 * reports when the answer arrives, so that no view ever waits on the reactor. A
+	 * test therefore asks and waits the same way a view does.
+	 */
+	QSignalSpy fresh(m_transfers, &Qdc::TransferBridge::snapshotChanged);
+
+	m_transfers->refresh();
+	fresh.wait(5000);
+
+	return m_transfers->queueSnapshot();
+}
+
 void TestTransfers::queueRoundTripsThroughTheCore()
 {
-	QVERIFY(m_transfers->queueSnapshot().isEmpty());
+	QVERIFY(snapshot().isEmpty());
 
 	const QString target = scratch(QStringLiteral("film.mkv"));
 	const QString tth = QStringLiteral("MWXFLX5NO4T54FMVTGZ6UXER2QKN6J2IGGL3W7A");
 
 	m_transfers->enqueue(target, tth, 2097152);
 
-	const QVector<Qdc::QueueEntry> entries = m_transfers->queueSnapshot();
+	const QVector<Qdc::QueueEntry> entries = snapshot();
 	QCOMPARE(entries.size(), 1);
 	QCOMPARE(entries.first().filename, target);
 	QCOMPARE(entries.first().tth, tth);
@@ -105,10 +123,10 @@ void TestTransfers::queueRoundTripsThroughTheCore()
 
 	/* The core returns the entry it already has rather than adding a second. */
 	m_transfers->enqueue(target, tth, 2097152);
-	QCOMPARE(m_transfers->queueSnapshot().size(), 1);
+	QCOMPARE(snapshot().size(), 1);
 
 	m_transfers->removeFromQueue(target);
-	QVERIFY(m_transfers->queueSnapshot().isEmpty());
+	QVERIFY(snapshot().isEmpty());
 
 	/* Removing something that is not queued is harmless. */
 	m_transfers->removeFromQueue(target);
@@ -121,18 +139,18 @@ void TestTransfers::queuePriorityIsReadBack()
 	m_transfers->enqueue(target, QStringLiteral("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
 	                     1024);
 
-	QCOMPARE(m_transfers->queueSnapshot().first().priority, Qdc::Priority::Normal);
+	QCOMPARE(snapshot().first().priority, Qdc::Priority::Normal);
 
 	m_transfers->setPriority(target, Qdc::Priority::High);
-	QCOMPARE(m_transfers->queueSnapshot().first().priority, Qdc::Priority::High);
+	QCOMPARE(snapshot().first().priority, Qdc::Priority::High);
 
 	/* Pausing is the bottom of the same scale, not a separate flag. */
 	m_transfers->setPriority(target, Qdc::Priority::Paused);
-	QCOMPARE(m_transfers->queueSnapshot().first().priority, Qdc::Priority::Paused);
+	QCOMPARE(snapshot().first().priority, Qdc::Priority::Paused);
 
 	/* A file that is not queued is ignored rather than added. */
 	m_transfers->setPriority(scratch(QStringLiteral("nothing")), Qdc::Priority::High);
-	QCOMPARE(m_transfers->queueSnapshot().size(), 1);
+	QCOMPARE(snapshot().size(), 1);
 
 	m_transfers->removeFromQueue(target);
 }
@@ -155,7 +173,7 @@ void TestTransfers::removingAnEntryCanKeepOrDeleteThePartialFile()
 	QVERIFY(QFile::exists(partial));
 
 	m_transfers->removeFromQueue(target, false);
-	QVERIFY(m_transfers->queueSnapshot().isEmpty());
+	QVERIFY(snapshot().isEmpty());
 	QVERIFY2(QFile::exists(partial),
 	         "removing an entry must not throw away what was downloaded");
 
@@ -163,7 +181,7 @@ void TestTransfers::removingAnEntryCanKeepOrDeleteThePartialFile()
 	m_transfers->enqueue(target, QStringLiteral("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"), 4096);
 	m_transfers->removeFromQueue(target, true);
 
-	QVERIFY(m_transfers->queueSnapshot().isEmpty());
+	QVERIFY(snapshot().isEmpty());
 	QVERIFY(!QFile::exists(partial));
 }
 
@@ -445,10 +463,17 @@ void TestTransfers::viewShowsQueueContents()
 	Qdc::Completed completed(&config);
 	completed.clear();
 
+	/*
+	 * The tests above leave the queue empty, but the bridge reports the figures it was
+	 * last handed rather than reading the core when asked - so a fresh reading is waited
+	 * for before an empty table means anything.
+	 */
+	QVERIFY(snapshot().isEmpty());
+
 	Qdc::TransfersView view(m_transfers, &completed);
 
 	QCOMPARE(view.currentTab(), 0);
-	QCOMPARE(view.queueRowCount(), 0);
+	QTRY_COMPARE(view.queueRowCount(), 0);
 	QCOMPARE(view.activeRowCount(), 0);
 	QCOMPARE(view.completedRowCount(), 0);
 
