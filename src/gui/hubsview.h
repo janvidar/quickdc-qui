@@ -167,6 +167,16 @@ private:
 	void attachFile(ChatPane* pane);
 
 	/**
+	 * Write a pasted picture down and offer it, as if it had been chosen from disk.
+	 *
+	 * A file is what can be offered - the hash names a file, and a peer asks for one -
+	 * so the clipboard's bytes have to land somewhere first. They go beside the other
+	 * things QuickDC keeps, under a name that says where they came from, and stay there
+	 * for as long as the link in the message might be followed.
+	 */
+	void offerPastedImage(ChatPane* pane, const QByteArray& data, const QString& suffix);
+
+	/**
 	 * Hash a chosen file, offer it, and put a link to it in the conversation that asked.
 	 *
 	 * The pane is held weakly: hashing a large file takes a while, and the conversation

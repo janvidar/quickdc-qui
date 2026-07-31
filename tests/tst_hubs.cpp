@@ -22,6 +22,10 @@
 #include <QApplication>
 #include <QDir>
 #include <QStyleOptionViewItem>
+#include <QBuffer>
+#include <QMimeData>
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QImage>
 #include <QPainter>
 #include <QTextBlock>
@@ -82,6 +86,8 @@ private slots:
 	void emojiPickerGivesEveryEmojiRoomToDraw();
 	void anAttachedFileIsSentAsALinkToItsHash();
 	void aPictureIsSentAsMediaRatherThanAsAFile();
+	void aPastedPictureIsOfferedLikeAChosenFile();
+	void aPastedPictureIsWrittenDownWhereItCanBeServed();
 	void composerFlattensFormattingWhereItCannotBeSent();
 
 	void filelistModelExposesTheTree();
@@ -1050,6 +1056,144 @@ void TestHubs::aPictureIsSentAsMediaRatherThanAsAFile()
 
 	QCOMPARE(sent.count(), 2);
 	QVERIFY(sent.at(1).at(0).toString().startsWith(QStringLiteral("[diagram.png]")));
+}
+
+void TestHubs::aPastedPictureIsOfferedLikeAChosenFile()
+{
+	/*
+	 * Pasted through the clipboard, because that is the path a person uses and
+	 * insertFromMimeData() is not public. Only where the clipboard belongs to this
+	 * application: on a real desktop this would take over the one somebody is using.
+	 */
+	if (QGuiApplication::platformName() != QLatin1String("offscreen"))
+		QSKIP("this uses the clipboard, so it runs only on the offscreen platform");
+
+	Qdc::Composer composer;
+	composer.setRichTextEnabled(true);
+	composer.setSendable(true);
+
+	QSignalSpy pasted(&composer, &Qdc::Composer::imagePasted);
+
+	QTextEdit* edit = composer.findChild<QTextEdit*>();
+	QVERIFY(edit);
+
+	/* A screenshot, as the clipboard would hold one. */
+	QImage shot(40, 30, QImage::Format_RGB32);
+	shot.fill(Qt::darkGreen);
+
+	QByteArray png;
+	QBuffer sink(&png);
+	QVERIFY(sink.open(QIODevice::WriteOnly));
+	QVERIFY(shot.save(&sink, "PNG"));
+	sink.close();
+
+	const auto put = [](QMimeData* what) {
+		/* The clipboard takes ownership. */
+		QGuiApplication::clipboard()->setMimeData(what);
+	};
+
+	QMimeData* asPng = new QMimeData;
+	asPng->setData(QStringLiteral("image/png"), png);
+	put(asPng);
+
+	edit->paste();
+
+	QCOMPARE(pasted.count(), 1);
+
+	/*
+	 * The bytes as the clipboard held them, not re-encoded on the way through: a
+	 * screenshot that went in as PNG comes out byte for byte.
+	 */
+	QCOMPARE(pasted.at(0).at(0).toByteArray(), png);
+	QCOMPARE(pasted.at(0).at(1).toString(), QStringLiteral("png"));
+
+	/* And nothing was typed into the box - a picture is not text. */
+	QCOMPARE(edit->toPlainText(), QString());
+
+	/* A bare image with no recognised form is written out as PNG instead. */
+	QMimeData* bare = new QMimeData;
+	bare->setImageData(shot);
+	put(bare);
+
+	edit->paste();
+
+	QCOMPARE(pasted.count(), 2);
+	QCOMPARE(pasted.at(1).at(1).toString(), QStringLiteral("png"));
+	QVERIFY(!pasted.at(1).at(0).toByteArray().isEmpty());
+
+	/* Text still pastes as text. */
+	QMimeData* words = new QMimeData;
+	words->setText(QStringLiteral("just words"));
+	put(words);
+
+	edit->paste();
+
+	QCOMPARE(pasted.count(), 2);
+	QCOMPARE(edit->toPlainText(), QStringLiteral("just words"));
+
+	/*
+	 * And where a message cannot say it is markdown there is nothing to paste a picture
+	 * into, so it is dropped rather than half-handled.
+	 */
+	composer.setRichTextEnabled(false);
+	QVERIFY(!composer.acceptsMedia());
+
+	QMimeData* again = new QMimeData;
+	again->setData(QStringLiteral("image/png"), png);
+	put(again);
+
+	edit->paste();
+	QCOMPARE(pasted.count(), 2);
+}
+
+void TestHubs::aPastedPictureIsWrittenDownWhereItCanBeServed()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	QImage shot(20, 10, QImage::Format_RGB32);
+	shot.fill(Qt::magenta);
+
+	QByteArray png;
+	QBuffer sink(&png);
+	QVERIFY(sink.open(QIODevice::WriteOnly));
+	QVERIFY(shot.save(&sink, "PNG"));
+	sink.close();
+
+	/*
+	 * Pasted pictures are kept beside the rest of QuickDC's own files, so the home
+	 * directory is pointed at the temporary one for the length of this test rather than
+	 * writing into the home of whoever is running it.
+	 */
+	const QByteArray realHome = qgetenv("HOME");
+	qputenv("HOME", m_dir.path().toUtf8());
+
+	const QString folder = m_dir.path() + QStringLiteral("/.quickdc/media");
+
+	emit pane->imagePasted(png, QStringLiteral("png"));
+
+	qputenv("HOME", realHome);
+
+	/*
+	 * A hash names a file and a peer asks for a file, so the clipboard's bytes have to
+	 * land on disk before anything can be offered - and stay there for as long as the
+	 * link in the message might be followed.
+	 */
+	const QStringList written = QDir(folder).entryList({QStringLiteral("pasted-*.png")},
+	                                                   QDir::Files);
+
+	QCOMPARE(written.size(), 1);
+
+	/* Written whole, and not re-encoded on the way through. */
+	QFile kept(folder + QLatin1Char('/') + written.first());
+	QVERIFY(kept.open(QIODevice::ReadOnly));
+	QCOMPARE(kept.readAll(), png);
+	kept.close();
 }
 
 void TestHubs::composerFlattensFormattingWhereItCannotBeSent()

@@ -89,6 +89,14 @@ signals:
 	 */
 	void attachRequested();
 
+	/**
+	 * A picture was pasted into this conversation's box.
+	 *
+	 * Carried up for the same reason as attachRequested(): writing it down, hashing it
+	 * and offering it are not a text box's business.
+	 */
+	void imagePasted(const QByteArray& data, const QString& suffix);
+
 protected:
 	/**
 	 * Where the composer's text goes. Called with non-empty, trimmed text.

@@ -20,6 +20,9 @@
 #include <core/hubbridge.h>
 #include <core/mediabridge.h>
 
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -559,6 +562,11 @@ void Qdc::HubsView::adopt(ChatPane* pane, QTreeWidgetItem* item)
 		attachFile(pane);
 	});
 
+	connect(pane, &ChatPane::imagePasted, this,
+	        [this, pane](const QByteArray& data, const QString& suffix) {
+		offerPastedImage(pane, data, suffix);
+	});
+
 	/*
 	 * A picture in a message is drawn only if this client already has the file, which is
 	 * something only this view can answer - it knows what was offered from here and what
@@ -623,6 +631,46 @@ void Qdc::HubsView::attachFile(ChatPane* pane)
 
 		offerFile(waiting, chosen, wantsMedia);
 	});
+}
+
+void Qdc::HubsView::offerPastedImage(ChatPane* pane, const QByteArray& data,
+                                    const QString& suffix)
+{
+	if (!pane || data.isEmpty()) return;
+
+	if (!m_media) m_media = new MediaBridge(m_thread, m_config, this);
+
+	const QString folder = QDir::homePath() + QStringLiteral("/.quickdc/media");
+
+	if (!QDir().mkpath(folder))
+	{
+		pane->postNotice(tr("A pasted picture could not be kept: '%1' cannot be "
+		                    "created.").arg(folder));
+		return;
+	}
+
+	/*
+	 * Named for when it was pasted, because the clipboard says nothing about where a
+	 * picture came from. Seconds are enough to tell two apart, and a name that already
+	 * exists is a picture pasted twice in the same second - which is the same picture
+	 * often enough that reusing the name is the friendlier answer.
+	 */
+	const QString name = QStringLiteral("pasted-%1.%2")
+		.arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss")),
+		     suffix);
+
+	const QString path = folder + QLatin1Char('/') + name;
+
+	QFile kept(path);
+	if (!kept.open(QIODevice::WriteOnly) || kept.write(data) != data.size())
+	{
+		pane->postNotice(tr("A pasted picture could not be written to '%1'.").arg(path));
+		return;
+	}
+
+	kept.close();
+
+	offerFile(QPointer<ChatPane>(pane), path, true);
 }
 
 void Qdc::HubsView::offerFile(const QPointer<ChatPane>& pane, const QString& path,

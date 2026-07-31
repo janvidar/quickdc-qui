@@ -49,6 +49,15 @@ signals:
 	/** Return was pressed with something to send. */
 	void sendRequested();
 
+	/**
+	 * A picture was pasted rather than text.
+	 *
+	 * The bytes as the clipboard held them, so nothing is re-encoded on the way through,
+	 * and the extension they belong in. What becomes of them - written down, hashed,
+	 * offered - belongs to whoever owns the connection, exactly as a chosen file does.
+	 */
+	void imagePasted(const QByteArray& data, const QString& suffix);
+
 protected:
 	void keyPressEvent(QKeyEvent* event) override;
 
@@ -127,6 +136,14 @@ public:
 	/** Whether the last thing asked for was a picture to show; see attachRequested(). */
 	bool wantsMedia() const;
 
+	/**
+	 * Whether a pasted picture may be offered at all.
+	 *
+	 * A picture travels as a link in a markdown message, so on a hub that cannot carry
+	 * one there is nothing to paste - see setRichTextEnabled().
+	 */
+	bool acceptsMedia() const;
+
 	void clear();
 	void focusInput();
 
@@ -146,6 +163,9 @@ signals:
 	 * insertAttachment().
 	 */
 	void attachRequested();
+
+	/** A picture was pasted into the box; see ComposerEdit::imagePasted(). */
+	void imagePasted(const QByteArray& data, const QString& suffix);
 
 private:
 	/** Apply or lift a character format across the selection, or the word under it. */

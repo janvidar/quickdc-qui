@@ -16,6 +16,8 @@
 #include <QUrl>
 #include <QIcon>
 #include <QPainter>
+#include <QBuffer>
+#include <QImage>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QPushButton>
@@ -173,6 +175,47 @@ QSize Qdc::ComposerEdit::minimumSizeHint() const
 void Qdc::ComposerEdit::insertFromMimeData(const QMimeData* source)
 {
 	if (!source) return;
+
+	/*
+	 * A picture on the clipboard - a screenshot, or an image copied from a page - is
+	 * offered as a file, the same as one chosen from disk. The bytes are taken as they
+	 * are wherever the clipboard has a form we recognise, so a screenshot is not
+	 * re-encoded on its way through; only when it has nothing but a bare image is one
+	 * written out, and then as PNG, which loses nothing.
+	 */
+	static const QList<QPair<const char*, const char*>> forms = {
+		{"image/png", "png"}, {"image/jpeg", "jpg"}, {"image/gif", "gif"},
+		{"image/webp", "webp"}, {"image/tiff", "tiff"}
+	};
+
+	for (const auto& [format, suffix] : forms)
+	{
+		if (!source->hasFormat(QString::fromLatin1(format))) continue;
+
+		const QByteArray bytes = source->data(QString::fromLatin1(format));
+		if (bytes.isEmpty()) continue;
+
+		emit imagePasted(bytes, QString::fromLatin1(suffix));
+		return;
+	}
+
+	if (source->hasImage())
+	{
+		const QImage image = qvariant_cast<QImage>(source->imageData());
+
+		if (!image.isNull())
+		{
+			QByteArray bytes;
+			QBuffer sink(&bytes);
+			sink.open(QIODevice::WriteOnly);
+
+			if (image.save(&sink, "PNG"))
+			{
+				emit imagePasted(bytes, QStringLiteral("png"));
+				return;
+			}
+		}
+	}
 
 	/*
 	 * Rebuilt run by run rather than filtered in place: a pasted fragment can carry
@@ -415,6 +458,15 @@ Qdc::Composer::Composer(QWidget* parent)
 	connect(m_image, &QToolButton::clicked, this, [this] {
 		m_wantsMedia = true;
 		emit attachRequested();
+	});
+
+	/*
+	 * A picture can only be sent where a message may say it is markdown, so on a hub
+	 * that cannot carry the flag a pasted one is dropped rather than half-handled.
+	 */
+	connect(m_edit, &ComposerEdit::imagePasted, this,
+	        [this](const QByteArray& data, const QString& suffix) {
+		if (m_richTextEnabled) emit imagePasted(data, suffix);
 	});
 
 	connect(m_edit, &QTextEdit::cursorPositionChanged,
@@ -834,6 +886,11 @@ void Qdc::Composer::flattenDocument()
 bool Qdc::Composer::wantsMedia() const
 {
 	return m_wantsMedia;
+}
+
+bool Qdc::Composer::acceptsMedia() const
+{
+	return m_richTextEnabled;
 }
 
 void Qdc::Composer::insertAttachment(const RichText::Attachment& file)

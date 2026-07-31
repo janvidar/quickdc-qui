@@ -63,6 +63,7 @@ Qdc::ChatPane::ChatPane(HubBridge* hub, QWidget* parent)
 	connect(m_composer, &Composer::sendRequested, this, &ChatPane::sendMessage);
 	connect(m_feed, &ChatFeed::linkActivated, this, &ChatPane::linkActivated);
 	connect(m_composer, &Composer::attachRequested, this, &ChatPane::attachRequested);
+	connect(m_composer, &Composer::imagePasted, this, &ChatPane::imagePasted);
 	connect(m_header, &HubHeader::closeRequested, this, &ChatPane::closeRequested);
 
 	/*
