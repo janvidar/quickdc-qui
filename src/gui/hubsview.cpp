@@ -518,14 +518,21 @@ void Qdc::HubsView::attachFile(ChatPane* pane)
 	if (!m_media) m_media = new MediaBridge(m_thread, this);
 
 	/*
-	 * Shown rather than run: a chooser opened as a nested event loop from inside the
-	 * press that asked for it is closed again by that same press on macOS, which looks
-	 * exactly like a button that does nothing. Chat also keeps arriving while somebody
-	 * is deciding, and a nested loop would hold all of it up.
+	 * A window of its own, and not modal.
+	 *
+	 * Two things go wrong otherwise, and both look like a button that does nothing. A
+	 * chooser run as a nested event loop from inside the press that asked for it is
+	 * dismissed by that same press. And a window modal one is presented as a sheet on
+	 * macOS: when the sheet does not appear, the window it belongs to stops taking input
+	 * anyway, which reads as the whole application hanging.
+	 *
+	 * Nothing here needs to block. Chat keeps arriving while somebody decides which file
+	 * to send, and it should keep arriving on screen too.
 	 */
-	QFileDialog* chooser = new QFileDialog(this, tr("Attach a file"));
+	QFileDialog* chooser = new QFileDialog(window(), tr("Attach a file"));
 	chooser->setFileMode(QFileDialog::ExistingFile);
 	chooser->setAttribute(Qt::WA_DeleteOnClose);
+	chooser->setWindowModality(Qt::NonModal);
 
 	const QPointer<ChatPane> waiting(pane);
 
@@ -534,7 +541,9 @@ void Qdc::HubsView::attachFile(ChatPane* pane)
 		offerFile(waiting, chosen);
 	});
 
-	chooser->open();
+	chooser->show();
+	chooser->raise();
+	chooser->activateWindow();
 }
 
 void Qdc::HubsView::offerFile(const QPointer<ChatPane>& pane, const QString& path)

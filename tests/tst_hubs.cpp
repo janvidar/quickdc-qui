@@ -1591,7 +1591,13 @@ void TestHubs::theAttachButtonAsksForAFile()
 	}
 
 	QVERIFY2(chooser, "no chooser is up after the button was pressed");
-	QVERIFY2(!chooser->isModal() || chooser->isVisible(), "the chooser closed itself");
+
+	/*
+	 * A window of its own, not a sheet. A window modal chooser is drawn as a sheet on
+	 * macOS, and a sheet that does not appear still stops its window taking input - so
+	 * the application looks hung while nothing is on screen to explain why.
+	 */
+	QCOMPARE(chooser->windowModality(), Qt::NonModal);
 
 	/* Choosing nothing must leave the conversation alone. */
 	QSignalSpy sent(composer, &Qdc::Composer::sendRequested);
