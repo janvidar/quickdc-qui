@@ -12,6 +12,8 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QElapsedTimer>
+#include <QThread>
 #include <QTest>
 
 /**
@@ -36,6 +38,7 @@ private slots:
 	void sharesShrinkWithoutLeavingATail();
 
 	void formLoadsTheStoredValues();
+	void formDoesNotWaitForABusyCore();
 	void formWritesWhatTheCoreReads();
 	void formTracksBeingEdited();
 	void formChunkSizeIsShownInKibibytes();
@@ -263,6 +266,34 @@ void TestSettings::formLoadsTheStoredValues()
 	                             QStringLiteral("Slots")), 9);
 	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Network"),
 	                           QStringLiteral("Active mode"), true), false);
+}
+
+void TestSettings::formDoesNotWaitForABusyCore()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::Shares shares(&config);
+
+	/*
+	 * The page is read a group at a time. Read key by key it was fourteen blocking trips
+	 * to the core thread, so opening it while the core was busy - a transfer moving
+	 * chunks, a finished hash - waited a whole core turn fourteen times over.
+	 *
+	 * Four groups still means four waits, so this does not assert that the page is
+	 * instant; it asserts that it costs a handful of turns rather than a page of them.
+	 */
+	m_thread->post([] { QThread::msleep(300); });
+
+	QElapsedTimer timer;
+	timer.start();
+
+	Qdc::SettingsView view(&config, &shares);
+	view.load();
+
+	const qint64 spent = timer.elapsed();
+
+	QVERIFY2(spent < 1200,
+	         qPrintable(QStringLiteral("loading the page took %1 ms while the core was "
+	                                   "busy").arg(spent)));
 }
 
 void TestSettings::formWritesWhatTheCoreReads()

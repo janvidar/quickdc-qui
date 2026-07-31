@@ -353,47 +353,57 @@ void Qdc::SettingsView::load()
 	/* So that populating the fields does not read as the user editing them. */
 	m_loading = true;
 
-	m_nickname->setText(m_config->getString(ConfigStore::Application, USER,
-	                                        QStringLiteral("Nickname")));
-	m_description->setText(m_config->getString(ConfigStore::Application, USER,
-	                                           QStringLiteral("Description")));
-	m_email->setText(m_config->getString(ConfigStore::Application, USER,
-	                                     QStringLiteral("E-mail")));
+	/*
+	 * A group at a time rather than a key at a time. Every read is a blocking trip to
+	 * the core thread, so a page of fourteen of them opened while the core was busy
+	 * waited a whole core turn fourteen times over.
+	 */
+	const QVariantHash user = m_config->readGroup(ConfigStore::Application, USER, {
+		{QStringLiteral("Nickname"), QString()},
+		{QStringLiteral("Description"), QString()},
+		{QStringLiteral("E-mail"), QString()},
+		{QStringLiteral("Client ID"), QString()}
+	});
 
-	const QString cid = m_config->getString(ConfigStore::Application, USER,
-	                                        QStringLiteral("Client ID"));
+	m_nickname->setText(user.value(QStringLiteral("Nickname")).toString());
+	m_description->setText(user.value(QStringLiteral("Description")).toString());
+	m_email->setText(user.value(QStringLiteral("E-mail")).toString());
+
+	const QString cid = user.value(QStringLiteral("Client ID")).toString();
 	m_clientId->setText(cid.isEmpty() ? tr("assigned on first connection") : cid);
 
-	const bool active = m_config->getBool(ConfigStore::Application, NETWORK,
-	                                      QStringLiteral("Active mode"), true);
-	m_mode->setCurrentIndex(active ? 0 : 1);
+	const QVariantHash network = m_config->readGroup(ConfigStore::Application, NETWORK, {
+		{QStringLiteral("Active mode"), true},
+		{QStringLiteral("Port"), DEFAULT_PORT},
+		{QStringLiteral("Bind"), QString()},
+		{QStringLiteral("Address"), QString()},
+		{QStringLiteral("Slots"), DEFAULT_SLOTS},
+		{QStringLiteral("Max downloads"), DEFAULT_MAX_DOWNLOADS},
+		{QStringLiteral("Chunk size"), DEFAULT_CHUNK_KIB * KIB}
+	});
 
-	m_port->setValue(m_config->getNumber(ConfigStore::Application, NETWORK,
-	                                     QStringLiteral("Port"), DEFAULT_PORT));
-	m_bind->setText(m_config->getString(ConfigStore::Application, NETWORK,
-	                                    QStringLiteral("Bind")));
-	m_address->setText(m_config->getString(ConfigStore::Application, NETWORK,
-	                                       QStringLiteral("Address")));
-
-	m_slots->setValue(m_config->getNumber(ConfigStore::Application, NETWORK,
-	                                      QStringLiteral("Slots"), DEFAULT_SLOTS));
-	m_maxDownloads->setValue(m_config->getNumber(ConfigStore::Application, NETWORK,
-		QStringLiteral("Max downloads"), DEFAULT_MAX_DOWNLOADS));
+	m_mode->setCurrentIndex(network.value(QStringLiteral("Active mode")).toBool() ? 0 : 1);
+	m_port->setValue(network.value(QStringLiteral("Port")).toInt());
+	m_bind->setText(network.value(QStringLiteral("Bind")).toString());
+	m_address->setText(network.value(QStringLiteral("Address")).toString());
+	m_slots->setValue(network.value(QStringLiteral("Slots")).toInt());
+	m_maxDownloads->setValue(network.value(QStringLiteral("Max downloads")).toInt());
 
 	/* Stored in bytes, shown in KiB. */
-	const int chunk = m_config->getNumber(ConfigStore::Application, NETWORK,
-		QStringLiteral("Chunk size"), DEFAULT_CHUNK_KIB * KIB);
+	const int chunk = network.value(QStringLiteral("Chunk size")).toInt();
 	m_chunkSize->setValue(qMax(m_chunkSize->minimum(), chunk / KIB));
 
 	m_downloadDir->setText(m_config->getString(ConfigStore::Application, DOWNLOADS,
 	                                           QStringLiteral("Directory")));
 
-	m_fetchMedia->setChecked(m_config->getBool(ConfigStore::Application, CHAT_MEDIA,
-	                                           QStringLiteral("Fetch automatically")));
+	const QVariantHash media = m_config->readGroup(ConfigStore::Application, CHAT_MEDIA, {
+		{QStringLiteral("Fetch automatically"), false},
+		{QStringLiteral("Maximum size"), 2 * MIB}
+	});
 
-	const int limit = m_config->getNumber(ConfigStore::Application, CHAT_MEDIA,
-	                                     QStringLiteral("Maximum size"), 2 * MIB);
-	m_mediaLimit->setValue(qMax(0, limit / MIB));
+	m_fetchMedia->setChecked(media.value(QStringLiteral("Fetch automatically")).toBool());
+	m_mediaLimit->setValue(
+		qMax(0, media.value(QStringLiteral("Maximum size")).toInt() / MIB));
 
 	refreshShareList();
 

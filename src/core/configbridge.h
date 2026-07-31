@@ -9,6 +9,7 @@
 
 #include <QList>
 #include <QObject>
+#include <QVariantHash>
 #include <QPair>
 #include <QString>
 #include <QStringList>
@@ -71,6 +72,26 @@ public:
 	void replaceGroup(ConfigStore store, const QString& group,
 	                  const QStringList& removeKeys,
 	                  const QList<QPair<QString, QString>>& values);
+
+	/**
+	 * Read several of a group's settings in one job.
+	 *
+	 * For a form. Reading a page key by key is one blocking round trip each, and a
+	 * settings page opened while the core is busy waits a whole core turn for every
+	 * one of them.
+	 *
+	 * The keys have to be named, and their defaults given, because
+	 * QuickDC::Preferences can neither enumerate a group nor say what type a value
+	 * is. The type of each default decides how it is read: a string default reads a
+	 * string, a number a number, a bool a bool - which also means the core's habit
+	 * of writing an absent default back into the store is preserved exactly as the
+	 * single-key accessors leave it.
+	 *
+	 * @param wanted the keys to read, each with the default to use when absent.
+	 * @return the values, under the same keys.
+	 */
+	QVariantHash readGroup(ConfigStore store, const QString& group,
+	                       const QVariantHash& wanted) const;
 
 	/**
 	 * Write the store out.

@@ -41,6 +41,7 @@ private slots:
 	void snapshotsDoNotWaitForABusyCore();
 	void anOfferedFileIsRecognisedAfterARestart();
 	void configRoundTripsThroughTheStore();
+	void aGroupIsReadInOneTrip();
 	void configWritesTheFileItWasGiven();
 	void hubBridgeReportsErrorsOnTheCallingThread();
 	void transfersAndQueueStartEmpty();
@@ -254,6 +255,60 @@ void TestBridge::configRoundTripsThroughTheStore()
 
 	config.remove(store, group, QStringLiteral("Nickname"));
 	QVERIFY(!config.contains(store, group, QStringLiteral("Nickname")));
+}
+
+void TestBridge::aGroupIsReadInOneTrip()
+{
+	Qdc::ConfigBridge config(m_thread);
+
+	const QString group = QStringLiteral("Batch");
+
+	config.setString(Qdc::ConfigStore::Application, group,
+	                 QStringLiteral("Nickname"), QStringLiteral("somebody"));
+	config.setNumber(Qdc::ConfigStore::Application, group, QStringLiteral("Port"), 1511);
+	config.setBool(Qdc::ConfigStore::Application, group,
+	               QStringLiteral("Active mode"), true);
+
+	/*
+	 * Each key's default decides how it is read, because the store keeps everything as
+	 * text and cannot say what a value was meant to be.
+	 */
+	const QVariantHash read = config.readGroup(Qdc::ConfigStore::Application, group, {
+		{QStringLiteral("Nickname"), QString()},
+		{QStringLiteral("Port"), 411},
+		{QStringLiteral("Active mode"), false},
+		{QStringLiteral("Absent"), QStringLiteral("fallback")},
+		{QStringLiteral("Absent number"), 7}
+	});
+
+	QCOMPARE(read.value(QStringLiteral("Nickname")).toString(),
+	         QStringLiteral("somebody"));
+	QCOMPARE(read.value(QStringLiteral("Port")).toInt(), 1511);
+	QCOMPARE(read.value(QStringLiteral("Active mode")).toBool(), true);
+
+	/* A key that is not there answers with its default. */
+	QCOMPARE(read.value(QStringLiteral("Absent")).toString(),
+	         QStringLiteral("fallback"));
+	QCOMPARE(read.value(QStringLiteral("Absent number")).toInt(), 7);
+
+	/*
+	 * And the default was written back into the store, exactly as reading the key on its
+	 * own would have done - the core's habit, which a batch must not quietly change.
+	 */
+	QVERIFY(config.contains(Qdc::ConfigStore::Application, group,
+	                        QStringLiteral("Absent")));
+	QCOMPARE(config.getString(Qdc::ConfigStore::Application, group,
+	                          QStringLiteral("Absent")), QStringLiteral("fallback"));
+
+	/* Nothing asked for, nothing read. */
+	QVERIFY(config.readGroup(Qdc::ConfigStore::Application, group, {}).isEmpty());
+
+	for (const QString& key : {QStringLiteral("Nickname"), QStringLiteral("Port"),
+	                           QStringLiteral("Active mode"), QStringLiteral("Absent"),
+	                           QStringLiteral("Absent number")})
+	{
+		config.remove(Qdc::ConfigStore::Application, group, key);
+	}
 }
 
 void TestBridge::configWritesTheFileItWasGiven()

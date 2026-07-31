@@ -157,6 +157,51 @@ void Qdc::ConfigBridge::remove(ConfigStore store, const QString& group,
 	});
 }
 
+QVariantHash Qdc::ConfigBridge::readGroup(ConfigStore store, const QString& group,
+                                          const QVariantHash& wanted) const
+{
+	QVariantHash read;
+	if (!m_thread || wanted.isEmpty()) return read;
+
+	m_thread->invoke([&] {
+		QuickDC::Preferences* preferences = select(m_thread->core(), store, group);
+		if (!preferences) return;
+
+		/*
+		 * One group selection for the whole batch, as replaceGroup() does and for the
+		 * same reason: nothing else can select another group inside a single job.
+		 */
+		for (auto one = wanted.constBegin(); one != wanted.constEnd(); ++one)
+		{
+			const std::string key = one.key().toStdString();
+			const QVariant& fallback = one.value();
+
+			switch (fallback.typeId())
+			{
+				case QMetaType::Bool:
+					read.insert(one.key(),
+					            preferences->getBool(key, fallback.toBool()));
+					break;
+
+				case QMetaType::Int:
+				case QMetaType::UInt:
+				case QMetaType::LongLong:
+				case QMetaType::ULongLong:
+					read.insert(one.key(),
+					            preferences->getNumber(key, fallback.toInt()));
+					break;
+
+				default:
+					read.insert(one.key(), QString::fromUtf8(preferences->getString(
+						key, fallback.toString().toStdString())));
+					break;
+			}
+		}
+	});
+
+	return read;
+}
+
 void Qdc::ConfigBridge::replaceGroup(ConfigStore store, const QString& group,
                                      const QStringList& removeKeys,
                                      const QList<QPair<QString, QString>>& values)
