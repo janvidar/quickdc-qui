@@ -15,6 +15,7 @@
 #include <gui/hubpane.h>
 #include <gui/hubsview.h>
 #include <gui/richtext.h>
+#include <gui/theme.h>
 #include <gui/usermodel.h>
 
 #include <QApplication>
@@ -24,8 +25,10 @@
 #include <QTextEdit>
 #include <QTextList>
 #include <QToolButton>
+#include <QFileDialog>
 #include <QMenu>
 #include <QTimer>
+#include <QFileDialog>
 #include <QMenu>
 #include <QSignalSpy>
 #include <QTimer>
@@ -86,6 +89,8 @@ private slots:
 	void nothingCanBeSentUntilTheHubHasLoggedUsIn();
 	void formattingIsOnlyOfferedWhereItCanBeSent();
 	void aClickedHubLinkOpensTheHubItself();
+	void theAttachButtonAsksForAFile();
+	void everyControlLooksDisabledWhenItIs();
 	void anEchoOfOurOwnPrivateMessageOpensTheirConversation();
 
 private:
@@ -814,9 +819,7 @@ void TestHubs::emojiPickerGivesEveryEmojiRoomToDraw()
 	composer.show();
 	QVERIFY(QTest::qWaitForWindowExposed(&composer));
 
-	QToolButton* opener = nullptr;
-	for (QToolButton* button : composer.findChildren<QToolButton*>())
-		if (button->text() == QStringLiteral("🙂")) opener = button;
+	QToolButton* opener = formatButton(&composer, QStringLiteral("Emoji"));
 
 	QVERIFY(opener);
 
@@ -1542,6 +1545,117 @@ void TestHubs::formattingIsOnlyOfferedWhereItCanBeSent()
 	emit pane->hub()->richTextSupportChanged(false);
 	QVERIFY(!adc->isRichTextEnabled());
 	QVERIFY(!dmComposer->isRichTextEnabled());
+}
+
+void TestHubs::theAttachButtonAsksForAFile()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	Qdc::Composer* composer = pane->findChild<Qdc::Composer*>();
+	QVERIFY(composer);
+
+	QToolButton* attach = formatButton(composer, QStringLiteral("Attach a file"));
+	QVERIFY(attach);
+
+	/* Shut until the hub has agreed to carry a message that names a file. */
+	QVERIFY(!attach->isEnabled());
+
+	emit pane->hub()->richTextSupportChanged(true);
+	composer->setSendable(true);
+
+	QVERIFY2(attach->isEnabled(), "the button is still disabled after the hub agreed");
+
+	QSignalSpy asked(pane, &Qdc::ChatPane::attachRequested);
+
+	/*
+	 * The chooser is modal, so it is closed from a timer rather than waited on. Finding
+	 * it at all is the point: it says the press reached the view that owns the
+	 * connections, which is where choosing a file belongs.
+	 */
+	bool chooserAppeared = false;
+
+	QTimer::singleShot(200, [&chooserAppeared] {
+		for (QWidget* top : QApplication::topLevelWidgets())
+		{
+			QFileDialog* chooser = qobject_cast<QFileDialog*>(top);
+			if (!chooser || !chooser->isVisible()) continue;
+
+			chooserAppeared = true;
+			chooser->reject();
+		}
+	});
+
+	/* So a chooser that never arrives cannot hang the suite. */
+	QTimer::singleShot(3000, [] {
+		for (QWidget* top : QApplication::topLevelWidgets())
+			if (QFileDialog* chooser = qobject_cast<QFileDialog*>(top)) chooser->reject();
+	});
+
+	attach->click();
+
+	QCOMPARE(asked.count(), 1);
+	QVERIFY2(chooserAppeared, "the button was pressed but nothing asked for a file");
+}
+
+void TestHubs::everyControlLooksDisabledWhenItIs()
+{
+	Qdc::applyTheme(Qdc::defaultTheme());
+
+	Qdc::Composer composer;
+	composer.setRichTextEnabled(true);
+	composer.setSendable(true);
+	composer.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&composer));
+
+	const auto ink = [](QToolButton* button) {
+		/* The darkest pixel drawn: how strongly the glyph is inked. */
+		const QImage shot = button->grab().toImage();
+
+		int darkest = 255;
+		for (int y = 0; y < shot.height(); ++y)
+			for (int x = 0; x < shot.width(); ++x)
+			{
+				const QColor at = shot.pixelColor(x, y);
+				darkest = qMin(darkest, qGray(at.rgb()));
+			}
+
+		return darkest;
+	};
+
+	const QStringList controls = {
+		QStringLiteral("Bold"), QStringLiteral("Italic"), QStringLiteral("Code"),
+		QStringLiteral("Quote"), QStringLiteral("Code block"),
+		QStringLiteral("Bulleted list"), QStringLiteral("Numbered list"),
+		QStringLiteral("Link"), QStringLiteral("Attach a file")
+	};
+
+	for (const QString& name : controls)
+	{
+		QToolButton* button = formatButton(&composer, name);
+		QVERIFY2(button, qPrintable(name));
+
+		button->setEnabled(true);
+		QTest::qWait(10);
+		const int on = ink(button);
+
+		button->setEnabled(false);
+		QTest::qWait(10);
+		const int off = ink(button);
+
+		/*
+		 * A control that cannot be used has to look like it. Measured rather than
+		 * assumed, because a colour emoji is drawn from its own font and ignores the
+		 * pen the style would grey it with - so a glyph that happens to be one gives
+		 * no sign at all that pressing it will do nothing.
+		 */
+		QVERIFY2(off > on + 20,
+		         qPrintable(QStringLiteral("%1 inks %2 enabled and %3 disabled")
+		                    .arg(name).arg(on).arg(off)));
+	}
 }
 
 void TestHubs::aClickedHubLinkOpensTheHubItself()

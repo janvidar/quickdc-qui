@@ -14,6 +14,8 @@
 #include <QMimeData>
 #include <QTextFragment>
 #include <QUrl>
+#include <QIcon>
+#include <QPainter>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QPushButton>
@@ -66,6 +68,45 @@ const QStringList& emoji_set()
 	};
 
 	return set;
+}
+
+/**
+ * Whether a label is a picture rather than a letter.
+ *
+ * Emoji live outside the basic multilingual plane, so a surrogate is the tell.
+ */
+bool is_picture(const QString& label)
+{
+	for (const QChar one : label)
+		if (one.isHighSurrogate()) return true;
+
+	return false;
+}
+
+/**
+ * Hand a glyph to a button as its icon, drawn at the size its font would have used.
+ *
+ * A colour emoji is a picture and comes from its own font, so it ignores the pen a style
+ * would grey it with: a disabled button keeps a bright glyph and looks exactly like one
+ * that works. An icon is faded by the style instead, so the control says what it is.
+ */
+void set_glyph_icon(QToolButton* button, const QString& glyph)
+{
+	const int side = QFontMetrics(button->font()).height();
+	const qreal ratio = button->devicePixelRatioF();
+
+	QPixmap drawn(QSize(side, side) * ratio);
+	drawn.setDevicePixelRatio(ratio);
+	drawn.fill(Qt::transparent);
+
+	QPainter painter(&drawn);
+	painter.setFont(button->font());
+	painter.drawText(QRect(0, 0, side, side), Qt::AlignCenter, glyph);
+	painter.end();
+
+	button->setIcon(QIcon(drawn));
+	button->setIconSize(QSize(side, side));
+	button->setText(QString());
 }
 
 /** How many emoji per row in the picker. */
@@ -372,6 +413,8 @@ Qdc::Composer::Composer(QWidget* parent)
 	        this, &Composer::refreshFormatState);
 
 	m_emoji->setText(QStringLiteral("🙂"));
+	m_emoji->setAccessibleName(tr("Emoji"));
+	set_glyph_icon(m_emoji, QStringLiteral("🙂"));
 	m_emoji->setAutoRaise(true);
 	m_emoji->setToolTip(tr("Insert an emoji"));
 	m_emoji->setCursor(Qt::PointingHandCursor);
@@ -427,6 +470,8 @@ QToolButton* Qdc::Composer::makeFormatButton(const QString& label,
 	face.setItalic(italic);
 	if (monospace) face.setFamily(RichText::monospaceFamily());
 	button->setFont(face);
+
+	if (is_picture(label)) set_glyph_icon(button, label);
 
 	return button;
 }
