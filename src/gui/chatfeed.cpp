@@ -393,6 +393,21 @@ void Qdc::ChatFeed::setMediaResolver(
 	scheduleDelayedItemsLayout();
 }
 
+void Qdc::ChatFeed::refreshMedia()
+{
+	const bool wasAtBottom = isAtBottom();
+
+	m_delegate->invalidateLayout();
+	scheduleDelayedItemsLayout();
+
+	/* A row that grows to fit a picture must not push the tail out of sight. */
+	if (wasAtBottom)
+	{
+		QMetaObject::invokeMethod(this, &QListView::scrollToBottom,
+		                          Qt::QueuedConnection);
+	}
+}
+
 bool Qdc::ChatFeed::isAtBottom() const
 {
 	const QScrollBar* bar = verticalScrollBar();

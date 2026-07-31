@@ -28,6 +28,8 @@
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QLabel>
+#include <QActionGroup>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
@@ -38,6 +40,14 @@
 #include <QVBoxLayout>
 
 namespace {
+
+/** Where the pictures-in-chat settings live; see HubsView::fetchesMediaOn(). */
+const QString CHAT_MEDIA = QStringLiteral("Chat media");
+const QString MEDIA_FETCH = QStringLiteral("Fetch automatically");
+const QString MEDIA_LIMIT = QStringLiteral("Maximum size");
+
+/** Two megabytes: enough for a photograph, small enough to arrive unnoticed. */
+constexpr int MEDIA_LIMIT_DEFAULT = 2 * 1024 * 1024;
 
 constexpr int TREE_WIDTH = 220;
 constexpr int TREE_MINIMUM = 150;
@@ -110,6 +120,22 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	m_stack->addWidget(m_empty);
 
 	connect(m_connect, &QPushButton::clicked, this, &HubsView::promptForHub);
+
+	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_tree, &QTreeWidget::customContextMenuRequested,
+	        this, &HubsView::showHubMenu);
+
+	/*
+	 * A download finishing can change what a message looks like: a picture nobody had
+	 * was a chip, and now it is the picture. Every conversation is told, because a
+	 * message naming that file may be in any of them.
+	 */
+	if (m_completed)
+	{
+		connect(m_completed, &Completed::changed, this, [this] {
+			for (ChatPane* pane : m_panes) pane->mediaChanged();
+		});
+	}
 
 
 	QWidget* side = new QWidget(this);
@@ -330,6 +356,8 @@ Qdc::ChatPane* Qdc::HubsView::currentPane() const
 
 void Qdc::HubsView::route(Entry& entry, const ChatMessage& message)
 {
+	fetchMediaIn(message);
+
 	if (!message.privateMessage)
 	{
 		entry.pane->post(message);
@@ -746,6 +774,114 @@ void Qdc::HubsView::refreshBadge()
 	for (ChatPane* pane : m_panes) unread += pane->unreadCount();
 
 	setBadgeCount(unread);
+}
+
+bool Qdc::HubsView::fetchesMediaOn(const QString& hubUrl) const
+{
+	if (!m_config) return false;
+
+	/*
+	 * A hub that has been decided about individually answers for itself; anything else
+	 * follows the general setting. The per hub value lives in the session store, which
+	 * already keeps one group per hub address.
+	 */
+	if (!hubUrl.isEmpty()
+	    && m_config->contains(ConfigStore::Session, hubUrl, MEDIA_FETCH))
+	{
+		return m_config->getBool(ConfigStore::Session, hubUrl, MEDIA_FETCH);
+	}
+
+	return m_config->getBool(ConfigStore::Application, CHAT_MEDIA, MEDIA_FETCH);
+}
+
+quint64 Qdc::HubsView::mediaSizeLimit() const
+{
+	if (!m_config) return 0;
+
+	const int configured = m_config->getNumber(ConfigStore::Application, CHAT_MEDIA,
+	                                          MEDIA_LIMIT, MEDIA_LIMIT_DEFAULT);
+
+	return static_cast<quint64>(qMax(0, configured));
+}
+
+void Qdc::HubsView::showHubMenu(const QPoint& at)
+{
+	QTreeWidgetItem* item = m_tree->itemAt(at);
+	if (!item || !m_config) return;
+
+	/* Only a hub has settings of its own; a conversation belongs to the hub above it. */
+	if (!item->data(0, HubRole).toBool()) item = item->parent();
+	if (!item) return;
+
+	ChatPane* pane = m_panes.value(item, nullptr);
+	if (!pane || !pane->hub()) return;
+
+	const QString hubUrl = pane->hub()->url();
+
+	QMenu menu(this);
+	menu.addAction(tr("Fetch pictures on this hub"))->setEnabled(false);
+
+	const bool decided = m_config->contains(ConfigStore::Session, hubUrl, MEDIA_FETCH);
+	const bool fetches = decided
+		&& m_config->getBool(ConfigStore::Session, hubUrl, MEDIA_FETCH);
+
+	QActionGroup* choices = new QActionGroup(&menu);
+
+	const auto choice = [&](const QString& text, bool chosen) {
+		QAction* action = menu.addAction(text);
+		action->setCheckable(true);
+		action->setChecked(chosen);
+		choices->addAction(action);
+
+		return action;
+	};
+
+	QAction* general = choice(tr("Follow the general setting"), !decided);
+	QAction* always = choice(tr("Always"), decided && fetches);
+	QAction* never = choice(tr("Never"), decided && !fetches);
+
+	QAction* picked = menu.exec(m_tree->viewport()->mapToGlobal(at));
+	if (!picked) return;
+
+	/*
+	 * Nothing written is what "follow the general setting" means: an absent value is how
+	 * a hub says it has no opinion, so removing it is not the same as writing false.
+	 */
+	if (picked == general)
+		m_config->remove(ConfigStore::Session, hubUrl, MEDIA_FETCH);
+	else if (picked == always || picked == never)
+		m_config->setBool(ConfigStore::Session, hubUrl, MEDIA_FETCH, picked == always);
+	else
+		return;
+
+	m_config->save(ConfigStore::Session);
+}
+
+void Qdc::HubsView::fetchMediaIn(const ChatMessage& message)
+{
+	if (!message.richText || !m_transfers) return;
+	if (!fetchesMediaOn(message.hubUrl)) return;
+
+	const quint64 limit = mediaSizeLimit();
+
+	for (const RichText::Attachment& file : RichText::attachmentsIn(message.text))
+	{
+		/* Only what the sender meant to be shown; a file offered is for a person to
+		   decide about. */
+		if (!file.inlineMedia) continue;
+
+		/* Already here, so it is drawn as it is. */
+		if (!localFileFor(file.tth).isEmpty()) continue;
+
+		/*
+		 * A size the sender did not give is a size nobody can check, so it is not
+		 * fetched without asking either.
+		 */
+		if (file.size == 0 || (limit > 0 && file.size > limit)) continue;
+
+		const QString target = downloadDirectory() + QLatin1Char('/') + file.name;
+		m_transfers->enqueue(target, file.tth, file.size);
+	}
 }
 
 QString Qdc::HubsView::localFileFor(const QString& tth) const

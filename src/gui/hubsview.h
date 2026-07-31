@@ -184,6 +184,31 @@ private:
 	 */
 	QString localFileFor(const QString& tth) const;
 
+	/**
+	 * Fetch the pictures in an incoming message, where that has been asked for.
+	 *
+	 * Off unless somebody turned it on, because fetching means asking a stranger's
+	 * client for a file the moment their message arrives - so it is a decision per hub,
+	 * with a default for hubs nothing has been said about. A picture bigger than the
+	 * configured limit is left as a chip to click.
+	 */
+	void fetchMediaIn(const ChatMessage& message);
+
+	/** Whether pictures are fetched without asking on the hub at 'hubUrl'. */
+	bool fetchesMediaOn(const QString& hubUrl) const;
+
+	/**
+	 * Offer the choices that belong to one hub rather than to all of them.
+	 *
+	 * Reached by asking a hub in the list for its menu. Only one thing is decided here
+	 * so far - whether pictures sent on this hub are fetched without asking - and it can
+	 * either follow the general setting or answer for itself.
+	 */
+	void showHubMenu(const QPoint& at);
+
+	/** The largest picture that may be fetched without asking, in bytes. */
+	quint64 mediaSizeLimit() const;
+
 	void showPane(ChatPane* pane);
 
 	/** Sum every pane's unread count into the rail badge. */

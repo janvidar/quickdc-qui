@@ -99,6 +99,10 @@ private:
 	QSpinBox* m_chunkSize;
 
 	QLineEdit* m_downloadDir;
+
+	/* Pictures in chat: whether they arrive by themselves, and how big they may be. */
+	QCheckBox* m_fetchMedia;
+	QSpinBox* m_mediaLimit;
 	QListWidget* m_shareList;
 	QPushButton* m_removeShare;
 	QPushButton* m_renameShare;

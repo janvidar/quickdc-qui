@@ -6,6 +6,7 @@
 #include <core/corethread.h>
 #include <core/favourites.h>
 #include <core/filelistbridge.h>
+#include <core/transferbridge.h>
 #include <core/hubbridge.h>
 #include <gui/chatfeed.h>
 #include <gui/chatmodel.h>
@@ -94,6 +95,7 @@ private slots:
 	void nothingCanBeSentUntilTheHubHasLoggedUsIn();
 	void formattingIsOnlyOfferedWhereItCanBeSent();
 	void aClickedHubLinkOpensTheHubItself();
+	void picturesAreFetchedOnlyWhereThatWasAskedFor();
 	void theAttachButtonAsksForAFile();
 	void everyControlLooksDisabledWhenItIs();
 	void anEchoOfOurOwnPrivateMessageOpensTheirConversation();
@@ -1606,6 +1608,108 @@ void TestHubs::loopback()
 	QCOMPARE(sawRich, 1);
 	QCOMPARE(sawLiteral, 1);
 	QCOMPARE(sawDirect, 1);
+}
+
+void TestHubs::picturesAreFetchedOnlyWhereThatWasAskedFor()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::TransferBridge transfers(m_thread, this);
+
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, &transfers, &config);
+
+	const QString hubUrl = QStringLiteral("adc://192.0.2.1:412");
+	QVERIFY(hubs.openHub(hubUrl));
+
+	const QString tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
+
+	const auto sendPicture = [&](quint64 size) {
+		Qdc::RichText::Attachment picture;
+		picture.tth = tth;
+		picture.name = QStringLiteral("photo.png");
+		picture.size = size;
+
+		Qdc::ChatMessage message;
+		message.hubUrl = hubs.currentPane()->hub()->url();
+		message.from = user(QStringLiteral("alice"));
+		message.received = QDateTime::currentDateTime();
+		message.richText = true;
+		message.text = QStringLiteral("![a photo](%1)")
+			.arg(Qdc::RichText::writeMagnet(picture));
+
+		emit hubs.currentPane()->hub()->chatReceived(message);
+	};
+
+	const auto queued = [&transfers] { return transfers.queueSnapshot().size(); };
+
+	/*
+	 * Off by default. Fetching means asking a stranger's client for a file the moment
+	 * their message arrives, so it does not happen because nobody said anything.
+	 */
+	config.setBool(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
+	               QStringLiteral("Fetch automatically"), false);
+
+	const int before = queued();
+	sendPicture(1024);
+	QCOMPARE(queued(), before);
+
+	/* Turned on generally, a small picture is fetched. */
+	config.setBool(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
+	               QStringLiteral("Fetch automatically"), true);
+	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
+	                 QStringLiteral("Maximum size"), 2048);
+
+	sendPicture(1024);
+	QCOMPARE(queued(), before + 1);
+
+	/* One over the limit is left for a person to decide about. */
+	sendPicture(4096);
+	QCOMPARE(queued(), before + 1);
+
+	/* A size the sender did not give cannot be checked, so it is not fetched either. */
+	Qdc::RichText::Attachment sizeless;
+	sizeless.tth = QStringLiteral("QKGXQ7HYQ5ARWZ2LNFVQ7YVN6TQGXQ7HYQ5ARWZ");
+	sizeless.name = QStringLiteral("mystery.png");
+
+	Qdc::ChatMessage vague;
+	vague.hubUrl = hubUrl;
+	vague.from = user(QStringLiteral("alice"));
+	vague.received = QDateTime::currentDateTime();
+	vague.richText = true;
+	vague.text = QStringLiteral("![?](magnet:?xt=urn:tree:tiger:%1&dn=mystery.png)")
+		.arg(sizeless.tth);
+
+	emit hubs.currentPane()->hub()->chatReceived(vague);
+	QCOMPARE(queued(), before + 1);
+
+	/* This hub says no, whatever the general setting is. */
+	config.setBool(Qdc::ConfigStore::Session, hubs.currentPane()->hub()->url(),
+	               QStringLiteral("Fetch automatically"), false);
+
+	Qdc::RichText::Attachment second;
+	second.tth = QStringLiteral("F6ED42THAKQCOCNHJOUCMOEOX4GOCT25D5WM7SY");
+	second.name = QStringLiteral("another.png");
+	second.size = 1024;
+
+	Qdc::ChatMessage refused;
+	refused.hubUrl = hubs.currentPane()->hub()->url();
+	refused.from = user(QStringLiteral("alice"));
+	refused.received = QDateTime::currentDateTime();
+	refused.richText = true;
+	refused.text = QStringLiteral("![no](%1)").arg(Qdc::RichText::writeMagnet(second));
+
+	emit hubs.currentPane()->hub()->chatReceived(refused);
+	QCOMPARE(queued(), before + 1);
+
+	/* And a file that was offered rather than shown is never fetched by itself. */
+	config.remove(Qdc::ConfigStore::Session, hubs.currentPane()->hub()->url(),
+	              QStringLiteral("Fetch automatically"));
+
+	Qdc::ChatMessage offered = refused;
+	offered.text = QStringLiteral("[another.png](%1)")
+		.arg(Qdc::RichText::writeMagnet(second));
+
+	emit hubs.currentPane()->hub()->chatReceived(offered);
+	QCOMPARE(queued(), before + 1);
 }
 
 void TestHubs::formattingIsOnlyOfferedWhereItCanBeSent()

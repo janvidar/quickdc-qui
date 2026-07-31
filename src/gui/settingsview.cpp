@@ -29,6 +29,10 @@ namespace {
 const QString USER = QStringLiteral("User");
 const QString NETWORK = QStringLiteral("Network");
 const QString DOWNLOADS = QStringLiteral("Downloads");
+const QString CHAT_MEDIA = QStringLiteral("Chat media");
+
+/** The limit is kept in bytes and shown in mebibytes. */
+constexpr int MIB = 1024 * 1024;
 
 /** The core's own defaults, so an unset field shows what is really in force. */
 constexpr int DEFAULT_PORT = 1411;
@@ -283,9 +287,33 @@ QWidget* Qdc::SettingsView::buildDirectories()
 	shareRow->addWidget(m_shareList, 1);
 	shareRow->addLayout(shareButtons);
 
+	m_fetchMedia = new QCheckBox(tr("Fetch pictures sent in chat automatically"), group);
+	connect(m_fetchMedia, &QCheckBox::toggled, this, &SettingsView::markModified);
+	m_fetchMedia->setToolTip(tr("Ask whoever sent a picture for the file, as soon as "
+	                            "the message arrives"));
+
+	m_mediaLimit = new QSpinBox(group);
+	m_mediaLimit->setRange(0, 1024);
+	m_mediaLimit->setSuffix(tr(" MiB"));
+	m_mediaLimit->setSpecialValueText(tr("no limit"));
+	m_mediaLimit->setToolTip(tr("Larger pictures are left for you to fetch by hand"));
+	connect(m_mediaLimit, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+
 	QFormLayout* form = new QFormLayout(group);
 	form->addRow(tr("Save downloads to"), downloadRow);
 	form->addRow(tr("Shared folders"), shareRow);
+	form->addRow(QString(), m_fetchMedia);
+	form->addRow(tr("Fetch pictures up to"), m_mediaLimit);
+
+	/*
+	 * Said here rather than in a tooltip, because both facts change what somebody would
+	 * choose: fetching announces you to whoever sent the picture, and any hub can be
+	 * decided about on its own.
+	 */
+	form->addRow(makeNote(tr(
+		"Fetching a picture asks the person who sent it for the file, which tells "
+		"them you are there. A single hub can be set to do this or not from its own "
+		"page, whatever is chosen here.")));
 
 	/*
 	 * Both notes are about the core rather than about this form, which is why they
@@ -360,6 +388,13 @@ void Qdc::SettingsView::load()
 	m_downloadDir->setText(m_config->getString(ConfigStore::Application, DOWNLOADS,
 	                                           QStringLiteral("Directory")));
 
+	m_fetchMedia->setChecked(m_config->getBool(ConfigStore::Application, CHAT_MEDIA,
+	                                           QStringLiteral("Fetch automatically")));
+
+	const int limit = m_config->getNumber(ConfigStore::Application, CHAT_MEDIA,
+	                                     QStringLiteral("Maximum size"), 2 * MIB);
+	m_mediaLimit->setValue(qMax(0, limit / MIB));
+
 	refreshShareList();
 
 	m_loading = false;
@@ -400,6 +435,11 @@ bool Qdc::SettingsView::save()
 
 	m_config->setString(ConfigStore::Application, DOWNLOADS,
 	                    QStringLiteral("Directory"), m_downloadDir->text().trimmed());
+
+	m_config->setBool(ConfigStore::Application, CHAT_MEDIA,
+	                  QStringLiteral("Fetch automatically"), m_fetchMedia->isChecked());
+	m_config->setNumber(ConfigStore::Application, CHAT_MEDIA,
+	                    QStringLiteral("Maximum size"), m_mediaLimit->value() * MIB);
 
 	const bool written = m_config->save(ConfigStore::Application);
 

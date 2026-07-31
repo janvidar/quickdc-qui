@@ -842,6 +842,34 @@ Qdc::RichText::Attachment Qdc::RichText::readMagnet(const QUrl& url)
 	return file;
 }
 
+QList<Qdc::RichText::Attachment> Qdc::RichText::attachmentsIn(const QString& markdown)
+{
+	QList<Attachment> found;
+
+	/*
+	 * The same shapes the renderer reads, so what is decided about a message and what is
+	 * drawn from it cannot disagree: "[name](magnet:...)" is a file offered and
+	 * "![name](magnet:...)" is one meant to be shown.
+	 */
+	static const QRegularExpression link(
+		QStringLiteral("(!?)\\[[^\\]]*\\]\\((magnet:[^)\\s]+)\\)"));
+
+	QRegularExpressionMatchIterator each = link.globalMatch(markdown);
+
+	while (each.hasNext())
+	{
+		const QRegularExpressionMatch one = each.next();
+
+		Attachment file = readMagnet(QUrl(one.captured(2), QUrl::StrictMode));
+		if (!file.isValid()) continue;
+
+		file.inlineMedia = one.captured(1) == QStringLiteral("!");
+		found.append(file);
+	}
+
+	return found;
+}
+
 QString Qdc::RichText::writeMagnet(const Attachment& file)
 {
 	if (!file.isValid()) return QString();

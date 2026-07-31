@@ -6,6 +6,7 @@
 #define HAVE_QUICKDC_QUI_RICHTEXT_H
 
 #include <QColor>
+#include <QList>
 #include <QSize>
 #include <QString>
 #include <QtTypes>
@@ -97,6 +98,15 @@ Attachment readMagnet(const QUrl& url);
 
 /** A magnet URI for a file, as a message carries it. */
 QString writeMagnet(const Attachment& file);
+
+/**
+ * Every file a message points at, in the order they appear.
+ *
+ * For deciding what to do about a message rather than for drawing it: whether anything
+ * has to be fetched, and how big it would be. inlineMedia says which of them the sender
+ * meant to be shown rather than offered.
+ */
+QList<Attachment> attachmentsIn(const QString& markdown);
 
 /** A file size for a person to read: "1.0 MiB", not "1048576". */
 QString describeSize(quint64 bytes);

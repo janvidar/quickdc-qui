@@ -69,6 +69,9 @@ public:
 	/** Who to ask whether a picture is here; see ChatDelegate::setMediaResolver(). */
 	void setMediaResolver(std::function<RichText::LocalMedia(const QString& tth)> media);
 
+	/** Something finished downloading, so the messages may draw differently now. */
+	void mediaChanged();
+
 signals:
 	void unreadChanged(int count);
 

@@ -96,6 +96,11 @@ void Qdc::ChatPane::setMediaResolver(
 	m_feed->setMediaResolver(std::move(media));
 }
 
+void Qdc::ChatPane::mediaChanged()
+{
+	m_feed->refreshMedia();
+}
+
 void Qdc::ChatPane::insertAttachment(const RichText::Attachment& file)
 {
 	m_composer->insertAttachment(file);

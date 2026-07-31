@@ -99,6 +99,14 @@ public:
 	/** Passed to the delegate; see ChatDelegate::setMediaResolver(). */
 	void setMediaResolver(std::function<RichText::LocalMedia(const QString& tth)> media);
 
+	/**
+	 * Draw the rows again, because what is on this machine has changed.
+	 *
+	 * A picture nobody had is a chip; once the file arrives the same message becomes the
+	 * picture, and only something outside knows when that happened.
+	 */
+	void refreshMedia();
+
 	/** The link under a point in the viewport, or empty. */
 	QString anchorAt(const QPoint& point) const;
 
