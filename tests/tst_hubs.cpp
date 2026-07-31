@@ -21,6 +21,8 @@
 #include <QApplication>
 #include <QDir>
 #include <QStyleOptionViewItem>
+#include <QImage>
+#include <QPainter>
 #include <QTextBlock>
 #include <QTextEdit>
 #include <QTextList>
@@ -63,6 +65,7 @@ private slots:
 	void chatFeedGivesAMarkdownMessageRoomForItsBlocks();
 	void chatFeedForgetsItsLayoutsWhenRowsMove();
 	void chatFeedClicksALinkAndIgnoresADrag();
+	void chatFeedDrawsAPictureItHas();
 	void chatModelReadsARichMessageAsProse();
 
 	void favouritesRoundTripThroughTheStore();
@@ -532,6 +535,69 @@ void TestHubs::chatFeedClicksALinkAndIgnoresADrag()
 	                    QPoint(row.right() - 1, row.center().y()));
 
 	QCOMPARE(followed.count(), 1);
+}
+
+void TestHubs::chatFeedDrawsAPictureItHas()
+{
+	/* A real picture on disk, because the feed reads it to draw it. */
+	const QString path = m_dir.path() + QStringLiteral("/wide.png");
+
+	QImage made(800, 200, QImage::Format_RGB32);
+	made.fill(Qt::darkCyan);
+	QVERIFY(made.save(path));
+
+	const QString tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
+
+	Qdc::RichText::Attachment picture;
+	picture.tth = tth;
+	picture.name = QStringLiteral("wide.png");
+	picture.size = 1234;
+
+	Qdc::ChatModel model;
+
+	Qdc::ChatMessage message;
+	message.from = user(QStringLiteral("alice"));
+	message.received = QDateTime::currentDateTime();
+	message.richText = true;
+	message.text = QStringLiteral("![a picture](%1)")
+		.arg(Qdc::RichText::writeMagnet(picture));
+	model.append(message);
+
+	Qdc::ChatFeed feed;
+	feed.setModel(&model);
+	feed.resize(420, 400);
+
+	Qdc::ChatDelegate* delegate = qobject_cast<Qdc::ChatDelegate*>(feed.itemDelegate());
+	QVERIFY(delegate);
+
+	QStyleOptionViewItem option;
+	option.rect = QRect(0, 0, 420, 0);
+	option.font = QApplication::font();
+	option.palette = QApplication::palette();
+
+	const int asChip = delegate->sizeHint(option, model.index(0)).height();
+
+	/* Now say the file is here. The row has to grow to make room for it. */
+	feed.setMediaResolver([path, tth](const QString& asked) {
+		Qdc::RichText::LocalMedia here;
+		if (asked != tth) return here;
+
+		here.path = path;
+		here.size = QSize(800, 200);
+		return here;
+	});
+
+	const int drawn = delegate->sizeHint(option, model.index(0)).height();
+
+	QVERIFY2(drawn > asChip + 20,
+	         qPrintable(QStringLiteral("a chip measured %1, the picture %2")
+	                    .arg(asChip).arg(drawn)));
+
+	/*
+	 * And it is scaled into the text column rather than drawn at its own 800 pixels,
+	 * which would push the message off the side.
+	 */
+	QVERIFY2(drawn < 420, qPrintable(QStringLiteral("the row is %1 tall").arg(drawn)));
 }
 
 void TestHubs::chatModelReadsARichMessageAsProse()

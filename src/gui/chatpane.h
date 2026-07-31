@@ -9,6 +9,8 @@
 
 #include "richtext.h"
 
+#include <functional>
+
 #include <QWidget>
 
 class QSplitter;
@@ -63,6 +65,9 @@ public:
 
 	/** Put a chosen file into the message being written; see Composer. */
 	void insertAttachment(const RichText::Attachment& file);
+
+	/** Who to ask whether a picture is here; see ChatDelegate::setMediaResolver(). */
+	void setMediaResolver(std::function<RichText::LocalMedia(const QString& tth)> media);
 
 signals:
 	void unreadChanged(int count);

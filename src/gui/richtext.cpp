@@ -210,7 +210,8 @@ int scheme_length(const QString& text, int at)
 }
 
 QString scan_inline(const QString& text, Mode mode,
-                    const Qdc::RichText::RenderColours& colours);
+                    const Qdc::RichText::RenderColours& colours,
+                    const Qdc::RichText::RenderOptions* options);
 
 QString wrap_link(const QString& label, const QUrl& url, Mode mode,
                   const Qdc::RichText::RenderColours& colours)
@@ -241,6 +242,49 @@ QString wrap_link(const QString& label, const QUrl& url, Mode mode,
  * name comes from the URI and the size beside it is what tells somebody whether they
  * want it - which is the whole decision, since nothing has been fetched yet.
  */
+/**
+ * Draw a picture that is here, scaled to the room it may have.
+ *
+ * Both dimensions are given explicitly rather than left to the layout, so the aspect
+ * ratio survives and a large photograph cannot push a message off the screen. The image
+ * sits inside its own anchor, so clicking it reaches the same place clicking a chip does
+ * and can open the file at its full size.
+ */
+QString picture_for(const Qdc::RichText::Attachment& file, const QUrl& url,
+                    const Qdc::RichText::LocalMedia& here,
+                    const Qdc::RichText::RenderOptions& options)
+{
+	QSize shown = here.size;
+
+	const int room = options.mediaWidth > 0 ? options.mediaWidth : here.size.width();
+
+	if (shown.width() > room)
+		shown = QSize(room, shown.height() * room / shown.width());
+
+	if (options.mediaHeight > 0 && shown.height() > options.mediaHeight)
+	{
+		shown = QSize(shown.width() * options.mediaHeight / shown.height(),
+		              options.mediaHeight);
+	}
+
+	/*
+	 * The source is the path this client recorded for the hash, never anything the
+	 * message carried. A sender chooses which file to point at, not where a file is.
+	 */
+	/*
+	 * On lines of its own. Left in the flow of the sentence, a picture three hundred
+	 * pixels tall makes a line box that tall as well, which drops the speaker's name to
+	 * the foot of it and leaves the words stranded beside the image.
+	 */
+	return QStringLiteral(
+		"<br><a href=\"%1\"><img src=\"%2\" width=\"%3\" height=\"%4\" "
+		"alt=\"%5\"></a><br>")
+		.arg(url.toString(QUrl::FullyEncoded).toHtmlEscaped(),
+		     here.path.toHtmlEscaped())
+		.arg(qMax(1, shown.width())).arg(qMax(1, shown.height()))
+		.arg(file.name.toHtmlEscaped());
+}
+
 QString chip_for(const Qdc::RichText::Attachment& file, const QUrl& url, Mode mode,
                  const Qdc::RichText::RenderColours& colours)
 {
@@ -264,7 +308,8 @@ QString chip_for(const Qdc::RichText::Attachment& file, const QUrl& url, Mode mo
 }
 
 QString scan_inline(const QString& text, Mode mode,
-                    const Qdc::RichText::RenderColours& colours)
+                    const Qdc::RichText::RenderColours& colours,
+                    const Qdc::RichText::RenderOptions* options)
 {
 	QString out;
 	QString pending;
@@ -354,7 +399,21 @@ QString scan_inline(const QString& text, Mode mode,
 					if (file.isValid())
 					{
 						flush();
-						out += chip_for(file, url, mode, colours);
+
+						/*
+						 * Shown only when the sender asked for it and the file is
+						 * actually here. Anything else is a chip: a picture nobody has
+						 * fetched yet is something to click, not something to look at.
+						 */
+						const Qdc::RichText::LocalMedia here =
+							(media && options && options->media)
+								? options->media(file.tth)
+								: Qdc::RichText::LocalMedia();
+
+						out += (mode == Mode::Html && here.isValid())
+							? picture_for(file, url, here, *options)
+							: chip_for(file, url, mode, colours);
+
 						i = stop + 1;
 						continue;
 					}
@@ -362,7 +421,7 @@ QString scan_inline(const QString& text, Mode mode,
 					if (!media && Qdc::RichText::isLinkable(url))
 					{
 						flush();
-						out += wrap_link(scan_inline(label, mode, colours), url, mode,
+						out += wrap_link(scan_inline(label, mode, colours, options), url, mode,
 						                 colours);
 						i = stop + 1;
 						continue;
@@ -433,7 +492,7 @@ QString scan_inline(const QString& text, Mode mode,
 
 				flush();
 
-				const QString inner = scan_inline(body, mode, colours);
+				const QString inner = scan_inline(body, mode, colours, options);
 
 				if (mode == Mode::Plain)
 					out += inner;
@@ -561,7 +620,8 @@ struct Block {
  * has no need of semantic paragraphs.
  */
 QList<Block> split_blocks(const QString& markdown, Mode mode,
-                          const Qdc::RichText::RenderColours& colours)
+                          const Qdc::RichText::RenderColours& colours,
+                          const Qdc::RichText::RenderOptions* options = nullptr)
 {
 	QList<Block> blocks;
 
@@ -665,7 +725,7 @@ QList<Block> split_blocks(const QString& markdown, Mode mode,
 			if (asBullet.hasMatch())
 			{
 				block.kind = Qdc::RichText::Bullet;
-				block.content = scan_inline(asBullet.captured(1), mode, colours);
+				block.content = scan_inline(asBullet.captured(1), mode, colours, options);
 			}
 			else
 			{
@@ -677,7 +737,7 @@ QList<Block> split_blocks(const QString& markdown, Mode mode,
 				 * across two messages still reads in order.
 				 */
 				block.ordinal = asNumber.captured(1).toInt();
-				block.content = scan_inline(asNumber.captured(2), mode, colours);
+				block.content = scan_inline(asNumber.captured(2), mode, colours, options);
 			}
 
 			blocks.append(block);
@@ -691,12 +751,12 @@ QList<Block> split_blocks(const QString& markdown, Mode mode,
 			QString body = trimmed.mid(1);
 			if (body.startsWith(QLatin1Char(' '))) body = body.mid(1);
 
-			quote.append(scan_inline(body, mode, colours));
+			quote.append(scan_inline(body, mode, colours, options));
 			continue;
 		}
 
 		flushQuote();
-		paragraph.append(scan_inline(line, mode, colours));
+		paragraph.append(scan_inline(line, mode, colours, options));
 	}
 
 	flushParagraph();
@@ -976,7 +1036,7 @@ QString Qdc::RichText::toPlainText(const QString& markdown)
 {
 	QStringList out;
 
-	for (const Block& block : split_blocks(markdown, Mode::Plain, RenderColours()))
+	for (const Block& block : split_blocks(markdown, Mode::Plain, RenderColours(), nullptr))
 	{
 		/*
 		 * A list keeps its markers here, where a quote does not: without them the items
@@ -1004,7 +1064,7 @@ QString Qdc::RichText::toPlainText(const QString& markdown)
 QString Qdc::RichText::renderMarkdown(const QString& markdown,
                                       const RenderOptions& options)
 {
-	QList<Block> blocks = split_blocks(markdown, Mode::Html, options.colours);
+	QList<Block> blocks = split_blocks(markdown, Mode::Html, options.colours, &options);
 
 	/*
 	 * The speaker belongs on the first line of prose. When a message opens with a code

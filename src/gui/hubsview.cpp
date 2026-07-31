@@ -24,6 +24,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QImageReader>
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QLabel>
@@ -514,6 +515,27 @@ void Qdc::HubsView::adopt(ChatPane* pane, QTreeWidgetItem* item)
 
 	connect(pane, &ChatPane::attachRequested, this, [this, pane] {
 		attachFile(pane);
+	});
+
+	/*
+	 * A picture in a message is drawn only if this client already has the file, which is
+	 * something only this view can answer - it knows what was offered from here and what
+	 * has finished downloading.
+	 */
+	pane->setMediaResolver([this](const QString& tth) {
+		RichText::LocalMedia here;
+
+		const QString path = localFileFor(tth);
+		if (path.isEmpty()) return here;
+
+		/* The header only, so this stays cheap enough to ask while laying out a row. */
+		const QSize size = QImageReader(path).size();
+		if (!size.isValid()) return here;
+
+		here.path = path;
+		here.size = size;
+
+		return here;
 	});
 }
 

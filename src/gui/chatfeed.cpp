@@ -10,6 +10,7 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QFontMetricsF>
+#include <QImageReader>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -75,7 +76,8 @@ class Qdc::ChatDelegate::Layout {
 
 public:
 	Layout(const ChatMessage& message, int width, const QFont& font,
-	       const QPalette& palette, bool darkBackground)
+	       const QPalette& palette, bool darkBackground,
+	       const std::function<RichText::LocalMedia(const QString&)>& media)
 	{
 		document.setDefaultFont(font);
 		document.setDocumentMargin(0.0);
@@ -136,6 +138,27 @@ public:
 		options.indent = static_cast<int>(qRound(indent));
 
 		/*
+		 * A picture gets the text column, and no more height than a message can carry
+		 * without pushing everything else off the screen.
+		 */
+		options.mediaWidth = qMax(0, width - options.indent);
+
+		/*
+		 * Resolved here, and the image handed to the document rather than named to it:
+		 * a document left to fetch its own resources decides for itself what to open,
+		 * and only files this client already has may be drawn.
+		 */
+		if (media)
+		{
+			options.media = [this, &media](const QString& tth) {
+				const RichText::LocalMedia here = media(tth);
+				if (here.isValid()) pictures.append(here);
+
+				return here;
+			};
+		}
+
+		/*
 		 * Only a message that said it is markdown is read as markdown. Without the flag
 		 * the text is literal, so somebody's asterisks stay asterisks.
 		 */
@@ -143,16 +166,56 @@ public:
 			? RichText::renderMarkdown(message.text, options)
 			: RichText::renderPlain(message.text, options);
 
+		for (const RichText::LocalMedia& picture : pictures)
+		{
+			/*
+			 * Read at the size it will be drawn at, so a photograph from a camera is
+			 * not held in memory at full resolution for every row on screen.
+			 */
+			QImageReader reader(picture.path);
+			reader.setAutoTransform(true);
+
+			QSize scaled = picture.size;
+			const int room = options.mediaWidth;
+
+			if (room > 0 && scaled.width() > room)
+				scaled = QSize(room, scaled.height() * room / scaled.width());
+
+			if (options.mediaHeight > 0 && scaled.height() > options.mediaHeight)
+			{
+				scaled = QSize(scaled.width() * options.mediaHeight / scaled.height(),
+				               options.mediaHeight);
+			}
+
+			reader.setScaledSize(scaled);
+
+			const QImage image = reader.read();
+			if (image.isNull()) continue;
+
+			document.addResource(QTextDocument::ImageResource,
+			                     QUrl(picture.path), image);
+		}
+
 		document.setHtml(html);
 		document.setTextWidth(width);
 	}
 
 	QTextDocument document;
+
+	/** The pictures this row draws, kept so they can be loaded before the html is set. */
+	QList<RichText::LocalMedia> pictures;
 };
 
 Qdc::ChatDelegate::ChatDelegate(QObject* parent)
 	: QStyledItemDelegate(parent)
 {
+}
+
+void Qdc::ChatDelegate::setMediaResolver(
+	std::function<RichText::LocalMedia(const QString& tth)> media)
+{
+	m_media = std::move(media);
+	invalidateLayout();
 }
 
 void Qdc::ChatDelegate::invalidateLayout()
@@ -185,7 +248,7 @@ const Qdc::ChatDelegate::Layout& Qdc::ChatDelegate::layoutFor(
 	const QColor background = option.palette.color(QPalette::Base);
 	const bool dark = background.lightness() < 128;
 
-	Layout* layout = new Layout(message, width, option.font, option.palette, dark);
+	Layout* layout = new Layout(message, width, option.font, option.palette, dark, m_media);
 	m_cache.insert(index.row(), layout);
 
 	return *layout;
@@ -321,6 +384,13 @@ void Qdc::ChatFeed::setModel(QAbstractItemModel* model)
 		m_delegate->invalidateLayout();
 		scheduleDelayedItemsLayout();
 	});
+}
+
+void Qdc::ChatFeed::setMediaResolver(
+	std::function<RichText::LocalMedia(const QString& tth)> media)
+{
+	m_delegate->setMediaResolver(std::move(media));
+	scheduleDelayedItemsLayout();
 }
 
 bool Qdc::ChatFeed::isAtBottom() const

@@ -32,6 +32,7 @@ private slots:
 	void codeSpansContainingBackticksSurvive();
 	void linksRoundTripAndAreScopedToKnownSchemes();
 	void magnetAttachmentsBecomeChips();
+	void aPictureThatIsHereIsDrawnInline();
 	void bareUrlsAreLinkedWithoutTrailingPunctuation();
 	void remoteTextCannotInjectMarkup();
 	void plainRenderingKeepsLineBreaksAndMarkers();
@@ -575,6 +576,77 @@ void TestRichText::magnetAttachmentsBecomeChips()
 
 	QVERIFY(sneaky.isValid());
 	QCOMPARE(sneaky.name, QStringLiteral("authorized_keys"));
+}
+
+void TestRichText::aPictureThatIsHereIsDrawnInline()
+{
+	const QString tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
+
+	Qdc::RichText::Attachment picture;
+	picture.tth = tth;
+	picture.name = QStringLiteral("photo.png");
+	picture.size = 524288;
+
+	const QString shown = QStringLiteral("![a photo](%1)")
+		.arg(Qdc::RichText::writeMagnet(picture));
+
+	/* Nobody has fetched it, so there is something to click rather than something to
+	   look at. */
+	Qdc::RichText::RenderOptions plain = options();
+	const QString asChip = Qdc::RichText::renderMarkdown(shown, plain);
+
+	QVERIFY2(!asChip.contains(QStringLiteral("<img")), qPrintable(asChip));
+	QVERIFY2(asChip.contains(QStringLiteral("photo.png")), qPrintable(asChip));
+
+	/* Once it is here, it is drawn - scaled to the room it may have. */
+	Qdc::RichText::RenderOptions withMedia = options();
+	withMedia.mediaWidth = 400;
+	withMedia.mediaHeight = 300;
+	withMedia.media = [tth](const QString& asked) {
+		Qdc::RichText::LocalMedia here;
+		if (asked != tth) return here;
+
+		here.path = QStringLiteral("/tmp/photo.png");
+		here.size = QSize(1600, 1200);
+		return here;
+	};
+
+	const QString drawn = Qdc::RichText::renderMarkdown(shown, withMedia);
+
+	QVERIFY2(drawn.contains(QStringLiteral("<img")), qPrintable(drawn));
+	QVERIFY2(drawn.contains(QStringLiteral("src=\"/tmp/photo.png\"")), qPrintable(drawn));
+
+	/*
+	 * 1600x1200 into a 400 wide column is 400x300, which is also exactly the height it
+	 * may have. Both dimensions are stated so the shape survives.
+	 */
+	QVERIFY2(drawn.contains(QStringLiteral("width=\"400\"")), qPrintable(drawn));
+	QVERIFY2(drawn.contains(QStringLiteral("height=\"300\"")), qPrintable(drawn));
+
+	/* Clicking it goes where clicking the chip would: the file, by its hash. */
+	QVERIFY2(drawn.contains(QStringLiteral("<a href=\"magnet:")), qPrintable(drawn));
+	QVERIFY2(drawn.contains(tth), qPrintable(drawn));
+
+	/* A tall picture is capped by height instead, and keeps its shape. */
+	withMedia.media = [tth](const QString& asked) {
+		Qdc::RichText::LocalMedia here;
+		if (asked != tth) return here;
+
+		here.path = QStringLiteral("/tmp/tall.png");
+		here.size = QSize(600, 3000);
+		return here;
+	};
+
+	const QString tall = Qdc::RichText::renderMarkdown(shown, withMedia);
+	QVERIFY2(tall.contains(QStringLiteral("height=\"300\"")), qPrintable(tall));
+	QVERIFY2(tall.contains(QStringLiteral("width=\"60\"")), qPrintable(tall));
+
+	/* An offered file is never drawn, however available it is. */
+	const QString offered = Qdc::RichText::renderMarkdown(
+		QStringLiteral("[photo.png](%1)").arg(Qdc::RichText::writeMagnet(picture)),
+		withMedia);
+
+	QVERIFY2(!offered.contains(QStringLiteral("<img")), qPrintable(offered));
 }
 
 void TestRichText::bareUrlsAreLinkedWithoutTrailingPunctuation()

@@ -90,6 +90,12 @@ Qdc::HubHeader* Qdc::ChatPane::header() const
 	return m_header;
 }
 
+void Qdc::ChatPane::setMediaResolver(
+	std::function<RichText::LocalMedia(const QString& tth)> media)
+{
+	m_feed->setMediaResolver(std::move(media));
+}
+
 void Qdc::ChatPane::insertAttachment(const RichText::Attachment& file)
 {
 	m_composer->insertAttachment(file);

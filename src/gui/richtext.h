@@ -6,8 +6,11 @@
 #define HAVE_QUICKDC_QUI_RICHTEXT_H
 
 #include <QColor>
+#include <QSize>
 #include <QString>
 #include <QtTypes>
+
+#include <functional>
 #include <QUrl>
 
 class QTextDocument;
@@ -164,6 +167,23 @@ QString toMarkdown(const QTextDocument& document);
  */
 bool hasMarkup(const QTextDocument& document);
 
+/**
+ * A file named in a message that turns out to be on this machine.
+ *
+ * Whether a picture can be shown is not something a message can say - only this client
+ * knows what it has - so the answer is asked for rather than assumed, and the path comes
+ * from our own record of it. Nothing in a message ever becomes a path.
+ */
+struct LocalMedia {
+	/** Where the file is, or empty when it is not here. */
+	QString path;
+
+	/** Its pixel size, so a caller can decide how much room to give it. */
+	QSize size;
+
+	bool isValid() const { return !path.isEmpty() && size.isValid(); }
+};
+
 /** Colours for rendering. Passed in so this module never reads the theme. */
 struct RenderColours {
 	QColor code;       /**< Ink for inline code and code blocks. */
@@ -202,6 +222,19 @@ struct RenderOptions {
 	bool italic = false;
 
 	RenderColours colours;
+
+	/**
+	 * Asked whether a picture named by its hash is here, and how big it is.
+	 *
+	 * Left unset, media renders as the chip an offered file gets: something to click
+	 * rather than something to look at. That is also what a picture nobody has fetched
+	 * yet looks like.
+	 */
+	std::function<LocalMedia(const QString& tth)> media;
+
+	/** How much room a picture may take: the text column, and this many pixels tall. */
+	int mediaWidth = 0;
+	int mediaHeight = 300;
 };
 
 /**

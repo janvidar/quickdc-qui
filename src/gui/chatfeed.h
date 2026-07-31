@@ -10,6 +10,10 @@
 #include <QStyledItemDelegate>
 #include <QUrl>
 
+#include "richtext.h"
+
+#include <functional>
+
 namespace Qdc {
 
 class ChatModel;
@@ -39,6 +43,14 @@ public:
 	void invalidateLayout();
 
 	/**
+	 * Who to ask whether a picture named in a message is on this machine.
+	 *
+	 * Without one, media renders as a chip to click. The feed does not know what has
+	 * been downloaded and must not guess, so this is supplied from above.
+	 */
+	void setMediaResolver(std::function<RichText::LocalMedia(const QString& tth)> media);
+
+	/**
 	 * The link under 'point', or empty if there is none there.
 	 *
 	 * 'point' is in the coordinates the row was drawn in, so the caller passes what it
@@ -62,6 +74,8 @@ private:
 	/** Keyed by row. Cleared whenever the width it was built for changes. */
 	mutable QHash<int, Layout*> m_cache;
 	mutable int m_cachedWidth = -1;
+
+	std::function<RichText::LocalMedia(const QString& tth)> m_media;
 };
 
 /**
@@ -81,6 +95,9 @@ public:
 
 	/** Whether the view is close enough to the bottom to be following it. */
 	bool isAtBottom() const;
+
+	/** Passed to the delegate; see ChatDelegate::setMediaResolver(). */
+	void setMediaResolver(std::function<RichText::LocalMedia(const QString& tth)> media);
 
 	/** The link under a point in the viewport, or empty. */
 	QString anchorAt(const QPoint& point) const;
