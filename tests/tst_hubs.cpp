@@ -30,6 +30,7 @@
 #include <QTimer>
 #include <QFileDialog>
 #include <QMenu>
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTimer>
 #include <QTemporaryDir>
@@ -1550,6 +1551,8 @@ void TestHubs::formattingIsOnlyOfferedWhereItCanBeSent()
 void TestHubs::theAttachButtonAsksForAFile()
 {
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	hubs.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&hubs));
 	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
 
 	Qdc::ChatPane* pane = hubs.currentPane();
@@ -1561,44 +1564,42 @@ void TestHubs::theAttachButtonAsksForAFile()
 	QToolButton* attach = formatButton(composer, QStringLiteral("Attach a file"));
 	QVERIFY(attach);
 
-	/* Shut until the hub has agreed to carry a message that names a file. */
+	/* Shut until the hub has agreed to carry a message that can name a file. */
 	QVERIFY(!attach->isEnabled());
 
 	emit pane->hub()->richTextSupportChanged(true);
 	composer->setSendable(true);
-
-	QVERIFY2(attach->isEnabled(), "the button is still disabled after the hub agreed");
+	QVERIFY(attach->isEnabled());
 
 	QSignalSpy asked(pane, &Qdc::ChatPane::attachRequested);
 
-	/*
-	 * The chooser is modal, so it is closed from a timer rather than waited on. Finding
-	 * it at all is the point: it says the press reached the view that owns the
-	 * connections, which is where choosing a file belongs.
-	 */
-	bool chooserAppeared = false;
-
-	QTimer::singleShot(200, [&chooserAppeared] {
-		for (QWidget* top : QApplication::topLevelWidgets())
-		{
-			QFileDialog* chooser = qobject_cast<QFileDialog*>(top);
-			if (!chooser || !chooser->isVisible()) continue;
-
-			chooserAppeared = true;
-			chooser->reject();
-		}
-	});
-
-	/* So a chooser that never arrives cannot hang the suite. */
-	QTimer::singleShot(3000, [] {
-		for (QWidget* top : QApplication::topLevelWidgets())
-			if (QFileDialog* chooser = qobject_cast<QFileDialog*>(top)) chooser->reject();
-	});
-
 	attach->click();
-
 	QCOMPARE(asked.count(), 1);
-	QVERIFY2(chooserAppeared, "the button was pressed but nothing asked for a file");
+
+	/*
+	 * Still standing after the press that opened it. A chooser run as a nested loop from
+	 * inside the click is dismissed by that same click on macOS, and the only sign was a
+	 * button that appeared to do nothing at all - so it is not enough to know that a
+	 * chooser was created.
+	 */
+	QFileDialog* chooser = nullptr;
+
+	for (QWidget* top : QApplication::topLevelWidgets())
+	{
+		QFileDialog* candidate = qobject_cast<QFileDialog*>(top);
+		if (candidate && candidate->isVisible()) chooser = candidate;
+	}
+
+	QVERIFY2(chooser, "no chooser is up after the button was pressed");
+	QVERIFY2(!chooser->isModal() || chooser->isVisible(), "the chooser closed itself");
+
+	/* Choosing nothing must leave the conversation alone. */
+	QSignalSpy sent(composer, &Qdc::Composer::sendRequested);
+	chooser->reject();
+	QTest::qWait(50);
+
+	QCOMPARE(sent.count(), 0);
+	QCOMPARE(composer->findChild<QTextEdit*>()->toPlainText(), QString());
 }
 
 void TestHubs::everyControlLooksDisabledWhenItIs()

@@ -517,45 +517,64 @@ void Qdc::HubsView::attachFile(ChatPane* pane)
 
 	if (!m_media) m_media = new MediaBridge(m_thread, this);
 
-	const QString chosen = QFileDialog::getOpenFileName(this, tr("Attach a file"));
-	if (chosen.isEmpty()) return;
-
 	/*
-	 * Hashing reads the whole file, so the answer comes back later. The connection is
-	 * made for this one attachment and taken down again with it: several may be waiting
-	 * at once, and each belongs to the conversation that asked.
+	 * Shown rather than run: a chooser opened as a nested event loop from inside the
+	 * press that asked for it is closed again by that same press on macOS, which looks
+	 * exactly like a button that does nothing. Chat also keeps arriving while somebody
+	 * is deciding, and a nested loop would hold all of it up.
 	 */
+	QFileDialog* chooser = new QFileDialog(this, tr("Attach a file"));
+	chooser->setFileMode(QFileDialog::ExistingFile);
+	chooser->setAttribute(Qt::WA_DeleteOnClose);
+
 	const QPointer<ChatPane> waiting(pane);
 
-	auto* ready = new QObject(this);
+	connect(chooser, &QFileDialog::fileSelected, this,
+	        [this, waiting](const QString& chosen) {
+		offerFile(waiting, chosen);
+	});
 
-	connect(m_media, &MediaBridge::attached, ready,
-	        [this, waiting, chosen, ready](const QString& path, const QString& tth,
-	                                       quint64 size) {
-		if (path != chosen) return;
+	chooser->open();
+}
 
-		if (waiting)
+void Qdc::HubsView::offerFile(const QPointer<ChatPane>& pane, const QString& path)
+{
+	if (path.isEmpty() || !m_media) return;
+
+	/*
+	 * Hashing reads the whole file, so the answer comes back later. The connections are
+	 * made for this one file and taken down with it: several may be waiting at once, and
+	 * each belongs to the conversation that asked.
+	 */
+	QObject* pending = new QObject(this);
+
+	connect(m_media, &MediaBridge::attached, pending,
+	        [pane, path, pending](const QString& hashed, const QString& tth,
+	                              quint64 size) {
+		if (hashed != path) return;
+
+		if (pane)
 		{
 			RichText::Attachment file;
 			file.tth = tth;
-			file.name = QFileInfo(path).fileName();
+			file.name = QFileInfo(hashed).fileName();
 			file.size = size;
 
-			waiting->insertAttachment(file);
+			pane->insertAttachment(file);
 		}
 
-		ready->deleteLater();
+		pending->deleteLater();
 	});
 
-	connect(m_media, &MediaBridge::attachFailed, ready,
-	        [this, waiting, chosen, ready](const QString& path, const QString& reason) {
-		if (path != chosen) return;
+	connect(m_media, &MediaBridge::attachFailed, pending,
+	        [pane, path, pending](const QString& hashed, const QString& reason) {
+		if (hashed != path) return;
 
-		if (waiting) waiting->postNotice(reason);
-		ready->deleteLater();
+		if (pane) pane->postNotice(reason);
+		pending->deleteLater();
 	});
 
-	m_media->attach(chosen);
+	m_media->attach(path);
 }
 
 void Qdc::HubsView::followLink(const QUrl& url)

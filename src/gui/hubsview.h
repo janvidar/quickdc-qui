@@ -159,6 +159,14 @@ private:
 	 */
 	void attachFile(ChatPane* pane);
 
+	/**
+	 * Hash a chosen file, offer it, and put a link to it in the conversation that asked.
+	 *
+	 * The pane is held weakly: hashing a large file takes a while, and the conversation
+	 * may be closed before it finishes.
+	 */
+	void offerFile(const QPointer<ChatPane>& pane, const QString& path);
+
 	void showPane(ChatPane* pane);
 
 	/** Sum every pane's unread count into the rail badge. */
