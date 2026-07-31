@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QListView>
 #include <QStyledItemDelegate>
+#include <QTimer>
 #include <QUrl>
 
 #include "richtext.h"
@@ -59,6 +60,15 @@ public:
 	QString anchorAt(const QModelIndex& index, const QStyleOptionViewItem& option,
 	                 const QPoint& point) const;
 
+signals:
+	/**
+	 * A row has to be drawn again: a picture in it has moved on a frame.
+	 *
+	 * One row rather than the whole feed, because an animation repaints several times a
+	 * second and a backlog of them would otherwise redraw everything each time.
+	 */
+	void rowNeedsRepaint(int row) const;
+
 private:
 	/**
 	 * The rich text for one row, already wrapped to 'width'.
@@ -76,6 +86,15 @@ private:
 	mutable int m_cachedWidth = -1;
 
 	std::function<RichText::LocalMedia(const QString& tth)> m_media;
+
+	/**
+	 * Stops animating what nobody is looking at.
+	 *
+	 * Every row is measured, so every animation in the backlog exists whether or not it
+	 * is on screen. Painting is the only sign that a row is visible, so a row that has
+	 * not been painted lately has its animations paused until it is.
+	 */
+	QTimer* m_idle;
 };
 
 /**
@@ -129,6 +148,9 @@ protected:
 	void leaveEvent(QEvent* event) override;
 
 private:
+	/** Draw one row again, because a picture in it moved on a frame. */
+	void repaintRow(int row);
+
 	void onRowsInserted();
 
 	ChatDelegate* m_delegate;

@@ -27,6 +27,7 @@
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QImage>
+#include <QImageReader>
 #include <QPainter>
 #include <QTextBlock>
 #include <QTextEdit>
@@ -72,6 +73,7 @@ private slots:
 	void chatFeedForgetsItsLayoutsWhenRowsMove();
 	void chatFeedClicksALinkAndIgnoresADrag();
 	void chatFeedDrawsAPictureItHas();
+	void chatFeedKeepsAnAnimationMoving();
 	void chatModelReadsARichMessageAsProse();
 
 	void favouritesRoundTripThroughTheStore();
@@ -610,6 +612,74 @@ void TestHubs::chatFeedDrawsAPictureItHas()
 	 * which would push the message off the side.
 	 */
 	QVERIFY2(drawn < 420, qPrintable(QStringLiteral("the row is %1 tall").arg(drawn)));
+}
+
+void TestHubs::chatFeedKeepsAnAnimationMoving()
+{
+	/*
+	 * A two frame GIF, written out byte for byte: Qt reads animations but cannot write
+	 * one, so there is no way to make this from a QImage.
+	 */
+	static const char* const TWO_FRAMES =
+		"R0lGODlhBAAEAIAAAOAgICBA4CH/C05FVFNDQVBFMi4wAwEAAAAh+QQEMgAAACwAAAAABAAEAAACBwQ"
+		"AAAAAACgAIfkEBDIAAAAsAAAAAAQABAAAAgdMkiRJkiQpADs=";
+
+	const QString path = m_dir.path() + QStringLiteral("/moving.gif");
+
+	QFile gif(path);
+	QVERIFY(gif.open(QIODevice::WriteOnly));
+	QVERIFY(gif.write(QByteArray::fromBase64(TWO_FRAMES)) > 0);
+	gif.close();
+
+	QImageReader reader(path);
+	QVERIFY2(reader.supportsAnimation() && reader.imageCount() > 1,
+	         "the test's own GIF is not animated");
+
+	const QString tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
+
+	Qdc::RichText::Attachment picture;
+	picture.tth = tth;
+	picture.name = QStringLiteral("moving.gif");
+	picture.size = 95;
+
+	Qdc::ChatModel model;
+
+	Qdc::ChatMessage message;
+	message.from = user(QStringLiteral("alice"));
+	message.received = QDateTime::currentDateTime();
+	message.richText = true;
+	message.text = QStringLiteral("![it moves](%1)")
+		.arg(Qdc::RichText::writeMagnet(picture));
+	model.append(message);
+
+	Qdc::ChatFeed feed;
+	feed.setModel(&model);
+	feed.setMediaResolver([path, tth](const QString& asked) {
+		Qdc::RichText::LocalMedia here;
+		if (asked != tth) return here;
+
+		here.path = path;
+		here.size = QSize(4, 4);
+		return here;
+	});
+
+	Qdc::ChatDelegate* delegate = qobject_cast<Qdc::ChatDelegate*>(feed.itemDelegate());
+	QVERIFY(delegate);
+
+	QSignalSpy moved(delegate, &Qdc::ChatDelegate::rowNeedsRepaint);
+
+	feed.resize(300, 200);
+	feed.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&feed));
+
+	/*
+	 * Three frames from a picture that has two, which is the looping: an animation that
+	 * stopped at the end of the file would have asked twice and no more.
+	 */
+	QTRY_VERIFY_WITH_TIMEOUT(moved.count() >= 3, 5000);
+
+	/* Every frame asks for the row it belongs to, not for the whole feed. */
+	QCOMPARE(moved.at(0).at(0).toInt(), 0);
 }
 
 void TestHubs::chatModelReadsARichMessageAsProse()

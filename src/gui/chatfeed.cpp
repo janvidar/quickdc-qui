@@ -10,6 +10,8 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QFontMetricsF>
+#include <QElapsedTimer>
+#include <QMovie>
 #include <QImageReader>
 #include <QMouseEvent>
 #include <QPainter>
@@ -27,6 +29,10 @@ constexpr int MARGIN_Y = 4;
 
 /** How near the bottom still counts as following the tail, in pixels. */
 constexpr int TAIL_SLACK = 24;
+
+/** How often to look for animations nobody is watching, and how patient to be. */
+constexpr int IDLE_CHECK_MS = 1000;
+constexpr int IDLE_AFTER_MS = 2000;
 
 /**
  * A stable colour for a nickname.
@@ -98,7 +104,6 @@ public:
 		speakerFont.setBold(!message.action);
 		speakerFont.setItalic(message.action);
 
-		RichText::RenderOptions options;
 		options.colours = markup_colours();
 
 		options.prefix = QStringLiteral("<span style=\"color:%1\">%2</span> ")
@@ -169,25 +174,28 @@ public:
 		for (const RichText::LocalMedia& picture : pictures)
 		{
 			/*
+			 * An animation is driven rather than read: QMovie hands over one frame at a
+			 * time, and each frame replaces the document's picture. Held here so it dies
+			 * with the row's layout.
+			 */
+			if (QImageReader(picture.path).supportsAnimation()
+			    && QImageReader(picture.path).imageCount() > 1)
+			{
+				QMovie* movie = new QMovie(picture.path);
+				movie->setCacheMode(QMovie::CacheAll);
+				movie->setScaledSize(displaySize(picture));
+
+				movies.append(movie);
+				continue;
+			}
+
+			/*
 			 * Read at the size it will be drawn at, so a photograph from a camera is
 			 * not held in memory at full resolution for every row on screen.
 			 */
 			QImageReader reader(picture.path);
 			reader.setAutoTransform(true);
-
-			QSize scaled = picture.size;
-			const int room = options.mediaWidth;
-
-			if (room > 0 && scaled.width() > room)
-				scaled = QSize(room, scaled.height() * room / scaled.width());
-
-			if (options.mediaHeight > 0 && scaled.height() > options.mediaHeight)
-			{
-				scaled = QSize(scaled.width() * options.mediaHeight / scaled.height(),
-				               options.mediaHeight);
-			}
-
-			reader.setScaledSize(scaled);
+			reader.setScaledSize(displaySize(picture));
 
 			const QImage image = reader.read();
 			if (image.isNull()) continue;
@@ -200,15 +208,78 @@ public:
 		document.setTextWidth(width);
 	}
 
+	~Layout()
+	{
+		qDeleteAll(movies);
+	}
+
+	/**
+	 * How big a picture is drawn: the text column at most, and no taller than the cap.
+	 *
+	 * Both dimensions are worked out here rather than left to the layout, so a still and
+	 * an animation of the same picture are the same size and the aspect ratio survives.
+	 */
+	QSize displaySize(const RichText::LocalMedia& picture) const
+	{
+		QSize shown = picture.size;
+		const int room = options.mediaWidth;
+
+		if (room > 0 && shown.width() > room)
+			shown = QSize(room, shown.height() * room / shown.width());
+
+		if (options.mediaHeight > 0 && shown.height() > options.mediaHeight)
+		{
+			shown = QSize(shown.width() * options.mediaHeight / shown.height(),
+			              options.mediaHeight);
+		}
+
+		return QSize(qMax(1, shown.width()), qMax(1, shown.height()));
+	}
+
 	QTextDocument document;
 
 	/** The pictures this row draws, kept so they can be loaded before the html is set. */
 	QList<RichText::LocalMedia> pictures;
+
+	/** One per animated picture, each feeding its frames into the document. */
+	QList<QMovie*> movies;
+
+	/** When this row was last drawn; see ChatDelegate's idle timer. */
+	QElapsedTimer painted;
+
+	/** Kept because displaySize() needs the room a picture may have. */
+	RichText::RenderOptions options;
 };
 
 Qdc::ChatDelegate::ChatDelegate(QObject* parent)
 	: QStyledItemDelegate(parent)
+	, m_idle(new QTimer(this))
 {
+	/*
+	 * Every row is measured, so an animation exists for every one in the backlog whether
+	 * or not it is on screen. Being painted is the only sign that a row is visible, so
+	 * anything that has not been painted lately is stopped until it is again.
+	 */
+	m_idle->setInterval(IDLE_CHECK_MS);
+	connect(m_idle, &QTimer::timeout, this, [this] {
+		bool anyRunning = false;
+
+		for (Layout* layout : m_cache)
+		{
+			const bool seen = layout->painted.isValid()
+				&& layout->painted.elapsed() < IDLE_AFTER_MS;
+
+			for (QMovie* movie : layout->movies)
+			{
+				if (seen && movie->state() != QMovie::Running) movie->start();
+				else if (!seen && movie->state() == QMovie::Running) movie->setPaused(true);
+
+				anyRunning = anyRunning || seen;
+			}
+		}
+
+		if (!anyRunning) m_idle->stop();
+	});
 }
 
 void Qdc::ChatDelegate::setMediaResolver(
@@ -251,6 +322,38 @@ const Qdc::ChatDelegate::Layout& Qdc::ChatDelegate::layoutFor(
 	Layout* layout = new Layout(message, width, option.font, option.palette, dark, m_media);
 	m_cache.insert(index.row(), layout);
 
+	for (int n = 0; n < layout->movies.size(); ++n)
+	{
+		QMovie* movie = layout->movies.at(n);
+		const QString path = layout->pictures.at(n).path;
+
+		connect(movie, &QMovie::frameChanged, this, [this, layout, movie, path] {
+			/*
+			 * The frame becomes the document's picture. markContentsDirty() is what
+			 * makes the document look at the resource again rather than draw the copy
+			 * it laid out.
+			 */
+			layout->document.addResource(QTextDocument::ImageResource, QUrl(path),
+			                             movie->currentPixmap().toImage());
+			layout->document.markContentsDirty(0, layout->document.characterCount());
+
+			/* Whichever row this layout belongs to; the cache is keyed by row. */
+			for (auto one = m_cache.constBegin(); one != m_cache.constEnd(); ++one)
+			{
+				if (one.value() != layout) continue;
+
+				emit rowNeedsRepaint(one.key());
+				break;
+			}
+		});
+
+		/*
+		 * Looped, whatever the file says. A picture sent in conversation is meant to
+		 * keep moving; one that stops after three turns looks broken.
+		 */
+		connect(movie, &QMovie::finished, movie, [movie] { movie->start(); });
+	}
+
 	return *layout;
 }
 
@@ -274,6 +377,16 @@ void Qdc::ChatDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opt
 	if (width <= 0) return;
 
 	const Layout& layout = layoutFor(index, width, option);
+
+	/* Painted means visible, which is what decides whether an animation runs. */
+	Layout& seen = const_cast<Layout&>(layout);
+	seen.painted.restart();
+
+	for (QMovie* movie : seen.movies)
+	{
+		if (movie->state() != QMovie::Running) movie->start();
+		if (!m_idle->isActive()) m_idle->start();
+	}
 
 	painter->save();
 	painter->translate(option.rect.left() + MARGIN_X, option.rect.top() + MARGIN_Y);
@@ -348,6 +461,8 @@ Qdc::ChatFeed::ChatFeed(QWidget* parent)
 
 	/* So that a link can show a hand before it is pressed. */
 	viewport()->setMouseTracking(true);
+
+	connect(m_delegate, &ChatDelegate::rowNeedsRepaint, this, &ChatFeed::repaintRow);
 }
 
 void Qdc::ChatFeed::setModel(QAbstractItemModel* model)
@@ -391,6 +506,13 @@ void Qdc::ChatFeed::setMediaResolver(
 {
 	m_delegate->setMediaResolver(std::move(media));
 	scheduleDelayedItemsLayout();
+}
+
+void Qdc::ChatFeed::repaintRow(int row)
+{
+	if (!model() || row < 0 || row >= model()->rowCount()) return;
+
+	viewport()->update(visualRect(model()->index(row, 0)));
 }
 
 void Qdc::ChatFeed::refreshMedia()
