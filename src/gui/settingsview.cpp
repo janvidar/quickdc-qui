@@ -21,6 +21,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace {
@@ -214,12 +215,24 @@ QWidget* Qdc::SettingsView::buildLimits()
 	m_chunkSize->setRange(64, 65536);
 	m_chunkSize->setSingleStep(64);
 	m_chunkSize->setSuffix(tr(" KiB"));
-	m_chunkSize->setToolTip(tr("How much is asked of one peer at a time"));
+	m_chunkSize->setToolTip(tr("The least that is asked of one peer at a time; a "
+	                           "peer that turns out to be fast is asked for more"));
 
 	QFormLayout* form = new QFormLayout(group);
 	form->addRow(tr("Upload slots"), m_slots);
 	form->addRow(tr("Concurrent downloads"), m_maxDownloads);
-	form->addRow(tr("Chunk size"), m_chunkSize);
+	form->addRow(tr("Smallest chunk"), m_chunkSize);
+
+	/*
+	 * Said because the field is now a floor rather than the size, and somebody who
+	 * set it expecting the latter would otherwise have no way to know.
+	 */
+	form->addRow(makeNote(tr(
+		"A chunk is sized to the source it is asked of: enough for a second or two "
+		"of transfer at whatever that peer has been managing, never less than the "
+		"figure above. Every chunk costs a round trip, so asking a fast peer for a "
+		"small one leaves the connection waiting between chunks instead of "
+		"transferring.")));
 
 	/*
 	 * Said rather than shown as a disabled field. Nothing in the core throttles:
@@ -510,25 +523,23 @@ void Qdc::SettingsView::addShare()
 {
 	if (!m_shares) return;
 
-	const QString chosen = QFileDialog::getExistingDirectory(this,
-		tr("Share a folder"), QDir::homePath());
+	chooseDirectory(tr("Share a folder"), QDir::homePath(),
+	                [this](const QString& chosen) {
+		/*
+		 * The shares list writes itself through immediately rather than waiting for
+		 * Save, because it is its own store and a half-applied folder list is not a
+		 * useful state to be in.
+		 */
+		if (!m_shares->add(chosen))
+		{
+			QMessageBox::information(this, tr("Share a folder"),
+				tr("'%1' is already shared, or is inside a folder that is.")
+					.arg(chosen));
+			return;
+		}
 
-	if (chosen.isEmpty()) return;
-
-	/*
-	 * The shares list writes itself through immediately rather than waiting for
-	 * Save, because it is its own store and a half-applied folder list is not a
-	 * useful state to be in.
-	 */
-	if (!m_shares->add(chosen))
-	{
-		QMessageBox::information(this, tr("Share a folder"),
-			tr("'%1' is already shared, or is inside a folder that is.")
-				.arg(chosen));
-		return;
-	}
-
-	refreshShareList();
+		refreshShareList();
+	});
 }
 
 void Qdc::SettingsView::removeSelectedShare()
@@ -560,16 +571,34 @@ void Qdc::SettingsView::renameSelectedShare()
 	if (m_shares->renameAt(row, name)) refreshShareList();
 }
 
+void Qdc::SettingsView::chooseDirectory(const QString& title, const QString& start,
+                                        std::function<void(const QString&)> chosen)
+{
+	/*
+	 * On the next turn of the event loop, and drawn by Qt rather than by the platform,
+	 * for the same reasons the composer's file chooser is - see HubsView. Both
+	 * failures look exactly like a button that does nothing: a chooser opened from
+	 * inside the press that asked for it is dismissed again by that same press, and
+	 * the platform's own panel, asked for modally, returns at once with nothing
+	 * chosen.
+	 */
+	QTimer::singleShot(0, this, [this, title, start, chosen] {
+		const QString directory = QFileDialog::getExistingDirectory(this, title, start,
+			QFileDialog::ShowDirsOnly | QFileDialog::DontUseNativeDialog);
+
+		if (directory.isEmpty()) return;
+
+		chosen(directory);
+	});
+}
+
 void Qdc::SettingsView::chooseDownloadDirectory()
 {
 	const QString current = m_downloadDir->text().trimmed();
 
-	const QString chosen = QFileDialog::getExistingDirectory(this,
-		tr("Save downloads to"),
-		current.isEmpty() ? QDir::homePath() : current);
-
-	if (chosen.isEmpty()) return;
-
-	m_downloadDir->setText(chosen);
-	markModified();
+	chooseDirectory(tr("Save downloads to"),
+		current.isEmpty() ? QDir::homePath() : current, [this](const QString& chosen) {
+			m_downloadDir->setText(chosen);
+			markModified();
+		});
 }

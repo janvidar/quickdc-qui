@@ -8,10 +8,15 @@
 #include <gui/settingsview.h>
 
 #include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QElapsedTimer>
 #include <QThread>
 #include <QTest>
@@ -42,6 +47,7 @@ private slots:
 	void formWritesWhatTheCoreReads();
 	void formTracksBeingEdited();
 	void formChunkSizeIsShownInKibibytes();
+	void formAddsAFolderWithQtsOwnChooser();
 
 private:
 	QString scratch(const QString& name) const;
@@ -374,6 +380,98 @@ void TestSettings::formChunkSizeIsShownInKibibytes()
 	 */
 	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Network"),
 	                             QStringLiteral("Chunk size")), 2 * 1024 * 1024);
+}
+
+void TestSettings::formAddsAFolderWithQtsOwnChooser()
+{
+	const QString folder = scratch(QStringLiteral("Clicked"));
+	QVERIFY(QDir().mkpath(folder));
+
+	Qdc::Shares shares(m_config);
+	shares.setFolders({});
+
+	Qdc::SettingsView view(m_config, &shares);
+
+	QPushButton* add = nullptr;
+	for (QPushButton* button : view.findChildren<QPushButton*>())
+	{
+		if (button->text().startsWith(QStringLiteral("Add folder"))) add = button;
+	}
+
+	QVERIFY2(add, "the form has no Add folder button");
+
+	QListWidget* list = view.findChildren<QListWidget*>().value(0);
+	QVERIFY(list);
+	QCOMPARE(list->count(), 0);
+
+	/*
+	 * Driven by clicking, unlike the rest of the form, because what broke was the
+	 * press and not the store: the chooser was the platform's, and asked for
+	 * modally that one returns at once with nothing chosen - a button that did
+	 * nothing at all. So the option that refuses it is asserted here as well.
+	 */
+	bool sawTheChooser = false;
+	bool refusedThePlatform = false;
+	bool directoriesOnly = false;
+
+	/*
+	 * Looked for repeatedly rather than once, because the chooser runs an event loop
+	 * of its own: a single shot scheduled before the click is answered before the
+	 * chooser is even built, and the loop it then enters is where this has to fire.
+	 */
+	QTimer watcher;
+	watcher.setInterval(20);
+
+	QObject::connect(&watcher, &QTimer::timeout,
+	                 [&folder, &sawTheChooser, &refusedThePlatform, &directoriesOnly] {
+		for (QWidget* widget : QApplication::topLevelWidgets())
+		{
+			QFileDialog* dialog = qobject_cast<QFileDialog*>(widget);
+			if (!dialog) continue;
+
+			refusedThePlatform =
+				dialog->testOption(QFileDialog::DontUseNativeDialog);
+			directoriesOnly = dialog->fileMode() == QFileDialog::Directory;
+
+			/*
+			 * Typed rather than picked out of the listing. The listing is
+			 * filled in as the model reads the directory, so selecting a row
+			 * that is not there yet leaves whichever folder is open as the
+			 * answer; accept() takes the typed path from the filesystem.
+			 */
+			if (QLineEdit* typed =
+				dialog->findChild<QLineEdit*>(QStringLiteral("fileNameEdit")))
+			{
+				typed->setText(folder);
+			}
+
+			sawTheChooser = true;
+			QMetaObject::invokeMethod(dialog, "accept");
+			return;
+		}
+	});
+
+	watcher.start();
+
+	add->click();
+
+	/* Opened a turn later, so the click is over before there is anything to choose. */
+	QCOMPARE(list->count(), 0);
+
+	QTRY_VERIFY(sawTheChooser);
+	QTRY_COMPARE(list->count(), 1);
+
+	watcher.stop();
+
+	QVERIFY2(refusedThePlatform,
+	         "the chooser was left to the platform, which is what did nothing");
+	QVERIFY2(directoriesOnly, "the chooser offered files as well as folders");
+
+	QCOMPARE(shares.count(), 1);
+	QCOMPARE(shares.folders().first().path, folder);
+	QCOMPARE(shares.folders().first().name, QStringLiteral("Clicked"));
+
+	shares.setFolders({});
 }
 
 QTEST_MAIN(TestSettings)

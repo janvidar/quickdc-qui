@@ -7,6 +7,8 @@
 
 #include "view.h"
 
+#include <functional>
+
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -73,6 +75,16 @@ private:
 	void markModified();
 
 	void refreshShareList();
+
+	/**
+	 * Ask for a folder, and do something with it once there is one.
+	 *
+	 * The chooser is opened a turn later, so 'chosen' is called after this returns
+	 * and only when something was picked; see the note where it is built.
+	 */
+	void chooseDirectory(const QString& title, const QString& start,
+	                     std::function<void(const QString&)> chosen);
+
 	void addShare();
 	void removeSelectedShare();
 	void renameSelectedShare();
