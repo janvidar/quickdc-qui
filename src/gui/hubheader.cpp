@@ -53,6 +53,8 @@ QString net_status_text(Qdc::NetStatus status)
 		case Qdc::NetStatus::ErrorTimeout:            return QObject::tr("The hub did not answer");
 		case Qdc::NetStatus::ErrorConnectionRefused:  return QObject::tr("The connection was refused");
 		case Qdc::NetStatus::ErrorHostNotFound:       return QObject::tr("No such host");
+		case Qdc::NetStatus::ErrorHostUnreachable:
+			return QObject::tr("The hub could not be reached; trying again");
 		case Qdc::NetStatus::ErrorIO:                 return QObject::tr("The connection failed");
 		case Qdc::NetStatus::TlsError:                return QObject::tr("The secure connection failed");
 	}

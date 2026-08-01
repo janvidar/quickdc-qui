@@ -34,6 +34,10 @@ enum class NetStatus {
 	ErrorTimeout,
 	ErrorConnectionRefused,
 	ErrorHostNotFound,
+
+	/** Nothing was reachable: no route, or the network is down. */
+	ErrorHostUnreachable,
+
 	ErrorIO,
 	TlsError
 };

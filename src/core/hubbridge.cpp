@@ -30,6 +30,7 @@ bool session_ended(Qdc::NetStatus status)
 		case Qdc::NetStatus::ErrorTimeout:
 		case Qdc::NetStatus::ErrorConnectionRefused:
 		case Qdc::NetStatus::ErrorHostNotFound:
+		case Qdc::NetStatus::ErrorHostUnreachable:
 		case Qdc::NetStatus::ErrorIO:
 		case Qdc::NetStatus::TlsError:
 			return true;
@@ -68,6 +69,7 @@ Qdc::NetStatus convert(QuickDC::HubListener::StatusNetwork status)
 		case QuickDC::HubListener::NetErrorTimeout:            return Qdc::NetStatus::ErrorTimeout;
 		case QuickDC::HubListener::NetErrorConnectionRefused:  return Qdc::NetStatus::ErrorConnectionRefused;
 		case QuickDC::HubListener::NetErrorHostNotFound:       return Qdc::NetStatus::ErrorHostNotFound;
+		case QuickDC::HubListener::NetErrorHostUnreachable:    return Qdc::NetStatus::ErrorHostUnreachable;
 		case QuickDC::HubListener::NetErrorIO:                 return Qdc::NetStatus::ErrorIO;
 		case QuickDC::HubListener::NetTlsError:                return Qdc::NetStatus::TlsError;
 	}
