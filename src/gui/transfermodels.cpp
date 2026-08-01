@@ -194,7 +194,17 @@ QVariant Qdc::ActiveTransfersModel::data(const QModelIndex& index, int role) con
 				: QVariant(static_cast<int>(Qt::AlignRight | Qt::AlignVCenter));
 
 		case Qt::ToolTipRole:
-			return transfer.filename;
+		{
+			/*
+			 * The row is the file; how many pieces it is arriving in is worth being
+			 * able to find out, and is not worth a column of its own.
+			 */
+			if (transfer.chunks <= 1) return transfer.filename;
+
+			return transfer.filename + QLatin1Char('\n')
+				+ tr("%n chunk(s) at once", nullptr,
+				     static_cast<int>(transfer.chunks));
+		}
 
 		case Qt::DisplayRole:
 			break;

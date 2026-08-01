@@ -17,6 +17,7 @@
 #include <QLocale>
 #include <QMenu>
 #include <QMessageBox>
+#include <QSet>
 #include <QTabWidget>
 #include <QTableView>
 #include <QTimer>
@@ -42,6 +43,34 @@ constexpr int POLL_INTERVAL_MS = 1000;
  * header word "Progress" is narrower than a bar wants to be.
  */
 constexpr int PROGRESS_WIDTH = 130;
+
+/**
+ * How long the readings asked for by a transfer ending are coalesced over.
+ *
+ * A file arriving in chunks ends a transfer every time one of them completes, and
+ * one reading per chunk is both a job on the core thread several times a second
+ * and a poor sample of what is moving - it is taken in the very moment nothing is
+ * in flight. Short enough that a transfer which has really ended leaves the table
+ * promptly, since the timer above is not running while this view is hidden.
+ */
+constexpr int END_REFRESH_DELAY_MS = 500;
+
+/**
+ * What makes two of the core's transfers the same thing being moved.
+ *
+ * The events are one per chunk, so this is how four of them are recognised as one
+ * file. The direction is part of it because the same file can be going both ways
+ * at once, and a transfer with no file to name is only ever itself. Same rule as
+ * TransferBridge::foldByFile(), which folds the rows the table draws.
+ */
+QString live_key(const Qdc::TransferInfo& transfer)
+{
+	if (transfer.filename.isEmpty())
+		return QStringLiteral("?") + QString::number(transfer.id);
+
+	return (transfer.upload ? QStringLiteral("up:") : QStringLiteral("down:"))
+		+ transfer.filename;
+}
 
 /** The order the priority buttons step through. */
 const QList<Qdc::Priority>& priority_ladder()
@@ -102,6 +131,7 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 	, m_completedModel(new CompletedModel(this))
 	, m_summary(new QLabel(this))
 	, m_poll(new QTimer(this))
+	, m_endRefresh(new QTimer(this))
 {
 	m_queueTable->setModel(m_queueModel);
 	m_queueTable->setItemDelegateForColumn(QueueModel::ProgressColumn,
@@ -142,6 +172,8 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 
 	connect(m_queueTable, &QTableView::customContextMenuRequested,
 	        this, &TransfersView::showQueueMenu);
+	connect(m_activeTable, &QTableView::customContextMenuRequested,
+	        this, &TransfersView::showActiveMenu);
 	connect(m_completedTable, &QTableView::customContextMenuRequested,
 	        this, &TransfersView::showCompletedMenu);
 
@@ -156,6 +188,13 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 	});
 
 	m_poll->setInterval(POLL_INTERVAL_MS);
+
+	m_endRefresh->setSingleShot(true);
+	m_endRefresh->setInterval(END_REFRESH_DELAY_MS);
+
+	connect(m_endRefresh, &QTimer::timeout, this, [this] {
+		if (m_transfers) m_transfers->refresh();
+	});
 
 	/*
 	 * The timer asks; the answer arrives on a signal. Reading the figures straight out
@@ -182,7 +221,7 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 
 		connect(m_transfers, &TransferBridge::transferStarted, this,
 		        [this](const TransferInfo& transfer) {
-			m_live.insert(transfer.id);
+			m_live.insert(transfer.id, live_key(transfer));
 			refreshCounters();
 		});
 
@@ -191,8 +230,12 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 			m_live.remove(transfer.id);
 			refreshCounters();
 
-			/* Asked for rather than read: the figures follow on snapshotChanged(). */
-			if (m_transfers) m_transfers->refresh();
+			/*
+			 * Asked for rather than read: the figures follow on snapshotChanged().
+			 * Coalesced, because a chunk of a file ending is one of these and there
+			 * are several of those a second - see END_REFRESH_DELAY_MS.
+			 */
+			if (!m_endRefresh->isActive()) m_endRefresh->start();
 		};
 
 		connect(m_transfers, &TransferBridge::transferFinished, this, ended);
@@ -212,9 +255,13 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 			m_completed->add(entry);
 		});
 
-		/* Whatever was already running or queued before this view existed. */
-		for (const TransferInfo& transfer : m_transfers->activeTransfers())
-			m_live.insert(transfer.id);
+		/*
+		 * Nothing is seeded from the snapshot on purpose. Its rows stand for files
+		 * rather than for the core's transfers, so an ending - which names one
+		 * transfer - could never retire a row put here from one, and the count would
+		 * stay too high for the rest of the run. refreshCounters() consults the
+		 * snapshot directly instead.
+		 */
 	}
 
 	refreshQueue();
@@ -277,7 +324,12 @@ void Qdc::TransfersView::hideEvent(QHideEvent* event)
 
 void Qdc::TransfersView::refreshQueue()
 {
-	if (m_transfers) m_queueModel->setEntries(m_transfers->queueSnapshot());
+	/*
+	 * What is waiting, rather than the whole queue: a file being fetched is in the
+	 * queue until it is complete, and it is already on the next tab along with a
+	 * rate and a progress bar. Listing it here as well only says it twice.
+	 */
+	if (m_transfers) m_queueModel->setEntries(m_transfers->waitingEntries());
 	refreshCounters();
 }
 
@@ -293,9 +345,30 @@ void Qdc::TransfersView::refreshCompleted()
 	refreshCounters();
 }
 
+int Qdc::TransfersView::liveFileCount() const
+{
+	/*
+	 * By name rather than by entry: the core starts a transfer per chunk, so a
+	 * file being fetched in four of them arrived here four times.
+	 */
+	QSet<QString> files;
+
+	for (const QString& file : m_live)
+		files.insert(file);
+
+	return static_cast<int>(files.size());
+}
+
 void Qdc::TransfersView::refreshCounters()
 {
-	setBadgeCount(static_cast<int>(m_live.size()));
+	/*
+	 * The events and the snapshot each know something the other does not: an event
+	 * arrives the moment a transfer starts but can be missed, while the snapshot is
+	 * complete and up to a poll interval old - and is not refreshed at all while
+	 * this view is hidden. Whichever of them says more files are moving is the one
+	 * to believe.
+	 */
+	setBadgeCount(qMax(liveFileCount(), m_activeModel->rowCount()));
 
 	m_tabs->setTabText(0, m_queueModel->rowCount() > 0
 		? tr("Queue (%1)").arg(m_queueModel->rowCount())
@@ -340,6 +413,34 @@ QVector<Qdc::QueueEntry> Qdc::TransfersView::selectedQueueEntries() const
 	return entries;
 }
 
+QVector<Qdc::QueueEntry> Qdc::TransfersView::selectedActiveEntries() const
+{
+	QVector<QueueEntry> entries;
+	if (!m_transfers) return entries;
+
+	/* The whole queue, transfers included: those rows are what this tab shows. */
+	const QVector<QueueEntry> queued = m_transfers->queueSnapshot();
+
+	const QModelIndexList rows = m_activeTable->selectionModel()
+		->selectedRows(ActiveTransfersModel::NameColumn);
+
+	for (const QModelIndex& index : rows)
+	{
+		const TransferInfo transfer = m_activeModel->at(index.row());
+		if (transfer.upload || transfer.filename.isEmpty()) continue;
+
+		for (const QueueEntry& entry : queued)
+		{
+			if (entry.filename != transfer.filename) continue;
+
+			entries.append(entry);
+			break;
+		}
+	}
+
+	return entries;
+}
+
 void Qdc::TransfersView::nudgePriority(int steps)
 {
 	if (!m_transfers || steps == 0) return;
@@ -363,8 +464,18 @@ void Qdc::TransfersView::nudgePriority(int steps)
 
 void Qdc::TransfersView::showQueueMenu(const QPoint& where)
 {
-	const QVector<QueueEntry> selected = selectedQueueEntries();
-	if (selected.isEmpty() || !m_transfers) return;
+	showEntryMenu(selectedQueueEntries(), m_queueTable, where);
+}
+
+void Qdc::TransfersView::showActiveMenu(const QPoint& where)
+{
+	showEntryMenu(selectedActiveEntries(), m_activeTable, where);
+}
+
+void Qdc::TransfersView::showEntryMenu(const QVector<QueueEntry>& selected,
+                                       QTableView* table, const QPoint& where)
+{
+	if (selected.isEmpty() || !m_transfers || !table) return;
 
 	QMenu menu(this);
 
@@ -438,7 +549,7 @@ void Qdc::TransfersView::showQueueMenu(const QPoint& where)
 		refreshQueue();
 	});
 
-	menu.exec(m_queueTable->viewport()->mapToGlobal(where));
+	menu.exec(table->viewport()->mapToGlobal(where));
 }
 
 void Qdc::TransfersView::showCompletedMenu(const QPoint& where)

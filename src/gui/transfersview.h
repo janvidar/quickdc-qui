@@ -9,7 +9,7 @@
 
 #include <core/coretypes.h>
 
-#include <QSet>
+#include <QHash>
 
 class QLabel;
 class QTabWidget;
@@ -77,14 +77,37 @@ private:
 	/** Recount the badge and the tab labels from what is known. */
 	void refreshCounters();
 
+	/** How many distinct files m_live holds. */
+	int liveFileCount() const;
+
 	void showQueueMenu(const QPoint& where);
+	void showActiveMenu(const QPoint& where);
 	void showCompletedMenu(const QPoint& where);
+
+	/**
+	 * The menu for a set of queued files, wherever they happen to be selected.
+	 *
+	 * The two tabs show the same files from different angles - one what is waiting,
+	 * the other what is moving - so the same actions have to be reachable from
+	 * either. Without this, keeping a transfer out of the queue tab would take away
+	 * the only way to pause or cancel one.
+	 */
+	void showEntryMenu(const QVector<QueueEntry>& selected, QTableView* table,
+	                   const QPoint& where);
 
 	/** Move the selected entries one step up or down the priority scale. */
 	void nudgePriority(int steps);
 
 	/** The queue entries currently selected, in row order. */
 	QVector<QueueEntry> selectedQueueEntries() const;
+
+	/**
+	 * The queue entries behind the selected rows of the active table.
+	 *
+	 * Uploads are skipped: what somebody else is fetching from us is not ours to
+	 * pause or remove, and there is no queue entry for it either.
+	 */
+	QVector<QueueEntry> selectedActiveEntries() const;
 
 	TransferBridge* m_transfers;
 	Completed* m_completed;
@@ -104,11 +127,22 @@ private:
 	QTimer* m_poll;
 
 	/**
-	 * Transfers believed to be in flight, for the badge. A set rather than a
-	 * counter because the core can report a transfer ending that was never seen
-	 * starting, and decrementing on that would take the count below zero.
+	 * Coalesces the readings asked for by transfers ending, which for a file
+	 * arriving in chunks is several a second. Single shot; started when one ends
+	 * and left alone until it has fired.
 	 */
-	QSet<quintptr> m_live;
+	QTimer* m_endRefresh;
+
+	/**
+	 * Transfers believed to be in flight, for the badge, each against the file it
+	 * is moving. Kept rather than counted because the core can report a transfer
+	 * ending that was never seen starting, and decrementing on that would take the
+	 * count below zero.
+	 *
+	 * The badge counts the files rather than the entries: the core's events are one
+	 * per chunk, and a file arriving in four of them is one thing being downloaded.
+	 */
+	QHash<quintptr, QString> m_live;
 };
 
 }

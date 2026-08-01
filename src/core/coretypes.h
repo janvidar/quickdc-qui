@@ -160,25 +160,62 @@ struct ChatMessage {
 };
 
 /**
- * One transfer in flight.
+ * One transfer in flight: one file, rather than one piece of one.
  *
- * 'id' is the address of the core's Transfer object carried as an integer,
- * because matching an update against a row already on screen is all it is for.
- * It must not be turned back into a pointer: the transfer it names may well
- * have been deleted by the time another thread reads this.
+ * The core moves a large file in several chunks at once, each of them a Transfer
+ * of its own covering its own byte range, and often from several sources.
+ * TransferBridge folds those into one of these per file - see
+ * TransferBridge::foldByFile() - because a file is what somebody watching a
+ * download is watching, not the ranges it happens to be arriving in.
+ *
+ * 'id' is a key for matching an update against a row already on screen, and
+ * nothing else. For a folded row it stands for the file and the direction. For a
+ * single transfer as the core reported it, it is the address of the core's
+ * Transfer object carried as an integer, which must not be turned back into a
+ * pointer: the transfer it names may well have been deleted by the time another
+ * thread reads this.
  */
 struct TransferInfo {
 	quintptr id = 0;
+
+	/**
+	 * A download names the file it will become, rather than the ".part" beside
+	 * it that the bytes are actually going into.
+	 */
 	QString filename;
 
-	/** Bytes moved of 'length', both counted within this transfer's range. */
+	/**
+	 * Bytes moved of 'length'.
+	 *
+	 * A download counts the whole file, however much of it the chunks in flight
+	 * happen to cover, because that is the figure the queue keeps and the one
+	 * worth watching. An upload counts what its chunks cover.
+	 */
 	quint64 transferred = 0;
 	quint64 length = 0;
 
+	/** Added up across the chunks. */
 	quint64 bytesPerSecond = 0;
 
 	/** Wire bytes over file bytes; 1.0 unless the stream is compressed. */
 	double ratio = 1.0;
+
+	/**
+	 * How many of the core's transfers are moving this file right now.
+	 *
+	 * Zero while it is between chunks: each one is a request of its own, and for
+	 * the moment between an answered request and the next there is nothing moving
+	 * even though the file is still on its way.
+	 */
+	quint32 chunks = 1;
+
+	/**
+	 * How long there has been nothing moving, in milliseconds.
+	 *
+	 * Zero for anything with a chunk in flight. A row is given up on once this
+	 * passes the grace TransferBridge::foldByFile() allows it.
+	 */
+	int idleMs = 0;
 
 	bool upload = false;
 	bool finished = false;
@@ -228,6 +265,17 @@ struct QueueEntry {
 	quint32 activeSources = 0;
 	Priority priority = Priority::Normal;
 	bool complete = false;
+
+	/**
+	 * Whether this file is one of the transfers in flight.
+	 *
+	 * Not the core's doing: 'activeSources' counts requests, and a file arriving in
+	 * chunks has none of those for the moment between one chunk and the next. This
+	 * follows the rows TransferBridge::foldByFile() settled on instead, so that a
+	 * file counted as transferring stays counted as one for as long as it is
+	 * shown that way. TransferBridge::markTransferring() sets it.
+	 */
+	bool transferring = false;
 };
 
 }

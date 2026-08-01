@@ -7,6 +7,7 @@
 
 #include "coretypes.h"
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QVector>
 
@@ -43,7 +44,7 @@ public:
 	~TransferBridge() override;
 
 	/**
-	 * Every transfer in flight, as of the last snapshot.
+	 * Every transfer in flight, as of the last snapshot, one row per file.
 	 *
 	 * Returns immediately: these are the figures the core thread last handed over,
 	 * not a fresh reading. Nothing here waits for the core, because the core thread
@@ -53,16 +54,87 @@ public:
 	 *
 	 * Ask for new figures with refresh() and draw again when snapshotChanged() says
 	 * they have arrived. Empty until the first snapshot completes.
+	 *
+	 * The chunks a file is arriving in are folded together here rather than in one
+	 * of the views, because every one of them counts these: a table of what is
+	 * moving, the badge on the rail, and the summary on the home page would each
+	 * have had to know that three rows can mean one download.
 	 */
 	QVector<TransferInfo> activeTransfers() const;
 
 	/**
-	 * The download queue, from the same snapshot.
+	 * Fold the core's transfers into one row per file, and hold that row steady.
+	 *
+	 * Chunks of the same file going the same way become a single row: their rates
+	 * are added, and 'chunks' counts how many there were. A download's progress is
+	 * taken from its queue entry rather than from the chunks, because the chunks
+	 * only cover the ranges being fetched at this moment and the queue knows how
+	 * much of the whole file is there.
+	 *
+	 * Folding alone is not enough to make a row stand still, which is what the last
+	 * two arguments are for. A chunk is a request of its own, so between one
+	 * finishing and the next being answered there is nothing moving for the file at
+	 * all - and a reading taken in that moment used to find no row for it, so the
+	 * row vanished and came back a second later. Every figure the core keeps behaves
+	 * that way, the queue's own count of active sources included, because they are
+	 * all counting requests. So a row that was there and has nothing moving now is
+	 * held for a few seconds before it is given up on, and it keeps the rate it last
+	 * had - a rate of nothing draws as an empty cell, so zeroing it moved the flicker
+	 * into that column instead of curing it.
+	 *
+	 * Rows also keep the order they were first seen in, for the same reason: the
+	 * core's own order follows a vector that chunks are added to and taken out of,
+	 * so rows swapped places from one reading to the next.
+	 *
+	 * @param chunks what the core reported, one entry per Transfer.
+	 * @param queued the queue as of the same snapshot, for those progress figures,
+	 *        and to tell a download between chunks from one that has finished or
+	 *        been taken out. Uploads are not in it and are held on the grace alone.
+	 * @param previous what this returned for the reading before, or nothing.
+	 * @param sinceMs how long ago that reading was taken, in milliseconds.
+	 *
+	 * Static and public because it is worth testing on its own, and because the
+	 * rule it implements - what counts as "the same file" - is one that a caller
+	 * comparing a row against a live event has to agree with.
+	 */
+	static QVector<TransferInfo> foldByFile(const QVector<TransferInfo>& chunks,
+	                                        const QVector<QueueEntry>& queued,
+	                                        const QVector<TransferInfo>& previous = {},
+	                                        int sinceMs = 0);
+
+	/**
+	 * The download queue, from the same snapshot, whole.
+	 *
+	 * Includes the files being transferred right now, each with
+	 * QueueEntry::transferring set. waitingEntries() is the rest of it.
 	 *
 	 * Empty both when nothing is queued and when the core was built without a
 	 * queue file, which the lighter constructor allows.
 	 */
 	QVector<QueueEntry> queueSnapshot() const;
+
+	/**
+	 * The queue minus whatever is being transferred at the moment.
+	 *
+	 * What is still waiting, in other words. A file being fetched is in the queue
+	 * until it is complete - that is what the queue is for - but showing it in a
+	 * list of what is waiting as well as in a list of what is moving says the same
+	 * thing twice, so the two are kept disjoint.
+	 */
+	QVector<QueueEntry> waitingEntries() const;
+
+	/**
+	 * Flag the queue entries that the given rows are transferring.
+	 *
+	 * Matched on the local filename, which is what a folded download row is named
+	 * after. Uploads are not consulted: a file being sent to somebody has nothing
+	 * to do with one being fetched, even where both are the same file.
+	 *
+	 * Static and public for the same reasons as foldByFile(), whose output it is
+	 * meant to be given.
+	 */
+	static QVector<QueueEntry> markTransferring(const QVector<QueueEntry>& queued,
+	                                            const QVector<TransferInfo>& active);
 
 	/** How many queued files are being fetched from someone right now. */
 	quint32 activeTransferCount() const;
@@ -154,6 +226,14 @@ private:
 
 	/** The last figures the core thread handed over; see activeTransfers(). */
 	QVector<TransferInfo> m_active;
+
+	/**
+	 * Since the last reading was folded, which is how long a row with nothing
+	 * moving has been quiet. Measured here rather than assumed from the poll
+	 * interval, because a view is free to ask whenever it likes - and does, every
+	 * time a transfer ends.
+	 */
+	QElapsedTimer m_taken;
 	QVector<QueueEntry> m_queue;
 	quint32 m_activeCount = 0;
 

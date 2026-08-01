@@ -345,8 +345,10 @@ void Qdc::HomeView::refreshActivity()
 		}
 	}
 
+	/* What is waiting, so that "in progress" and "queued" do not count the same
+	   file twice; a file being fetched stays in the queue until it is complete. */
 	const int queued = m_transfers
-		? static_cast<int>(m_transfers->queueSnapshot().size()) : 0;
+		? static_cast<int>(m_transfers->waitingEntries().size()) : 0;
 
 	if (moving == 0 && queued == 0)
 	{
