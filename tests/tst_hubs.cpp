@@ -74,6 +74,7 @@ private slots:
 	void chatFeedClicksALinkAndIgnoresADrag();
 	void chatFeedDrawsAPictureItHas();
 	void chatFeedKeepsAnAnimationMoving();
+	void chatFeedBandsAHubNotice();
 	void chatModelReadsARichMessageAsProse();
 
 	void favouritesRoundTripThroughTheStore();
@@ -680,6 +681,59 @@ void TestHubs::chatFeedKeepsAnAnimationMoving()
 
 	/* Every frame asks for the row it belongs to, not for the whole feed. */
 	QCOMPARE(moved.at(0).at(0).toInt(), 0);
+}
+
+void TestHubs::chatFeedBandsAHubNotice()
+{
+	Qdc::ChatModel model;
+
+	Qdc::ChatMessage said;
+	said.from = user(QStringLiteral("alice"));
+	said.received = QDateTime::currentDateTime();
+	said.text = QStringLiteral("hello everyone");
+	model.append(said);
+
+	Qdc::ChatMessage notice;
+	notice.fromHub = QStringLiteral("Example Hub");
+	notice.received = said.received;
+	notice.text = QStringLiteral("the hub is going down for maintenance");
+	model.append(notice);
+
+	Qdc::ChatDelegate delegate;
+	const Qdc::Theme& scheme = Qdc::theme();
+
+	/* How much of a row the delegate filled with the scheme's notice colour. */
+	const auto banded = [&](int row) {
+		QStyleOptionViewItem option;
+		option.font = QApplication::font();
+		option.palette = QApplication::palette();
+		option.rect = QRect(0, 0, 420, 0);
+
+		const int height = delegate.sizeHint(option, model.index(row)).height();
+		option.rect = QRect(0, 0, 420, height);
+
+		QImage shot(420, height, QImage::Format_RGB32);
+		shot.fill(scheme.content);
+
+		QPainter painter(&shot);
+		delegate.paint(&painter, option, model.index(row));
+		painter.end();
+
+		int found = 0;
+		for (int y = 0; y < shot.height(); ++y)
+			for (int x = 0; x < shot.width(); ++x)
+				if (shot.pixelColor(x, y) == scheme.notice) ++found;
+
+		return found;
+	};
+
+	/*
+	 * The band is what tells a hub's line apart from somebody's, so it has to be a
+	 * colour on the row and not only a different ink. Muting alone was the whole style
+	 * before, and a muted line is what an ordinary message looks like in a quote.
+	 */
+	QVERIFY2(banded(1) > 0, "a hub notice was drawn with no band behind it");
+	QCOMPARE(banded(0), 0);
 }
 
 void TestHubs::chatModelReadsARichMessageAsProse()

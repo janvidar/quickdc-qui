@@ -16,6 +16,10 @@
 		"one action a panel is for and has to carry accentText on top of it. So the",
 		"pair swaps rather than the roles: light fill, dark ink, both ways round.",
 
+		"The notice band goes the other way from Indigo's, which is a wash lighter",
+		"than white: here it is lighter than the content it sits on, because that is",
+		"the direction a tint has to go to be seen on a dark page.",
+
 		"The radii are Indigo's and are not restated - anything this file leaves out",
 		"is inherited from the theme it extends."
 	],
@@ -49,6 +53,9 @@
 	"contentText": "#e6e8f2",
 	"contentMuted": "#9aa0bd",
 	"border": "#363b58",
+
+	"notice": "#2f3559",
+	"noticeText": "#c3c9e6",
 
 	"accent": "#7d8ff0",
 	"accentText": "#10132a",

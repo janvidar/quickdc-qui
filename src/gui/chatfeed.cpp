@@ -133,11 +133,17 @@ public:
 		else
 		{
 			/*
-			 * A line the hub generated rather than a person: muted and italic, and with
-			 * no name in front of it, so it does not read as somebody speaking.
+			 * A line the hub generated rather than a person: no name in front of it,
+			 * and on a band of its own so it does not read as somebody speaking. The
+			 * band is painted by the delegate rather than written into the document,
+			 * which can only put a colour behind the glyphs.
+			 *
+			 * Italic is left to mean what it means everywhere else - an action - now
+			 * that the band is what tells a notice apart.
 			 */
-			options.body = stamp;
-			options.italic = true;
+			options.body = theme().noticeText;
+			options.italic = message.action;
+			notice = true;
 		}
 
 		options.indent = static_cast<int>(qRound(indent));
@@ -249,6 +255,9 @@ public:
 
 	/** Kept because displaySize() needs the room a picture may have. */
 	RichText::RenderOptions options;
+
+	/** A line the hub wrote, which paint() puts a band behind. */
+	bool notice = false;
 };
 
 Qdc::ChatDelegate::ChatDelegate(QObject* parent)
@@ -377,6 +386,25 @@ void Qdc::ChatDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opt
 	if (width <= 0) return;
 
 	const Layout& layout = layoutFor(index, width, option);
+
+	/*
+	 * The band behind a hub notice, drawn over the style's own background and under the
+	 * text. Not while the row is selected: the selection the style just drew is the
+	 * answer to where the pointer is, and a band over it would hide it.
+	 */
+	if (layout.notice && !(option.state & QStyle::State_Selected))
+	{
+		const Theme& current = theme();
+
+		painter->save();
+		painter->setRenderHint(QPainter::Antialiasing, true);
+		painter->setPen(Qt::NoPen);
+		painter->setBrush(current.notice);
+		painter->drawRoundedRect(
+			QRectF(option.rect.adjusted(MARGIN_X / 2, 1, -MARGIN_X / 2, -1)),
+			current.radiusSmall, current.radiusSmall);
+		painter->restore();
+	}
 
 	/* Painted means visible, which is what decides whether an animation runs. */
 	Layout& seen = const_cast<Layout&>(layout);
@@ -576,6 +604,19 @@ void Qdc::ChatFeed::resizeEvent(QResizeEvent* event)
 	{
 		QMetaObject::invokeMethod(this, &QListView::scrollToBottom,
 		                          Qt::QueuedConnection);
+	}
+}
+
+void Qdc::ChatFeed::changeEvent(QEvent* event)
+{
+	QListView::changeEvent(event);
+
+	if (event->type() == QEvent::PaletteChange
+	    || event->type() == QEvent::StyleChange
+	    || event->type() == QEvent::FontChange)
+	{
+		m_delegate->invalidateLayout();
+		scheduleDelayedItemsLayout();
 	}
 }
 

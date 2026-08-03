@@ -87,6 +87,8 @@ const ColourField COLOURS[] = {
 	{ "contentText"_L1,        &Qdc::Theme::contentText },
 	{ "contentMuted"_L1,       &Qdc::Theme::contentMuted },
 	{ "border"_L1,             &Qdc::Theme::border },
+	{ "notice"_L1,             &Qdc::Theme::notice },
+	{ "noticeText"_L1,         &Qdc::Theme::noticeText },
 	{ "accent"_L1,             &Qdc::Theme::accent },
 	{ "accentText"_L1,         &Qdc::Theme::accentText },
 	{ "danger"_L1,             &Qdc::Theme::danger },
@@ -372,6 +374,14 @@ Qdc::Theme Qdc::defaultTheme()
 	theme.contentText       = QColor(0x1d, 0x1c, 0x1d);
 	theme.contentMuted      = QColor(0x61, 0x60, 0x61);
 	theme.border            = QColor(0xe0, 0xe4, 0xf0);
+
+	/*
+	 * A wash of the frame colour, so a notice belongs to the application rather than
+	 * to the conversation. Darker ink than contentMuted, because it has a tint under
+	 * it rather than white.
+	 */
+	theme.notice            = QColor(0xe8, 0xec, 0xf9);
+	theme.noticeText        = QColor(0x3d, 0x4a, 0x85);
 
 	theme.accent            = theme.frame;
 	theme.accentText        = QColor(0xff, 0xff, 0xff);

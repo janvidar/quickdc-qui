@@ -142,6 +142,12 @@ signals:
 protected:
 	void resizeEvent(QResizeEvent* event) override;
 
+	/**
+	 * A row's colours are laid into its document when it is measured, so a scheme
+	 * chosen while the window is open has to throw those documents away.
+	 */
+	void changeEvent(QEvent* event) override;
+
 	void mouseMoveEvent(QMouseEvent* event) override;
 	void mousePressEvent(QMouseEvent* event) override;
 	void mouseReleaseEvent(QMouseEvent* event) override;

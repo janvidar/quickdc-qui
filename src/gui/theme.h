@@ -109,6 +109,17 @@ struct Theme {
 
 	QColor border;
 
+	/**
+	 * Behind a line the hub wrote, and the ink on it.
+	 *
+	 * A band rather than another shade of grey text: a notice is not somebody
+	 * speaking, and the one thing it must not do is read as though it were. Quiet
+	 * enough that a run of them does not fight the conversation, and distinct from
+	 * contentAlt, which is a row stripe and carries ordinary text.
+	 */
+	QColor notice;
+	QColor noticeText;
+
 	/** Selection, links, the filled part of a progress bar. */
 	QColor accent;
 	QColor accentText;
