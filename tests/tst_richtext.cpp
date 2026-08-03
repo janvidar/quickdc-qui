@@ -40,6 +40,7 @@ private slots:
 	void theHangingIndentOnlyPullsBackTheFirstBlock();
 	void everyCommonMarkConstructReachesTheFeed();
 	void nestingIsDrawnAsNesting();
+	void aParagraphBreakIsVisibleAsOne();
 
 private:
 	static Qdc::RichText::RenderOptions options();
@@ -779,6 +780,59 @@ void TestRichText::toPlainTextStripsMarkers()
 
 	QCOMPARE(Qdc::RichText::toPlainText(QStringLiteral("> quoted\nplain")),
 	         QStringLiteral("quoted\nplain"));
+}
+
+void TestRichText::aParagraphBreakIsVisibleAsOne()
+{
+	/*
+	 * The complaint this answers: a blank line in a message and a single line break
+	 * rendered the same, so the space the sender left was thrown away. What separates
+	 * them is a margin, and Qt honours one given in pixels only - a margin in points is
+	 * accepted and then ignored, which is why the unit is asserted here and not just the
+	 * presence of a gap.
+	 */
+	const QString apart = Qdc::RichText::renderMarkdown(
+		QStringLiteral("one\n\ntwo"), options());
+
+	QVERIFY2(apart.contains(QStringLiteral("margin-top:8px")), qPrintable(apart));
+	QCOMPARE(apart.count(QStringLiteral("<div")), 2);
+	QVERIFY2(!apart.contains(QStringLiteral("<br>")), qPrintable(apart));
+
+	/* A single break stays inside its paragraph, and gets no gap. */
+	const QString together = Qdc::RichText::renderMarkdown(
+		QStringLiteral("one\ntwo"), options());
+
+	QVERIFY2(together.contains(QStringLiteral("<br>")), qPrintable(together));
+	QVERIFY2(!together.contains(QStringLiteral("margin-top")), qPrintable(together));
+
+	/*
+	 * A tight list is one whose items were written without blank lines between them, so
+	 * they stay together; a loose one asked for the space and gets it.
+	 */
+	const QString tight = Qdc::RichText::renderMarkdown(
+		QStringLiteral("- one\n- two\n- three"), options());
+
+	QVERIFY2(!tight.contains(QStringLiteral("margin-top")), qPrintable(tight));
+
+	const QString loose = Qdc::RichText::renderMarkdown(
+		QStringLiteral("- one\n\n- two\n\n- three"), options());
+
+	QCOMPARE(loose.count(QStringLiteral("margin-top")), 2);
+
+	/*
+	 * A tight list still stands apart from the paragraph above it. Only the space between
+	 * its items is suppressed, which is the distinction that got this wrong once.
+	 */
+	const QString after = Qdc::RichText::renderMarkdown(
+		QStringLiteral("a paragraph\n\n- one\n- two"), options());
+
+	QCOMPARE(after.count(QStringLiteral("margin-top")), 1);
+
+	/* A quote holding two paragraphs keeps the break between them. */
+	const QString quoted = Qdc::RichText::renderMarkdown(
+		QStringLiteral("> one\n>\n> two"), options());
+
+	QVERIFY2(quoted.contains(QStringLiteral("margin-top")), qPrintable(quoted));
 }
 
 void TestRichText::everyCommonMarkConstructReachesTheFeed()

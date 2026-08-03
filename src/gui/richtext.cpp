@@ -457,6 +457,14 @@ using Qdc::Markdown::Node;
 constexpr int NEST_INDENT = 18;
 
 /**
+ * The space between one block and the next, in pixels.
+ *
+ * Pixels because that is the unit Qt's rich text honours here: a margin given in points
+ * is accepted and then ignored, which is worse than being rejected.
+ */
+constexpr int BLOCK_GAP = 8;
+
+/**
  * One line of the rendered message: a div's worth of content and where it sits.
  *
  * The message is a list of these rather than one string because the hanging indent
@@ -479,6 +487,15 @@ struct Line {
 	 * a bullet or a monospace panel reads as part of it.
 	 */
 	bool prose = false;
+
+	/**
+	 * Whether this line opens a block that is set apart from the one above it.
+	 *
+	 * A blank line in a message means a paragraph break, and a paragraph break has to be
+	 * visible as one: without this, two paragraphs and two lines of the same paragraph
+	 * look identical, and the sender's blank line has been thrown away.
+	 */
+	bool spaced = false;
 };
 
 /**
@@ -727,12 +744,19 @@ QString render_table(const Node& table, Mode mode,
 	return out + QStringLiteral("</table>");
 }
 
-void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool tight,
+/**
+ * Render a container's blocks.
+ *
+ * 'spaceBlocks' says whether siblings here are set apart with vertical space. They are
+ * everywhere except inside a tight list, which is what tightness means: its items were
+ * written without blank lines between them and are meant to read as one run.
+ */
+void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool spaceBlocks,
                    const Qdc::RichText::RenderColours& colours,
                    const Qdc::RichText::RenderOptions* options, QList<Line>* out);
 
 /** One list, its markers drawn as part of each item's first line. */
-void render_list(const Node& list, Mode mode, int depth, bool tight,
+void render_list(const Node& list, Mode mode, int depth,
                  const Qdc::RichText::RenderColours& colours,
                  const Qdc::RichText::RenderOptions* options, QList<Line>* out)
 {
@@ -741,7 +765,8 @@ void render_list(const Node& list, Mode mode, int depth, bool tight,
 	for (const Node& item : list.children)
 	{
 		QList<Line> inner;
-		render_blocks(item.children, mode, depth + 1, list.tight, colours, options, &inner);
+		render_blocks(item.children, mode, depth + 1, !list.tight, colours, options,
+		              &inner);
 
 		/*
 		 * The marker is drawn as part of the line rather than with a QTextList, because
@@ -765,6 +790,9 @@ void render_list(const Node& list, Mode mode, int depth, bool tight,
 				marker + QStringLiteral("&nbsp;") + inner.first().content;
 		}
 
+		/* A loose list is one whose items were separated by blank lines; keep them. */
+		if (!inner.isEmpty()) inner.first().spaced = !list.tight && ordinal > list.level;
+
 		for (Line& line : inner)
 		{
 			line.prose = false;
@@ -773,17 +801,15 @@ void render_list(const Node& list, Mode mode, int depth, bool tight,
 
 		++ordinal;
 	}
-
-	Q_UNUSED(tight);
 }
 
 /** One quote, with the rule down its left edge on every line of it. */
-void render_quote(const Node& quote, Mode mode, int depth, bool tight,
+void render_quote(const Node& quote, Mode mode, int depth,
                   const Qdc::RichText::RenderColours& colours,
                   const Qdc::RichText::RenderOptions* options, QList<Line>* out)
 {
 	QList<Line> inner;
-	render_blocks(quote.children, mode, depth + 1, tight, colours, options, &inner);
+	render_blocks(quote.children, mode, depth + 1, true, colours, options, &inner);
 
 	for (Line& line : inner)
 	{
@@ -811,12 +837,15 @@ void render_quote(const Node& quote, Mode mode, int depth, bool tight,
 	}
 }
 
-void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool tight,
+void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool spaceBlocks,
                    const Qdc::RichText::RenderColours& colours,
                    const Qdc::RichText::RenderOptions* options, QList<Line>* out)
 {
 	for (const Node& node : nodes)
 	{
+		/* Where this block's lines begin, so the first of them can be set apart. */
+		const int from = out->size();
+
 		switch (node.kind)
 		{
 			case Kind::Paragraph:
@@ -880,11 +909,11 @@ void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool tight,
 			}
 
 			case Kind::BlockQuote:
-				render_quote(node, mode, depth, tight, colours, options, out);
+				render_quote(node, mode, depth, colours, options, out);
 				break;
 
 			case Kind::List:
-				render_list(node, mode, depth, tight, colours, options, out);
+				render_list(node, mode, depth, colours, options, out);
 				break;
 
 			case Kind::Table:
@@ -905,6 +934,13 @@ void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool tight,
 				break;
 			}
 		}
+
+		/*
+		 * Anything but the first block in a container is set apart from what precedes it.
+		 * For a list that means the space in front of the list: the space between its own
+		 * items is its own business, and render_list() has already decided it.
+		 */
+		if (spaceBlocks && from > 0 && from < out->size()) (*out)[from].spaced = true;
 	}
 }
 
@@ -1248,6 +1284,8 @@ QString Qdc::RichText::renderMarkdown(const QString& markdown,
 
 		QString style = QStringLiteral("margin-left:%1px;")
 			.arg(options.indent + line.indent);
+
+		if (line.spaced) style += QStringLiteral(" margin-top:%1px;").arg(BLOCK_GAP);
 
 		/*
 		 * Only the first line pulls its opening words back out to the left. Applied to
