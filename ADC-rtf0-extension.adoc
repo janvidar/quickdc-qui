@@ -1,0 +1,580 @@
+= RTF0: Rich Text Formatting for ADC
+Jan Vidar Krey <janvidar@extatic.org>
+:revnumber: 0.1
+:revdate: 2026-08-03
+:revremark: Draft for comment
+:toc: left
+:toclevels: 3
+:sectnumlevels: 3
+:icons: font
+:source-highlighter: rouge
+:experimental:
+
+[abstract]
+== Abstract
+
+This document specifies `RTF0`, an extension to the ADC peer-to-peer file sharing
+protocol. `RTF0` allows a client to send chat messages carrying inline formatting, file
+attachments and inline images. Formatting is expressed as CommonMark markdown carried
+inside the existing `MSG` command, and files are addressed by magnet URI rather than by
+location, so that no new transport is required. Raw HTML is excluded, and image targets are
+restricted to magnet URIs; both exclusions follow from the text of a message being written
+by a stranger.
+
+:sectnums:
+
+== Introduction
+
+ADC <<ADC>> carries a chat line as a single escaped string. It has no facility for
+emphasis, for quoting an earlier line, for setting code apart from prose, or for offering
+a file to the people in a conversation. Clients that want these things today either do
+without or invent private conventions that other clients render as noise.
+
+`RTF0` addresses this with three mechanisms:
+
+. A negotiated feature, so that a hub decides whether formatted text is carried on it at
+  all.
+. A named flag on `MSG`, so that a formatted message is distinguishable from a message
+  that merely happens to contain an asterisk.
+. A markdown language defined by reference to CommonMark, so that what one client may
+  send is exactly what another must be prepared to render, and so that "how much of it
+  works" is a question with a measurable answer.
+
+Attachments and inline images reuse the markdown link syntax with an ADC magnet URI as the
+target. A file is therefore named by its Tiger Tree Hash and found by the search and
+transfer machinery ADC already has.
+
+=== Requirements notation
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD
+NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as
+described in RFC 2119 <<RFC2119>>.
+
+=== Terminology
+
+[horizontal]
+Client:: An ADC client, as defined in <<ADC>>.
+Hub:: An ADC hub, as defined in <<ADC>>.
+Rich text:: The text of a `MSG` command that is to be interpreted as the markdown defined
+  in <<subset>>.
+Plain text:: The text of a `MSG` command that is to be interpreted literally, character
+  for character, as in unextended ADC.
+TTH:: A Tiger Tree Hash root, encoded as 39 base32 characters, as used by the `TIGR`
+  feature of <<ADC>>.
+Attachment:: A file offered to the recipients of a message by magnet URI.
+Inline media:: An attachment the sender intends to be displayed within the message rather
+  than offered as a file.
+
+== Feature negotiation
+
+=== The RTF0 feature
+
+`RTF0` is a hub feature. It is negotiated in the `SUP` command exchanged during the
+`PROTOCOL` state, using the `AD` and `RM` prefixes defined in <<ADC>>.
+
+A client that implements this extension SHOULD offer the feature in the `HSUP` it sends:
+
+----
+HSUP ADBASE ADTIGR ADRTF0
+----
+
+A hub that implements this extension MUST announce it in the `ISUP` it sends in reply:
+
+----
+ISUP ADBASE ADTIGR ADRTF0
+----
+
+The hub's announcement is authoritative for the connection. A client MUST NOT send rich
+text on a hub that has not announced `RTF0`, whether or not the client itself offered it.
+A hub therefore decides whether formatted text — and the media a formatted message can
+point at — is carried on it at all, and an operator who does not want either can decline
+by saying nothing.
+
+A hub MAY announce `RTF0` in a later `ISUP` than the first, and MAY withdraw it with
+`RMRTF0`. A client MUST honour the current state and MUST NOT cache the answer across
+reconnects.
+
+[[su-flag]]
+=== The SU flag
+
+A client that can interpret rich text MUST include `RTF0` in the `SU` field of its `INF`,
+alongside the other feature identifiers carried there:
+
+----
+BINF AAAA NIexample DEA\stest\suser SUADC0,TCP4,UDP4,RTF0
+----
+
+The `SUP` feature and the `SU` flag answer different questions. The `SUP` feature says
+whether this hub carries rich text. The `SU` flag says whether one particular user's
+client will render it, and is what lets a sender know that a private message will be read
+rather than shown with its markers.
+
+A client MUST NOT include `RTF0` in `SU` unless it implements the whole of <<subset>>.
+Partial support is not expressible, by design: a sender decides what to write from this
+flag, and a flag that meant "some of it" would tell them nothing. A reader that silently
+drops a construct is worse for the sender than one that shows its markers.
+
+=== Behaviour of an unaware or non-participating party
+
+A hub that does not implement `RTF0` does not announce it, and no client on it sends rich
+text. Nothing changes for such a hub.
+
+A client that does not implement `RTF0` does not offer it and does not set the `SU` flag,
+but MAY still receive rich text: on a hub that announced `RTF0`, a broadcast message from
+another user may carry the flag defined in <<flag>>. Such a client will show the message
+as its literal characters. This is the case the escaping rules in <<escaping>> are chosen
+to serve.
+
+A hub that announced `RTF0` MUST relay the `RT` flag unchanged when it relays the message,
+including to clients that did not set `RTF0` in `SU`. Stripping the flag per recipient
+would leave those clients showing escaped text as if it were literal.
+
+[[flag]]
+== Rich text messages
+
+=== The RT flag
+
+A `MSG` command whose text is rich text MUST carry the named flag `RT` with the value `1`:
+
+----
+BMSG AAAA **found\sit**\sin\s`~/Music` RT1
+----
+
+The flag applies to `MSG` in all its forms — `B`, `D`, `E`, `F` and `I` — and combines
+freely with the flags `ME` and `PM` defined in <<ADC>>.
+
+A `MSG` without the `RT` flag is plain text and MUST be shown literally. This is what
+allows a user to type `*text*` and have it arrive as `*text*`.
+
+Values of `RT` other than `1` are reserved. A client that receives an `RT` value it does
+not recognise MUST treat the message as plain text.
+
+=== Sending
+
+A client MUST NOT set `RT` unless the hub has announced `RTF0`.
+
+A client SHOULD NOT set `RT` on a message that contains no formatting. Sending an
+unformatted line as plain text avoids the escaping in <<escaping>> and keeps a literal
+asterisk literal for every recipient.
+
+[[receiving]]
+=== Receiving
+
+A client that receives a message with `RT1` on a hub that announced `RTF0` SHOULD parse it
+as defined in <<subset>>. A receiver MUST parse it itself rather than handing it to a
+general-purpose CommonMark implementation, which would accept the raw HTML that
+<<exclusions>> excludes.
+
+A client MUST NOT act on `RT1` from a hub that did not announce `RTF0`; the message MUST
+be treated as plain text. This keeps the hub's decision meaningful in the presence of a
+client that ignores it.
+
+=== Hub handling of a violation
+
+A hub that has not announced `RTF0` and receives a `MSG` carrying `RT1` SHOULD remove the
+flag before relaying, or MAY reject the command with a status message of severity 1 and
+error code 40 (generic protocol error). It MUST NOT relay the flag, since doing so would
+present rich text to clients that were never told the hub carries it.
+
+=== Interaction with ADC escaping
+
+The `RT` flag changes how the *decoded* text of a `MSG` is interpreted. It does not change
+ADC's own escaping, which applies first and unchanged: `\s` for space, `\n` for newline
+and `\\` for backslash, as defined in <<ADC>>.
+
+A sender therefore produces markdown, then applies ADC escaping to it. A receiver removes
+ADC escaping, then parses markdown. A backslash intended to reach the markdown parser is
+sent as `\\`; a line break within a message is sent as `\n`.
+
+[[subset]]
+== The markdown language
+
+Rich text is CommonMark <<CommonMark>>, in its entirety, with the exceptions in
+<<exclusions>> and the two additions in <<extensions>>. A receiver MUST implement the
+whole of it; see <<su-flag>> for why partial support is not expressible.
+
+Requiring the whole language rather than a subset is a change from earlier drafts of this
+extension, and it is a change of one kind of burden for another. A subset has to be agreed,
+written down and policed, and every implementation has a slightly different one; a reader
+then cannot know what a writer's client will do with what it is given. CommonMark is
+already specified to the sentence, and ships an executable definition — 652 numbered
+examples — so "does this implementation support rich text" has an answer that can be
+measured rather than asserted.
+
+[[exclusions]]
+=== What is excluded, and why
+
+Two parts of CommonMark are NOT part of this extension. Neither is a matter of effort.
+
+==== Raw HTML
+
+HTML blocks and inline raw HTML MUST NOT be interpreted. A receiver MUST render every such
+construct as the characters it is made of.
+
+The text of a `MSG` is written by whoever is on the hub, and a renderer that accepts markup
+from a stranger has given away the thing it was protecting. In a client whose display layer
+is an HTML renderer — which describes most of them — supporting `<div>` from a remote user
+is supporting `<img>`, `<script>` and whatever else that renderer honours, and the sender
+chooses which. There is no version of this that is safe to enable and no user-visible loss
+in leaving it out: nobody writes `<em>` in a chat message when `*` is a keystroke.
+
+A consequence worth stating, because it is where a conforming implementation will differ
+from a general-purpose CommonMark one: since a tag is text, it cannot shield what is inside
+it. In `+<a href="**">+` CommonMark reads the asterisks as part of an attribute, where this
+extension reads them as emphasis in a run of ordinary characters. Fifteen of the
+specification's examples turn on exactly that, and a receiver is expected to differ on all
+of them.
+
+==== Image targets other than magnet URIs
+
+An image whose destination is not a magnet URI as defined in <<magnet>> MUST NOT be
+fetched, and SHOULD be rendered as its own description. See <<sec-tracking>>: an `http`
+target would hand the sender the address of everyone who read the message, at the moment
+they read it, along with a full set of request headers, and no recipient could inspect the
+server it went to.
+
+[[extensions]]
+=== What is added
+
+Two constructs beyond CommonMark are part of this extension. Both are taken from GFM
+<<GFM>>, and a receiver MUST implement them.
+
+[cols="1,3a"]
+|===
+| Construct | Form
+
+| Strikethrough
+| `+~~text~~+`, or `+~text~+`. One or two tildes, matched.
+
+| Table
+| A header row, a delimiter row of hyphens with optional colons for alignment, and any
+number of body rows, all separated by `|`:
+
+....
+| build | state |
+|:------|------:|
+| macOS | green |
+....
+
+A row with fewer cells than the header is padded; one with more is truncated.
+|===
+
+A bare URL — one written without angle brackets or brackets, as in `https://example.org` —
+is also recognised as a link, which CommonMark proper does not do. This is long-standing
+behaviour in chat and a receiver SHOULD keep it. A sender MUST NOT rely on it: writing
+`+<https://example.org>+` is unambiguous and works everywhere.
+
+=== Degradation, and what it costs
+
+Every construct in this extension was chosen by CommonMark rather than by this document,
+so the property earlier drafts protected — that a message reads acceptably on a client
+which shows the text as-is — now holds by construction for some constructs and not for
+others. `+**bold**+` reads as emphatic and `> quoted` reads as quoted; a table reads as a
+wall of pipes.
+
+A sender SHOULD therefore prefer the constructs that degrade when it has a choice, and
+SHOULD consider what a message looks like unrendered before sending a table to a hub whose
+users it does not know. Nothing in this document forbids one: the `SU` flag in <<su-flag>>
+tells a sender which recipients will render what they are sent, and that is the mechanism
+for deciding.
+
+[[escaping]]
+=== Escaping
+
+Backslash escapes and character references are CommonMark's: a backslash before any ASCII
+punctuation character yields that character literally, and a named or numeric character
+reference yields the character it names.
+
+A sender that sets `RT1` MUST escape whatever it means literally, and SHOULD escape nothing
+else. Every unnecessary backslash is visible noise on a client that does not implement this
+extension, so a sender is expected to decide per character and in context rather than
+escaping a fixed set:
+
+* `\`, `` ` ``, `*`, `[` and `]` always need escaping.
+* `_` needs it except between two alphanumeric characters, where it cannot open or close
+  emphasis — which is what lets `snake_case` through untouched.
+* `<` needs it only where an autolink could begin, and `&` only where a character reference
+  could.
+* `~` needs it only where a second tilde could pair with it.
+
+A line that begins the way a block does needs the marker escaped, and the character to
+escape is not always the first: a backslash before a digit escapes nothing, so a literal
+`1. text` MUST be written `1\. text` rather than `\1. text`. The block openings that need
+this are a bullet, a numbered item, a quote, a fence, a heading, a thematic break, a line
+that would underline the one above it as a setext heading, and a row of pipes and hyphens
+that would turn the line above it into a table.
+
+[[schemes]]
+=== Link schemes
+
+A receiver MUST NOT turn a URL into an actionable link unless its scheme is one of:
+
+[horizontal]
+`http`, `https`:: Handed to the user's browser, on the user's action.
+`adc`, `adcs`, `dchub`:: A hub address; a client SHOULD open these itself rather than
+  hand them to the operating system.
+`magnet`:: A file within the ADC network, as defined in <<magnet>>.
+
+A URL with any other scheme MUST be rendered as the text it is. A remote user chooses the
+target of a link, so the set of targets they may choose has to be small and fixed;
+`file:`, `data:` and `javascript:` are the cases that make this a requirement rather than
+a preference. A receiver MUST NOT normalise or rewrite an unrecognised scheme into a
+recognised one.
+
+A URL whose scheme requires an authority component and whose host is empty MUST be
+rendered as text.
+
+[[magnet]]
+== Attachments and inline media
+
+=== Magnet URI form
+
+A file referred to by a rich text message is named by an ADC magnet URI:
+
+[source,abnf]
+----
+magnet-uri = "magnet:?" param *( "&" param )
+param      = xt / dn / xl / other
+xt         = "xt=urn:tree:tiger:" tth
+dn         = "dn=" pct-encoded-name
+xl         = "xl=" 1*DIGIT
+other      = token "=" *pchar
+tth        = 39( "A"-"Z" / "2"-"7" )
+----
+
+[horizontal]
+`xt`:: REQUIRED. The exact topic: a Tiger Tree Hash root in the `urn:tree:tiger:` form
+  used by the `TIGR` feature of <<ADC>>. Parameter names and the URN prefix are
+  case-insensitive; the hash itself is base32 and SHOULD be sent uppercase.
+`dn`:: RECOMMENDED. A display name. See <<sec-names>>.
+`xl`:: REQUIRED for files referred to by this extension. The exact length of the file in
+  bytes, as a decimal integer. It is what lets a receiver decide whether to fetch
+  something before fetching it.
+
+A receiver MUST ignore parameters it does not recognise rather than trust them. A
+receiver MUST verify that `xt` carries a syntactically valid TTH — 39 base32 characters —
+before using it, since the value is about to be handed to a search and a transfer. A
+magnet URI without a usable `xt` is not a link at all, and MUST be rendered as text.
+
+`xl` is REQUIRED because a receiver that is willing to fetch automatically needs a size
+before it commits. A receiver MAY refuse to fetch a magnet URI that omits `xl`.
+
+=== Attachments
+
+An attachment is a link whose target is a magnet URI:
+
+----
+[notes.pdf](magnet:?xt=urn:tree:tiger:VN6...&dn=notes.pdf&xl=1048576)
+----
+
+A receiver SHOULD present it as a file to be fetched on the user's action, showing the
+name from `dn` and the size from `xl`.
+
+The hash is the whole address. Whoever holds the file answers a search for that hash, and
+until somebody asks, nothing has been transferred.
+
+=== Inline media
+
+Inline media is an attachment the sender intends to be displayed within the message, and
+is written with a leading `!`:
+
+----
+![a photo of the cat](magnet:?xt=urn:tree:tiger:VN6...&dn=cat.jpg&xl=204800)
+----
+
+The distinction between a file offered and a picture shown is what the sender meant, and
+nothing about the file itself. A receiver MUST NOT infer inline media from a name, an
+extension or a content sniff, and MUST NOT display as media anything the sender did not
+mark with `!`.
+
+The target of inline media MUST be a magnet URI. A sender MUST NOT use `+![...](http...)+`
+and a receiver MUST NOT fetch such a target; see <<sec-tracking>>.
+
+A receiver that does not hold the file, or has not fetched it, SHOULD present the
+reference the way it presents an attachment. The label SHOULD be used as the alternative
+text.
+
+[[sharing]]
+=== Sharing an attached file
+
+A client that sends an attachment MUST be prepared to serve the named file to a peer that
+asks for its TTH, for as long as the client considers the reference live.
+
+Such a file SHOULD NOT be added to the client's file list, and SHOULD NOT be returned in
+response to a search other than an exact TTH search. The hash is the capability: only
+the participants in the conversation have it. A file attached to a private message must
+not become discoverable by browsing the sender's share.
+
+Sharing a file for the purpose of attaching it MAY happen without prompting the user, as
+a consequence of the user attaching it. This is acceptable only in combination with the
+paragraph above; a client that publishes attachments in its file list MUST obtain the
+user's consent instead.
+
+=== Automatic retrieval and re-distribution
+
+A client MAY fetch inline media automatically, so that a picture appears without the user
+asking for it. A client that does so:
+
+* MUST NOT fetch automatically on a hub where the user has not enabled it. Automatic
+  retrieval SHOULD be configurable per hub, with a global default, and the default SHOULD
+  be conservative.
+* SHOULD NOT fetch automatically from a user the local user has no relationship with —
+  ignore lists, and where the hub exposes it, registration state, are the signals
+  available.
+* MUST enforce a size limit, using `xl` as declared and abandoning the transfer if the
+  received length exceeds it.
+* MUST verify the received data against the TTH before displaying it, and MUST discard
+  data that does not match.
+
+A client that has fetched a file MAY continue to serve it by TTH, which is what allows a
+picture posted to a busy hub to be distributed by its recipients rather than by its sender
+alone. A client that does so MUST apply <<sharing>>: a re-distributed
+file is no more discoverable than an attached one.
+
+A client MUST NOT re-distribute a file fetched from a private message to anyone outside
+that conversation. In practice this means a client SHOULD NOT serve such a file by TTH at
+all, since a TTH search does not say who is asking on whose behalf.
+
+== Security considerations
+
+=== A message is attacker-controlled input
+
+The text of a `MSG` is chosen by a remote user. A receiver MUST NOT hand rich text to a
+general-purpose markdown or HTML renderer. A conforming CommonMark implementation accepts
+raw HTML and arbitrary image targets, and a renderer that resolves an image target will
+fetch a resource on a stranger's instruction — which is precisely what <<exclusions>>
+excludes and a library will not.
+
+The recommended shape is to parse to a tree of one's own, then escape everything for the
+display layer and emit only the markup the renderer itself wrote. Then no tag can reach the
+display whatever the sender writes, and the exclusion is a property of the design rather
+than a filter that has to be got right.
+
+A receiver SHOULD bound what it will parse. Deeply nested containers, very long delimiter
+runs and pathological link-reference patterns are all cheap to write and dear to parse; a
+limit on nesting depth and on total input length costs nothing in practice.
+
+[[sec-tracking]]
+=== Retrieval as a tracking signal
+
+Fetching a file is an observable act. Because a transfer in ADC is a direct connection
+between peers, a sender who posts inline media learns the address of every recipient whose
+client fetches it, and learns it at the moment they read the message. A sender who sends a
+distinct file to each recipient — a unique image per person — can tell exactly who read
+what and when. This is the web tracking pixel, in a network where the pixel reveals an IP
+address rather than a cookie.
+
+This is the principal reason automatic retrieval is opt-in and per hub, and the reason
+inline media is restricted to magnet URIs: an `http` target would hand the same signal,
+plus a full set of request headers, to a server the sender controls and no recipient can
+inspect.
+
+A client SHOULD make clear to the user, when automatic retrieval is enabled, that reading
+a message may become visible to its sender.
+
+=== Resource exhaustion
+
+Automatic retrieval spends bandwidth and disk on a remote user's instruction. `xl` is
+declared by the sender and MUST NOT be trusted as a bound on its own; the transfer itself
+MUST be capped and abandoned when the cap is passed. A client SHOULD bound the total it
+will fetch automatically over a period, and SHOULD bound the number of concurrent
+automatic transfers, independently of the download queue the user manages.
+
+=== Media decoding
+
+An image arriving from an untrusted peer reaches an image decoder, which is a large
+attack surface. A client SHOULD bound the decoded dimensions as well as the encoded size,
+to blunt decompression attacks, and SHOULD prefer decoding out of process where the
+platform makes that practical.
+
+[[sec-names]]
+=== Display names
+
+`dn` is chosen by the sender and MUST be treated as a name to display, never as a path. A
+receiver MUST reduce it to its final component and MUST NOT allow it to influence where a
+file is written. Traversal sequences in `dn` are the expected form of this attack.
+
+A receiver SHOULD be prepared for a `dn` that is long, that mixes writing directions, or
+that contains characters chosen to make one file look like another, and SHOULD present it
+in a way that cannot be confused with the client's own interface text.
+
+=== Confusion between formatted and literal text
+
+A client that renders rich text without the `RT` flag, or that ignores the hub's `SUP`
+answer, lets a sender put markup in front of a user who did not consent to receive it. The
+requirements in <<receiving>> exist for this reason and are not merely a matter of
+tidiness.
+
+=== Hub policy
+
+`RTF0` gives a hub a single point of control: not announcing the feature keeps rich text,
+attachments and media off the hub entirely. A hub that announces the feature but wishes to
+restrict media MAY inspect message text and reject or rewrite it, subject to whatever its
+users are told about such inspection.
+
+== Examples
+
+Negotiation:
+
+----
+C > H: HSUP ADBASE ADTIGR ADRTF0
+H > C: ISUP ADBASE ADTIGR ADRTF0
+H > C: ISID AAAA
+H > C: IINF CT32 NIexample.hub
+C > H: BINF AAAA IDXXXX... PDYYYY... NIexample SUADC0,TCP4,UDP4,RTF0
+----
+
+A formatted broadcast, on the wire and as decoded:
+
+----
+BMSG AAAA the\sflag\sis\s**RT1**,\snot\s\\*RT1\\* RT1
+----
+
+----
+the flag is **RT1**, not \*RT1\*
+----
+
+which renders as: the flag is *RT1*, not `*RT1*`.
+
+A quote and a code block, on the wire:
+
+----
+BMSG AAAA >\sdoes\sit\sbuild?\n```\ncmake\s--build\sbuild\n```\nyes RT1
+----
+
+An attachment in a private message:
+
+----
+DMSG AAAA BBBB here:\s[notes.pdf](magnet:?xt=urn:tree:tiger:VN6PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXA&dn=notes.pdf&xl=1048576) PMAAAA RT1
+----
+
+Inline media:
+
+----
+BMSG AAAA ![the\scat](magnet:?xt=urn:tree:tiger:VN6PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXA&dn=cat.jpg&xl=204800) RT1
+----
+
+An unformatted line, sent without the flag and shown literally by every client:
+
+----
+BMSG AAAA use\s*text*\sfor\semphasis
+----
+
+== Extension registration
+
+`RTF0` is a hub feature identifier for the `SUP` command and a feature flag for the `SU`
+field of `INF`, as described in <<ADC>>. `RT` is a named flag on the `MSG` command.
+
+This document requests no IANA action. ADC feature identifiers and named flags are
+recorded in the ADC extensions document <<ADC-EXT>>; `RTF0`, and the `RT` flag on `MSG`,
+are to be recorded there.
+
+[bibliography]
+== References
+
+* [[[ADC]]] Jacek Sieka, "ADC Protocol", version 1.0.
+* [[[ADC-EXT]]] Fredrik Ullner et al., "ADC Extensions".
+* [[[CommonMark]]] John MacFarlane, "CommonMark Spec", version 0.31.2.
+* [[[GFM]]] "GitHub Flavored Markdown Spec", for the table and strikethrough extensions.
+* [[[RFC2119]]] S. Bradner, "Key words for use in RFCs to Indicate Requirement Levels",
+  BCP 14, RFC 2119, March 1997.
