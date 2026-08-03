@@ -245,6 +245,16 @@ struct RenderOptions {
 	/** How much room a picture may take: the text column, and this many pixels tall. */
 	int mediaWidth = 0;
 	int mediaHeight = 300;
+
+	/**
+	 * The point size of the body font, from which a heading's size is worked out.
+	 *
+	 * Asked for rather than assumed because Qt's rich text honours a font size given in
+	 * points and ignores one given in em or as a percentage, so a heading cannot be
+	 * scaled without knowing what it is being scaled from. Left at zero, a heading is set
+	 * bold and no larger, which is legible but flat.
+	 */
+	qreal fontPointSize = 0.0;
 };
 
 /**

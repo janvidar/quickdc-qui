@@ -4,6 +4,9 @@
 
 #include <gui/richtext.h>
 
+#include <QAbstractTextDocumentLayout>
+#include <QImage>
+#include <QPainter>
 #include <QRegularExpression>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -41,6 +44,7 @@ private slots:
 	void everyCommonMarkConstructReachesTheFeed();
 	void nestingIsDrawnAsNesting();
 	void aParagraphBreakIsVisibleAsOne();
+	void nothingEscapesTheTextColumn();
 
 private:
 	static Qdc::RichText::RenderOptions options();
@@ -96,6 +100,7 @@ Qdc::RichText::RenderOptions TestRichText::options()
 	o.colours.quote = QColor(0x60, 0x60, 0x60);
 	o.colours.quoteBar = QColor(0x90, 0x90, 0x90);
 	o.colours.link = QColor(0x20, 0x50, 0xc0);
+	o.fontPointSize = 10.0;
 	return o;
 }
 
@@ -835,6 +840,81 @@ void TestRichText::aParagraphBreakIsVisibleAsOne()
 	QVERIFY2(quoted.contains(QStringLiteral("margin-top")), qPrintable(quoted));
 }
 
+void TestRichText::nothingEscapesTheTextColumn()
+{
+	/*
+	 * Every line of a message sits in the text column, to the right of the timestamp and
+	 * the speaker. The defect this pins is what happens when it does not: a block level
+	 * tag - a heading, a rule, a table - nested inside the inline markup a quote wraps its
+	 * lines in made Qt close the surrounding block out and lose the indent with it, so the
+	 * element landed hard against the left edge while the rest of the message stayed put.
+	 *
+	 * Measured in pixels rather than asserted about the markup, because that is what went
+	 * wrong: the html was exactly as intended and the layout disagreed with it.
+	 */
+	const int indent = 80;
+
+	const QStringList messages = {
+		QStringLiteral("intro\n\n# a heading"),
+		QStringLiteral("intro\n\nSetext\n======"),
+		QStringLiteral("intro\n\n> # a heading in a quote"),
+		QStringLiteral("intro\n\n> quoted\n>\n> ---\n>\n> after the rule"),
+		QStringLiteral("intro\n\n> | a | b |\n> |---|---|\n> | 1 | 2 |"),
+		QStringLiteral("intro\n\n- item\n\n  ---\n\n- another"),
+		QStringLiteral("intro\n\n- item\n  - nested\n\n> quoted\n> > deeper"),
+		QStringLiteral("intro\n\n```\ncode\n```\n\n| a |\n|---|\n| 1 |")
+	};
+
+	for (const QString& markdown : messages)
+	{
+		Qdc::RichText::RenderOptions o = options();
+		o.indent = indent;
+		o.prefix = QStringLiteral("<b>alice</b> ");
+
+		QTextDocument document;
+		document.setDocumentMargin(0.0);
+		document.setHtml(Qdc::RichText::renderMarkdown(markdown, o));
+		document.setTextWidth(420);
+
+		QImage image(420, int(document.size().height()) + 2, QImage::Format_RGB32);
+		image.fill(Qt::white);
+
+		QPainter painter(&image);
+		QAbstractTextDocumentLayout::PaintContext context;
+		document.documentLayout()->draw(&painter, context);
+		painter.end();
+
+		/*
+		 * The first block carries the speaker, which is pulled back out to the left on
+		 * purpose - see renderMarkdown(). Everything below it has to stay in the column.
+		 */
+		const int prefixBottom = int(
+			document.documentLayout()->blockBoundingRect(document.begin()).bottom());
+
+		int leftmost = image.width();
+		int where = -1;
+
+		for (int y = prefixBottom + 1; y < image.height(); ++y)
+		{
+			for (int x = 0; x < image.width(); ++x)
+			{
+				if (qGray(image.pixel(x, y)) >= 200) continue;
+
+				if (x < leftmost) { leftmost = x; where = y; }
+				break;
+			}
+		}
+
+		if (where < 0) continue;
+
+		QVERIFY2(leftmost >= indent - 2,
+		         qPrintable(QStringLiteral("row %1 starts at x=%2, column is %3, in: %4")
+		                    .arg(where).arg(leftmost).arg(indent)
+		                    .arg(QString(markdown).replace(QLatin1Char('\n'),
+		                                                   QStringLiteral("\\n")))));
+	}
+}
+
 void TestRichText::everyCommonMarkConstructReachesTheFeed()
 {
 	/*
@@ -854,10 +934,10 @@ void TestRichText::everyCommonMarkConstructReachesTheFeed()
 
 	/* A heading is set larger and bold rather than shown with its hashes. */
 	QVERIFY2(!html.contains(QStringLiteral("# Heading")), qPrintable(html));
-	QVERIFY2(html.contains(QStringLiteral("<h1>Heading</h1>")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("font-size:14.5pt\">Heading")), qPrintable(html));
 
 	/* An underlined line is the same heading by another spelling. */
-	QVERIFY2(html.contains(QStringLiteral("<h1>Setext</h1>")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("font-size:14.5pt\">Setext")), qPrintable(html));
 	QVERIFY2(!html.contains(QStringLiteral("======")), qPrintable(html));
 
 	QVERIFY2(html.contains(QStringLiteral("<hr>")), qPrintable(html));

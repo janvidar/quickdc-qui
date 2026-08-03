@@ -9,6 +9,7 @@
 #include "theme.h"
 
 #include <QAbstractTextDocumentLayout>
+#include <QFontInfo>
 #include <QFontMetricsF>
 #include <QElapsedTimer>
 #include <QMovie>
@@ -105,6 +106,12 @@ public:
 		speakerFont.setItalic(message.action);
 
 		options.colours = markup_colours();
+
+		/*
+		 * The size a heading is scaled from. QFontInfo rather than the font itself, so a
+		 * font that was given a pixel size still yields the points it resolves to.
+		 */
+		options.fontPointSize = QFontInfo(font).pointSizeF();
 
 		options.prefix = QStringLiteral("<span style=\"color:%1\">%2</span> ")
 			.arg(stamp.name(), time.toHtmlEscaped());

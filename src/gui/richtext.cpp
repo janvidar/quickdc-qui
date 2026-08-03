@@ -489,6 +489,16 @@ struct Line {
 	bool prose = false;
 
 	/**
+	 * Whether the content is a block-level element rather than inline markup.
+	 *
+	 * A rule and a table are tags Qt lays out as blocks of their own. Wrapping one in
+	 * inline markup - a quote's rule down the left edge, or a list's marker - makes Qt
+	 * close the surrounding block out and lose the indent with it, which puts the element
+	 * hard against the left edge. So decoration is left off these lines instead.
+	 */
+	bool blockLevel = false;
+
+	/**
 	 * Whether this line opens a block that is set apart from the one above it.
 	 *
 	 * A blank line in a message means a paragraph break, and a paragraph break has to be
@@ -679,17 +689,27 @@ QString render_code_block(const QString& literal, Mode mode)
 }
 
 /**
- * A heading, set as one.
+ * A heading, set bold and a step larger.
  *
- * The tag rather than a font size, because Qt's rich text scales <h1> to <h6> itself and
- * ignores a font-size given in em or as a percentage - and the point size to scale from
- * is the delegate's font, which this layer deliberately does not know.
+ * Deliberately not <h1> to <h6>, though Qt scales those itself: they are block elements,
+ * and a block nested inside the inline markup of a quote makes Qt close the block out and
+ * lose the margin the line was indented by - which puts a heading inside a quote hard
+ * against the left edge. A span cannot do that.
+ *
+ * The steps are small. A chat line is not a document, and a heading has to read as one
+ * without turning a message into a poster.
  */
-QString render_heading(int level, const QString& body)
+QString render_heading(int level, const QString& body, qreal pointSize)
 {
-	const int tag = qBound(1, level, 6);
+	static const qreal scale[] = { 1.45, 1.3, 1.18, 1.08, 1.0, 1.0 };
 
-	return QStringLiteral("<h%1>%2</h%1>").arg(tag).arg(body);
+	const int step = qBound(1, level, 6) - 1;
+
+	if (pointSize <= 0.0 || scale[step] == 1.0)
+		return QStringLiteral("<b>%1</b>").arg(body);
+
+	return QStringLiteral("<b><span style=\"font-size:%1pt\">%2</span></b>")
+		.arg(pointSize * scale[step], 0, 'f', 1).arg(body);
 }
 
 QString render_table(const Node& table, Mode mode,
@@ -780,6 +800,19 @@ void render_list(const Node& list, Mode mode, int depth,
 
 		if (inner.isEmpty()) inner.append(Line());
 
+		/*
+		 * The marker cannot go in front of a rule or a table for the same reason a
+		 * quote's own rule cannot, so it takes a line to itself instead.
+		 */
+		if (inner.first().blockLevel)
+		{
+			Line marked;
+			marked.indent = inner.first().indent;
+			marked.spaced = inner.first().spaced;
+			inner.first().spaced = false;
+			inner.prepend(marked);
+		}
+
 		if (mode == Mode::Plain)
 		{
 			inner.first().content = marker + QLatin1Char(' ') + inner.first().content;
@@ -813,7 +846,7 @@ void render_quote(const Node& quote, Mode mode, int depth,
 
 	for (Line& line : inner)
 	{
-		if (mode == Mode::Html)
+		if (mode == Mode::Html && !line.blockLevel)
 		{
 			/*
 			 * The rule goes down the whole quote, so every line carries it - a bar on the
@@ -866,7 +899,8 @@ void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool spaceBlo
 
 				line.content = (mode == Mode::Plain)
 					? body
-					: render_heading(node.level, body);
+					: render_heading(node.level, body,
+					                 options ? options->fontPointSize : 0.0);
 
 				out->append(line);
 				break;
@@ -881,6 +915,7 @@ void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool spaceBlo
 				 * A rule rather than "---": the markers were the sender's way of asking
 				 * for a divider, and this is the divider.
 				 */
+				line.blockLevel = mode == Mode::Html;
 				line.content = (mode == Mode::Plain)
 					? QStringLiteral("───")
 					: QStringLiteral("<hr>");
@@ -920,6 +955,7 @@ void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool spaceBlo
 			{
 				Line line;
 				line.indent = depth * NEST_INDENT;
+				line.blockLevel = mode == Mode::Html;
 				line.content = render_table(node, mode, colours, options);
 				out->append(line);
 				break;
