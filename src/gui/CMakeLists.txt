@@ -54,6 +54,21 @@ add_library(qdcgui STATIC
     view.cpp
     view.h)
 
+# The schemes and the stylesheet template are data, read at run time rather than
+# compiled in as string literals - which is what lets a colour or a corner radius be
+# changed without a build. Compiled into the binary as resources all the same, so an
+# installed application depends on no file it does not carry; a copy of any of them
+# in ~/.quickdc/themes is read instead.
+#
+# qt_add_resources rather than a .qrc in the sources: this is a static library, and
+# a resource in one is dropped by the linker unless something registers it. The Qt
+# function generates that registration.
+qt_add_resources(qdcgui "themes"
+    PREFIX "/themes"
+    BASE themes
+    FILES
+        themes/widgets.qss)
+
 # The title bar is the platform's, so colouring it is platform code: Objective-C++
 # against AppKit on macOS, and a no-op elsewhere.
 if(APPLE)

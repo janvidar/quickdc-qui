@@ -1,0 +1,390 @@
+/*
+ * The widget stylesheet, as a template.
+ *
+ * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
+ *
+ * Every %(…) below names a field of the Theme struct in theme.h, spelled exactly as
+ * it is spelled there, plus one derived value: accentHover, which is the accent a
+ * shade darker. The substitution matches a name whole and in one pass, so the order
+ * of the rules below means nothing and a name may be used as often as it reads well.
+ *
+ * Written with the ellipsis above rather than a name because this is a comment in a
+ * file that is about to be substituted through, and a real name here would be read
+ * as one more thing to replace.
+ *
+ * A copy of this file in ~/.quickdc/themes/widgets.qss is used instead of this one,
+ * which is what makes padding, borders and new rules editable without a build. Set
+ * QDC_THEME_WATCH=1 and the running application re-reads it on every save.
+ *
+ * This carries what a palette cannot: corner radii, borders, padding, and the two
+ * dark surfaces, which are addressed by object name. Widgets that paint themselves -
+ * the rail buttons, the chat lines, the progress bars - read the theme directly
+ * instead, because a stylesheet cannot reach inside a paintEvent.
+ */
+
+QWidget {
+    color: %(contentText);
+}
+
+/* ---- the frame: window and top bar ---- */
+
+QWidget#appFrame, QWidget#topBar {
+    background: %(frame);
+    border: none;
+}
+
+/*
+ * The rail is its own rule even though it is the frame colour in the schemes that
+ * ship, so that a theme is free to lift it off the frame without touching this.
+ */
+QWidget#navigationRail {
+    background: %(rail);
+    border: none;
+}
+
+QLabel#topBarTitle {
+    color: %(frameText);
+    font-weight: bold;
+}
+
+QLabel#topBarSubtitle {
+    color: %(railText);
+}
+
+/* ---- the secondary navigation: hubs and conversations ---- */
+
+QWidget#secondaryNav {
+    background: %(sidebar);
+    border: none;
+}
+
+QWidget#secondaryNav QLabel {
+    color: %(sidebarText);
+}
+
+QTreeWidget#hubTree {
+    background: transparent;
+    border: none;
+    color: %(sidebarText);
+    outline: none;
+    padding: 4px;
+}
+
+QTreeWidget#hubTree::item {
+    padding: 5px 6px;
+    border-radius: %(radiusSmall)px;
+    color: %(sidebarText);
+}
+
+/*
+ * The indentation in front of a row is painted apart from the row itself, and it
+ * takes the selection colour with it - a square block butted against the rounded
+ * end of the pill, which reads as two things selected rather than one. Left clear,
+ * so a nested conversation is an indented pill and nothing more.
+ */
+QTreeWidget#hubTree::branch {
+    background: transparent;
+}
+
+QTreeWidget#hubTree::item:hover {
+    background: %(sidebarHover);
+}
+
+QTreeWidget#hubTree::item:selected {
+    background: %(sidebarActive);
+    color: %(sidebarTextActive);
+}
+
+/*
+ * Outlined rather than filled: a solid button on the sidebar competes with the
+ * selected hub, which is the one filled thing on that surface.
+ */
+QWidget#secondaryNav QPushButton {
+    background: transparent;
+    color: %(sidebarText);
+    border: 1px solid %(sidebarText);
+    border-radius: %(radiusMedium)px;
+    padding: 7px 10px;
+}
+
+QWidget#secondaryNav QPushButton:hover {
+    background: %(sidebarActive);
+    color: %(sidebarTextActive);
+    border-color: %(sidebarActive);
+}
+
+/* ---- content ---- */
+
+/*
+ * The page behind the views is a shade off white so that the panels on it read
+ * as panels. The conversation is the exception and stays white, because that is
+ * the surface being read rather than a card on a page.
+ */
+/*
+ * The content is a card inset into the frame on all four sides. Its corners are
+ * rounded by CornerMask rather than here: a radius on this background only shows
+ * through where a view has left the corner empty.
+ */
+QWidget#contentStack {
+    background: %(contentAlt);
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+/* The page inside a scroll area: viewport, then its single child. */
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+QWidget#chatSurface, QWidget#composerSurface, QWidget#hubHeader {
+    background: %(content);
+}
+
+/* The context sidebar is a panel against the conversation, not a field. */
+QListView#userList {
+    background: %(content);
+    border: none;
+    border-left: 1px solid %(border);
+    border-radius: 0px;
+}
+
+QWidget#hubHeader {
+    border-bottom: 1px solid %(border);
+}
+
+QListView, QTreeView, QTableView {
+    background: %(content);
+    border: 1px solid %(border);
+    border-radius: %(radiusMedium)px;
+
+    /*
+     * Light, with dark text. A selection that persists should not shout; a menu
+     * highlight, which follows the pointer and must be unmistakable, keeps the
+     * strong accent instead.
+     */
+    selection-background-color: %(selection);
+    selection-color: %(selectionText);
+    outline: none;
+}
+
+/* Distinguishes a selected row from the row stripe, which is nearly as pale. */
+QTableView::item:selected, QTreeView::item:selected, QListView::item:selected {
+    background: %(selection);
+    color: %(selectionText);
+    font-weight: bold;
+}
+
+QListView::item, QTreeView::item, QTableView::item {
+    padding: 3px 4px;
+    border-radius: %(radiusSmall)px;
+}
+
+QListView#chatFeed {
+    border: none;
+    border-radius: 0px;
+}
+
+QHeaderView::section {
+    background: %(contentAlt);
+    color: %(contentMuted);
+    border: none;
+    border-bottom: 1px solid %(border);
+    padding: 6px 8px;
+}
+
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QComboBox {
+    background: %(content);
+    border: 1px solid %(border);
+    border-radius: %(radiusMedium)px;
+    padding: 5px 8px;
+    selection-background-color: %(accent);
+    selection-color: %(accentText);
+}
+
+QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QComboBox:focus {
+    border-color: %(accent);
+}
+
+QLineEdit:disabled, QTextEdit:disabled, QSpinBox:disabled {
+    background: %(contentAlt);
+    color: %(contentMuted);
+}
+
+QPushButton {
+    background: %(contentAlt);
+    border: 1px solid %(border);
+    border-radius: %(radiusMedium)px;
+    padding: 6px 14px;
+}
+
+QPushButton:hover  { background: %(border); }
+
+/* The one action a panel is for. */
+QPushButton#primaryButton, QToolButton#primaryButton {
+    background: %(accent);
+    color: %(accentText);
+    border: 1px solid %(accent);
+    border-radius: %(radiusMedium)px;
+    padding: 6px 16px;
+    font-weight: bold;
+}
+
+QPushButton#primaryButton:hover, QToolButton#primaryButton:hover {
+    background: %(accentHover);
+    border-color: %(accentHover);
+}
+
+QPushButton#primaryButton:disabled, QToolButton#primaryButton:disabled {
+    background: %(border);
+    border-color: %(border);
+    color: %(contentMuted);
+}
+QPushButton:default, QPushButton:focus {
+    border-color: %(accent);
+}
+QPushButton:disabled { color: %(contentMuted); }
+
+QToolButton {
+    border: none;
+    border-radius: %(radiusSmall)px;
+    padding: 4px 6px;
+}
+
+QToolButton:hover   { background: %(contentAlt); }
+QToolButton:checked { background: %(border); }
+
+/*
+ * Said here as well as in the palette. A styled button takes its ink from the sheet, and
+ * the QWidget rule above would otherwise paint a disabled control at full strength.
+ */
+QToolButton:disabled { color: %(contentMuted); }
+
+
+QGroupBox {
+    background: %(content);
+    border: 1px solid %(border);
+    border-radius: %(radiusLarge)px;
+    margin-top: 14px;
+    padding: 10px 12px 12px 12px;
+    font-weight: bold;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0px 5px;
+    color: %(contentMuted);
+
+    /* Masks the frame line, which otherwise runs behind the words. */
+    background: %(contentAlt);
+}
+
+/*
+ * The strip the tabs sit in belongs to the tab widget, not to the pane below it
+ * and not to the tab bar, which is only as wide as its tabs. All three need the
+ * content colour or the page tint shows through beside and behind them.
+ */
+QTabWidget {
+    background: %(content);
+}
+
+QTabBar {
+    background: %(content);
+}
+
+QTabWidget::pane {
+    border: none;
+    border-top: 1px solid %(border);
+    background: %(content);
+}
+
+QTabBar::tab {
+    background: transparent;
+    color: %(contentMuted);
+    border: none;
+
+    /* The selected tab is marked by a rule under it, so every tab reserves the
+       same space and the row does not shift when the selection moves. */
+    border-bottom: 2px solid transparent;
+    padding: 7px 14px;
+    margin-right: 2px;
+}
+
+QTabBar::tab:hover { color: %(contentText); }
+
+QTabBar::tab:selected {
+    color: %(accent);
+    border-bottom-color: %(accent);
+    font-weight: bold;
+}
+
+QSplitter::handle           { background: %(border); }
+QSplitter::handle:horizontal { width: 1px; }
+QSplitter::handle:vertical   { height: 1px; }
+
+/* Part of the frame, so the chrome closes the window on all four sides. */
+QStatusBar {
+    background: %(frame);
+    border: none;
+    color: %(railText);
+}
+
+QStatusBar QLabel {
+    color: %(railText);
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 11px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical {
+    background: %(border);
+    border-radius: 5px;
+    min-height: 28px;
+}
+
+QScrollBar::handle:vertical:hover { background: %(contentMuted); }
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 11px;
+    margin: 2px;
+}
+
+QScrollBar::handle:horizontal {
+    background: %(border);
+    border-radius: 5px;
+    min-width: 28px;
+}
+
+QScrollBar::add-line, QScrollBar::sub-line { height: 0px; width: 0px; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+QMenu {
+    background: %(content);
+    border: 1px solid %(border);
+    border-radius: %(radiusMedium)px;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 22px 6px 14px;
+    border-radius: %(radiusSmall)px;
+}
+
+QMenu::item:selected  { background: %(accent); color: %(accentText); }
+QMenu::separator      { height: 1px; background: %(border); margin: 4px 8px; }
+
+QToolTip {
+    background: %(content);
+    color: %(contentText);
+    border: 1px solid %(border);
+    border-radius: %(radiusSmall)px;
+    padding: 4px 6px;
+}

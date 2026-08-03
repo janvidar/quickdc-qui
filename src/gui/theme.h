@@ -6,8 +6,13 @@
 #define HAVE_QUICKDC_QUI_THEME_H
 
 #include <QColor>
+#include <QList>
 #include <QPalette>
 #include <QString>
+#include <QStringList>
+
+class QJsonObject;
+class QObject;
 
 namespace Qdc {
 
@@ -18,6 +23,9 @@ namespace Qdc {
  * theme is a second set of values and not a second set of edits. Nothing below
  * reads QPalette for a decision it could make from here - the palette is derived
  * from this, not the other way round.
+ *
+ * Each field name below is also the name a theme file sets and the name a
+ * stylesheet writes as %(field), so adding a colour here teaches both at once.
  *
  * The three surfaces are the shape of the whole layout, darkest to lightest:
  *
@@ -135,14 +143,66 @@ const Theme& theme();
 /**
  * Change it.
  *
- * Only takes effect for widgets built or repainted afterwards, so a live switch
- * needs applyTheme() and a repaint of everything. There is one theme today; this
- * exists so that adding a second is a change of data.
+ * Only changes what widgets built or repainted afterwards will read, so a live
+ * switch means applyTheme() rather than this.
  */
 void setTheme(const Theme& theme);
 
-/** The default: a deep aubergine rail, a lighter sidebar, and white content. */
+/** The default: a deep indigo frame, a lighter sidebar, and white content. */
 Theme defaultTheme();
+
+/**
+ * Every scheme on offer, in the order a chooser should list them.
+ *
+ * The default first, then each theme file that was found - the ones the
+ * application ships, then anything in themeDirectory(). A file naming a theme
+ * that is already in the list replaces it rather than adding a second entry of
+ * the same name, which is how the shipped schemes can be retuned from outside.
+ *
+ * Read from disk on every call rather than cached, because the only caller that
+ * asks repeatedly is watching for the files to change.
+ */
+QList<Theme> availableThemes();
+
+/** By name, or the default when there is no theme of that name. */
+Theme themeByName(const QString& name);
+
+/**
+ * Where a theme file or a stylesheet override may be dropped: ~/.quickdc/themes.
+ *
+ * Alongside the core's own configuration, since that is where a user of this
+ * application already keeps its files. Need not exist.
+ */
+QString themeDirectory();
+
+/**
+ * A theme read from JSON.
+ *
+ * Every key is optional and named exactly as the struct field is; @a base stands
+ * in for anything the object does not mention, so a variant is the handful of
+ * colours that differ from what it extends and nothing else. A colour is
+ * "#rrggbb", "#aarrggbb", an SVG colour name, or "rgba(r,g,b,a)" with the alpha
+ * between 0 and 1 - which is the form styleSheet() writes, so what a theme prints
+ * is what it reads back.
+ *
+ * A key that is not a colour is reported and left at the base value rather than
+ * refused: a typo in a theme file should cost one wrong colour, not an unstyled
+ * application.
+ *
+ * @param problems if given, every complaint is appended here.
+ */
+Theme themeFromJson(const QJsonObject& object, const Theme& base,
+                    QStringList* problems = nullptr);
+
+/**
+ * Re-apply the scheme in force whenever a theme file is written, for design work.
+ *
+ * Does nothing unless QDC_THEME_WATCH is set, so a shipped application neither
+ * watches a directory nor restyles itself while somebody is using it.
+ *
+ * @param owner what the watcher belongs to, and so how long it lives.
+ */
+void watchThemes(QObject* owner);
 
 /**
  * The palette a theme implies.
