@@ -9,7 +9,6 @@
 #include "hubheader.h"
 #include "hubpane.h"
 #include "richtext.h"
-#include "theme.h"
 #include "usermodel.h"
 
 #include <core/completed.h>
@@ -124,9 +123,7 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	QLabel* nothing = new QLabel(tr("No hubs are open."), m_empty);
 	nothing->setAlignment(Qt::AlignCenter);
 
-	QPalette muted = nothing->palette();
-	muted.setColor(QPalette::WindowText, theme().contentMuted);
-	nothing->setPalette(muted);
+	nothing->setObjectName(QStringLiteral("mutedText"));
 
 	QPushButton* openFromEmpty = new QPushButton(tr("Connect to a hub…"), m_empty);
 	connect(openFromEmpty, &QPushButton::clicked, this, &HubsView::promptForHub);

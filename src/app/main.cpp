@@ -2,6 +2,7 @@
  * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
  */
 
+#include <core/configbridge.h>
 #include <core/corethread.h>
 #include <gui/mainwindow.h>
 #include <gui/theme.h>
@@ -98,7 +99,9 @@ int main(int argc, char** argv)
 
 	/*
 	 * Before any widget is built, so nothing is created against the platform
-	 * palette and restyled afterwards.
+	 * palette and restyled afterwards. The default rather than the stored choice,
+	 * which cannot be read until the core is up - and this one has a message box to
+	 * style if the core does not come up at all.
 	 */
 	Qdc::applyTheme(Qdc::defaultTheme());
 
@@ -125,6 +128,25 @@ int main(int argc, char** argv)
 	}
 
 	install_signal_handlers(&application);
+
+	/*
+	 * The chosen scheme, now that there is a configuration to ask - and still before
+	 * the window, so it is built against the theme it will be shown in rather than
+	 * restyled a moment later.
+	 *
+	 * The core stores this and ignores it, which is what the interface's own settings
+	 * want: one configuration file rather than a second one for a single key.
+	 */
+	{
+		Qdc::ConfigBridge config(&core);
+
+		Qdc::applyTheme(Qdc::themeByName(
+			config.getString(Qdc::ConfigStore::Application, QStringLiteral("Interface"),
+			                 QStringLiteral("Theme"), Qdc::defaultTheme().name)));
+	}
+
+	/* Does nothing unless QDC_THEME_WATCH is set; see watchThemes(). */
+	Qdc::watchThemes(&application);
 
 	int status = 0;
 

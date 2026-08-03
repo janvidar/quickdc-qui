@@ -67,7 +67,8 @@ qt_add_resources(qdcgui "themes"
     PREFIX "/themes"
     BASE themes
     FILES
-        themes/widgets.qss)
+        themes/widgets.qss
+        themes/dark.json)
 
 # The title bar is the platform's, so colouring it is platform code: Objective-C++
 # against AppKit on macOS, and a no-op elsewhere.

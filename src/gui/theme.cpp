@@ -13,6 +13,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QRegularExpression>
+#include <QStyle>
 #include <QStyleFactory>
 #include <QTimer>
 #include <QWidget>
@@ -40,6 +41,15 @@ const QString SHEET = QStringLiteral("widgets.qss");
 const QString BASE_KEY = QStringLiteral("base");
 
 const QString NAME_KEY = QStringLiteral("name");
+
+/**
+ * Where a theme file may explain itself.
+ *
+ * Read by nobody and any shape it likes. JSON has no comments, and a set of colours
+ * with no account of why they are those colours is the kind of file that gets edited
+ * into something incoherent by whoever comes next.
+ */
+const QString NOTES_KEY = QStringLiteral("notes");
 
 /**
  * Every colour in a Theme, under the name the struct gives it.
@@ -98,7 +108,7 @@ const RadiusField RADII[] = {
 /** Whether a theme file naming this key meant anything by it. */
 bool is_known_key(const QString& key)
 {
-	if (key == NAME_KEY || key == BASE_KEY) return true;
+	if (key == NAME_KEY || key == BASE_KEY || key == NOTES_KEY) return true;
 
 	const auto named = [&key](const auto& field) { return key == field.name; };
 
@@ -553,8 +563,16 @@ void Qdc::applyTheme(const Theme& theme)
 	 *
 	 * The cost is that the application no longer follows the platform's own look.
 	 * That is the point: this is a scheme, not a native skin.
+	 *
+	 * Once, though. This runs again on every change of theme, and setting the style
+	 * builds a new one and deletes the one every live widget is currently being drawn
+	 * by - work with nothing to show for it when the answer is the same style again.
 	 */
-	QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+	if (!qApp->style() || qApp->style()->name().compare(QStringLiteral("fusion"),
+	                                                    Qt::CaseInsensitive) != 0)
+	{
+		QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+	}
 
 	QApplication::setPalette(palette(theme));
 	qApp->setStyleSheet(styleSheet(theme));

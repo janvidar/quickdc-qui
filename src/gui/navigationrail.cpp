@@ -5,7 +5,6 @@
 #include "navigationrail.h"
 
 #include "railbutton.h"
-#include "theme.h"
 
 #include <QButtonGroup>
 #include <QVBoxLayout>
@@ -27,11 +26,13 @@ Qdc::NavigationRail::NavigationRail(QWidget* parent)
 	 * the window and does not follow the content palette.
 	 */
 	setObjectName(QStringLiteral("navigationRail"));
-	setAutoFillBackground(true);
 
-	QPalette shaded = palette();
-	shaded.setColor(QPalette::Window, Qdc::theme().rail);
-	setPalette(shaded);
+	/*
+	 * The colour is the stylesheet's, which addresses this by that name. Set here as
+	 * well and it would be a copy of the rail colour taken when the rail was built,
+	 * which is a copy that cannot hear about a theme change and so survives one.
+	 */
+	setAutoFillBackground(true);
 
 	setAccessibleName(tr("Navigation"));
 }

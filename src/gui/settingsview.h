@@ -70,6 +70,7 @@ private:
 	QWidget* buildIdentity();
 	QWidget* buildLimits();
 	QWidget* buildDirectories();
+	QWidget* buildAppearance();
 
 	/** Mark the form dirty and enable Save. Connected to every field. */
 	void markModified();
@@ -111,6 +112,9 @@ private:
 	QSpinBox* m_chunkSize;
 
 	QLineEdit* m_downloadDir;
+
+	/** The scheme, by name, with the name itself as the item's data. */
+	QComboBox* m_theme;
 
 	/* Pictures in chat: whether they arrive by themselves, and how big they may be. */
 	QCheckBox* m_fetchMedia;

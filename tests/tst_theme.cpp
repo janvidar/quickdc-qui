@@ -82,6 +82,20 @@ void TestTheme::schemesAreOffered()
 	};
 
 	QVERIFY(named(QStringLiteral("Indigo")));
+	QVERIFY(named(QStringLiteral("Dark")));
+
+	/*
+	 * Dark states only what it changes about Indigo, so this is also the check that
+	 * layering works on the file as shipped and not only on one built in a test.
+	 */
+	const Qdc::Theme dark = Qdc::themeByName(QStringLiteral("Dark"));
+
+	QVERIFY(dark.contentIsDark());
+	QCOMPARE(dark.radiusLarge, Qdc::defaultTheme().radiusLarge);
+
+	/* The three surfaces keep their order, darkest to lightest, in either scheme. */
+	QVERIFY(dark.frame.lightness() < dark.sidebar.lightness());
+	QVERIFY(dark.sidebar.lightness() < dark.content.lightness());
 
 	/* And an unknown name is the default rather than an empty theme. */
 	QCOMPARE(Qdc::themeByName(QStringLiteral("no such theme")).name,

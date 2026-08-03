@@ -4,6 +4,8 @@
 
 #include "settingsview.h"
 
+#include "theme.h"
+
 #include <core/configbridge.h>
 #include <core/shares.h>
 
@@ -31,6 +33,17 @@ const QString USER = QStringLiteral("User");
 const QString NETWORK = QStringLiteral("Network");
 const QString DOWNLOADS = QStringLiteral("Downloads");
 const QString CHAT_MEDIA = QStringLiteral("Chat media");
+
+/**
+ * The one group here that the core does not read.
+ *
+ * It stores a key outside the list above faithfully and then ignores it, which is
+ * exactly what a setting belonging to the interface wants: one configuration file
+ * rather than a second one for the sake of a single key.
+ */
+const QString INTERFACE = QStringLiteral("Interface");
+
+const QString THEME_KEY = QStringLiteral("Theme");
 
 /** The limit is kept in bytes and shown in mebibytes. */
 constexpr int MIB = 1024 * 1024;
@@ -68,6 +81,7 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 	, m_maxDownloads(new QSpinBox(this))
 	, m_chunkSize(new QSpinBox(this))
 	, m_downloadDir(new QLineEdit(this))
+	, m_theme(new QComboBox(this))
 	, m_shareList(new QListWidget(this))
 	, m_removeShare(new QPushButton(tr("Remove"), this))
 	, m_renameShare(new QPushButton(tr("Rename…"), this))
@@ -83,6 +97,7 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 	stacked->addWidget(buildIdentity());
 	stacked->addWidget(buildLimits());
 	stacked->addWidget(buildDirectories());
+	stacked->addWidget(buildAppearance());
 	stacked->addStretch(1);
 
 	QScrollArea* scroll = new QScrollArea(this);
@@ -91,10 +106,7 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 	scroll->setFrameShape(QFrame::NoFrame);
 
 	m_status->setContentsMargins(4, 0, 4, 0);
-
-	QPalette muted = m_status->palette();
-	muted.setColor(QPalette::WindowText, muted.color(QPalette::PlaceholderText));
-	m_status->setPalette(muted);
+	m_status->setObjectName(QStringLiteral("mutedText"));
 
 	QHBoxLayout* buttons = new QHBoxLayout;
 	buttons->setContentsMargins(16, 0, 16, 12);
@@ -138,13 +150,11 @@ QLabel* Qdc::SettingsView::makeNote(const QString& text)
 	QLabel* note = new QLabel(text, this);
 	note->setWordWrap(true);
 
+	note->setObjectName(QStringLiteral("mutedText"));
+
 	QFont smaller = note->font();
 	smaller.setPointSize(qMax(1, smaller.pointSize() - 1));
 	note->setFont(smaller);
-
-	QPalette muted = note->palette();
-	muted.setColor(QPalette::WindowText, muted.color(QPalette::PlaceholderText));
-	note->setPalette(muted);
 
 	return note;
 }
@@ -356,6 +366,37 @@ QWidget* Qdc::SettingsView::buildDirectories()
 	return group;
 }
 
+QWidget* Qdc::SettingsView::buildAppearance()
+{
+	QGroupBox* group = new QGroupBox(tr("Appearance"), this);
+
+	/*
+	 * Filled in load() rather than here, so that Revert picks up a theme file that
+	 * was written while the window was open.
+	 */
+	m_theme->setToolTip(tr("The colours the interface is drawn in"));
+
+	connect(m_theme, &QComboBox::currentIndexChanged, this, &SettingsView::markModified);
+
+	QFormLayout* form = new QFormLayout(group);
+	form->addRow(tr("Theme"), m_theme);
+
+	/*
+	 * Where the files are is worth saying plainly: a theme is data rather than part
+	 * of the program, and somebody who wants a scheme of their own has no other way
+	 * to find that out.
+	 */
+	form->addRow(makeNote(tr(
+		"Applied when this page is saved. A theme is a file of colours, and any "
+		"dropped in %1 are offered here as well - each one names only what it "
+		"changes about the theme it extends. A copy of widgets.qss in the same "
+		"folder replaces the stylesheet the interface is built from, which is how "
+		"borders, padding and corners are changed rather than only colours.")
+			.arg(themeDirectory())));
+
+	return group;
+}
+
 void Qdc::SettingsView::markModified()
 {
 	if (m_loading) return;
@@ -433,6 +474,21 @@ void Qdc::SettingsView::load()
 	m_mediaKeep->setValue(
 		qMax(0, media.value(QStringLiteral("Keep pasted for days")).toInt()));
 
+	/*
+	 * Read afresh each time rather than once when the form was built, so that a theme
+	 * file written while the window was open is on the list after a Revert.
+	 */
+	m_theme->clear();
+
+	for (const Theme& scheme : availableThemes())
+		m_theme->addItem(scheme.name, scheme.name);
+
+	const QString chosen = m_config->getString(ConfigStore::Application, INTERFACE,
+	                                           THEME_KEY, theme().name);
+
+	const int found = m_theme->findData(chosen);
+	m_theme->setCurrentIndex(qMax(0, found));
+
 	refreshShareList();
 
 	m_loading = false;
@@ -481,6 +537,9 @@ bool Qdc::SettingsView::save()
 	m_config->setNumber(ConfigStore::Application, CHAT_MEDIA,
 	                    QStringLiteral("Keep pasted for days"), m_mediaKeep->value());
 
+	m_config->setString(ConfigStore::Application, INTERFACE, THEME_KEY,
+	                    m_theme->currentData().toString());
+
 	const bool written = m_config->save(ConfigStore::Application);
 
 	if (!written)
@@ -494,6 +553,15 @@ bool Qdc::SettingsView::save()
 	 * asked, and this is the ask.
 	 */
 	m_config->notifyChanged();
+
+	/*
+	 * Here rather than as the combo changes: a theme applied while somebody is moving
+	 * down a list restyles the whole window at every name they pass on the way to the
+	 * one they wanted. Nothing to do when the scheme has not changed, which is almost
+	 * every save.
+	 */
+	const QString scheme = m_theme->currentData().toString();
+	if (scheme != theme().name) applyTheme(themeByName(scheme));
 
 	m_modified = false;
 	m_save->setEnabled(false);

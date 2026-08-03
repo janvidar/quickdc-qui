@@ -53,11 +53,10 @@ void fit_list(QListWidget* list, int maxRows)
 	list->setFixedHeight(rows * rowHeight + 2 * list->frameWidth() + 6);
 }
 
+/** Secondary, and named so that the stylesheet says which colour that is. */
 QLabel* muted(QLabel* label)
 {
-	QPalette palette = label->palette();
-	palette.setColor(QPalette::WindowText, palette.color(QPalette::PlaceholderText));
-	label->setPalette(palette);
+	label->setObjectName(QStringLiteral("mutedText"));
 	return label;
 }
 

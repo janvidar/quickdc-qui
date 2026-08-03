@@ -6,6 +6,7 @@
 
 #include "theme.h"
 
+#include <QGuiApplication>
 #include <QWidget>
 #include <QWindow>
 
@@ -14,6 +15,14 @@
 void Qdc::styleTitleBar(QWidget* widget)
 {
 	if (!widget) return;
+
+	/*
+	 * The platform this is written for, and only that one. Built for macOS is not the
+	 * same as running on AppKit: the offscreen platform, which is what a screenshot is
+	 * rendered on, hands out a winId that is a counter rather than a view - and asking
+	 * a small integer whether it is an NSView is a crash rather than a no.
+	 */
+	if (QGuiApplication::platformName() != QLatin1String("cocoa")) return;
 
 	QWindow* handle = widget->windowHandle();
 	if (!handle) return;

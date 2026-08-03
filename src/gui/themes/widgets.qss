@@ -143,6 +143,16 @@ QWidget#chatSurface, QWidget#composerSurface, QWidget#hubHeader {
     background: %(content);
 }
 
+/*
+ * Anything secondary: a timestamp, an explanation, the line under a hub's name, the
+ * words on an empty page. Named rather than each of them copying the colour into its
+ * own palette when it is built, which is a copy that cannot hear about a theme
+ * change and so survives one.
+ */
+QLabel#mutedText {
+    color: %(contentMuted);
+}
+
 /* The context sidebar is a panel against the conversation, not a field. */
 QListView#userList {
     background: %(content);

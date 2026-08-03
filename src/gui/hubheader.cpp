@@ -86,9 +86,7 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	subtitleFont.setPointSize(qMax(1, subtitleFont.pointSize() - 1));
 	m_subtitle->setFont(subtitleFont);
 
-	QPalette muted = m_subtitle->palette();
-	muted.setColor(QPalette::WindowText, theme().contentMuted);
-	m_subtitle->setPalette(muted);
+	m_subtitle->setObjectName(QStringLiteral("mutedText"));
 	m_subtitle->hide();
 
 	m_star->setCheckable(true);

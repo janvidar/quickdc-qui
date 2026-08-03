@@ -160,9 +160,7 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 
 	m_summary->setContentsMargins(8, 2, 8, 4);
 
-	QPalette muted = m_summary->palette();
-	muted.setColor(QPalette::WindowText, muted.color(QPalette::PlaceholderText));
-	m_summary->setPalette(muted);
+	m_summary->setObjectName(QStringLiteral("mutedText"));
 
 	QVBoxLayout* layout = new QVBoxLayout(this);
 	layout->setContentsMargins(0, 0, 0, 0);

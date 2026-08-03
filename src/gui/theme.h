@@ -187,7 +187,9 @@ QString themeDirectory();
  *
  * A key that is not a colour is reported and left at the base value rather than
  * refused: a typo in a theme file should cost one wrong colour, not an unstyled
- * application.
+ * application. Two keys are not colours: "base", the theme this one layers itself
+ * onto, and "notes", which is read by nobody and is where a file explains itself,
+ * JSON having no comments.
  *
  * @param problems if given, every complaint is appended here.
  */

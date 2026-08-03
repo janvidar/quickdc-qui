@@ -190,6 +190,13 @@ bool Qdc::MainWindow::event(QEvent* event)
 		case QEvent::LayoutRequest:
 		case QEvent::WindowStateChange:
 		case QEvent::WindowActivate:
+
+		/*
+		 * And on a change of theme, which arrives as this. The title bar is painted
+		 * from the frame colour by platform code that no stylesheet reaches, so it is
+		 * the one surface that would otherwise keep the colours of the theme before.
+		 */
+		case QEvent::ApplicationPaletteChange:
 			styleTitleBar(this);
 			break;
 

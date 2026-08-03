@@ -1,0 +1,58 @@
+{
+	"name": "Dark",
+
+	"notes": [
+		"The same three surfaces as Indigo and the same order to them, darkest to",
+		"lightest: the frame, the sidebar beside it, and the content it insets. Only",
+		"the content has crossed over - it is dark now, and contentIsDark() turns the",
+		"chat nicknames over to their light set by itself.",
+
+		"The page is a shade darker than the cards on it rather than lighter, which is",
+		"how Indigo has it too: contentAlt recedes and content sits on top of it. That",
+		"reads as depth in either direction, and it means every rule written for one",
+		"theme holds for the other.",
+
+		"The accent is light here where Indigo's is dark, because it is a fill for the",
+		"one action a panel is for and has to carry accentText on top of it. So the",
+		"pair swaps rather than the roles: light fill, dark ink, both ways round.",
+
+		"The radii are Indigo's and are not restated - anything this file leaves out",
+		"is inherited from the theme it extends."
+	],
+
+	"frame": "#0d1024",
+	"frameText": "#eef1fb",
+
+	"rail": "#0d1024",
+	"railText": "#9099c4",
+	"railTextActive": "#eef1fb",
+	"railActive": "#303a72",
+	"railHover": "rgba(255,255,255,0.08)",
+
+	"sidebar": "#171b38",
+	"sidebarText": "#b9c0e0",
+	"sidebarTextActive": "#eef1fb",
+	"sidebarActive": "#303a72",
+	"sidebarHover": "rgba(255,255,255,0.06)",
+	"sidebarHeading": "#8891bb",
+
+	"selection": "#303a72",
+	"selectionText": "#eef1fb",
+
+	"presence": "#f5c48d",
+
+	"notification": "#7c8cdf",
+	"notificationText": "#11142b",
+
+	"content": "#262a42",
+	"contentAlt": "#1f2236",
+	"contentText": "#e6e8f2",
+	"contentMuted": "#9aa0bd",
+	"border": "#363b58",
+
+	"accent": "#7d8ff0",
+	"accentText": "#10132a",
+	"danger": "#ff5c8a",
+	"success": "#43c78f",
+	"star": "#f0b429"
+}
