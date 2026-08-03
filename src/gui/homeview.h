@@ -18,26 +18,27 @@ namespace Qdc {
 class Completed;
 class ConfigBridge;
 class Favourites;
+class HubBrowser;
+class HubDirectory;
+class RecentHubs;
 class TransferBridge;
 
 /**
- * Where the window opens: who you are, the hubs worth keeping, and what has been
+ * Where the window opens: who you are, where to find a hub, and what has been
  * happening.
  *
- * The plan asks for four things here. Three are built - a welcome, the favourites,
- * and a summary of recent transfers. The fourth, hub discovery, is not: it means
- * fetching a public hub list over HTTP, and the core has no HTTP client -
- * network/http/client.h and .cpp contain nothing but a copyright notice, and the
- * core's own documentation/TODO schedules hublist parsing for a later release. An
- * address box stands in its place, since typing an address is the other way of
- * getting to a hub.
+ * All four of the things the plan asks for are here. The welcome and the summary of
+ * recent transfers are this class's own; finding a hub is a HubBrowser, which is
+ * the public lists, the favourites and the hubs already visited - and beside it an
+ * address box, because a hub nobody has published can still be typed in.
  */
 class HomeView final : public View {
 	Q_OBJECT
 
 public:
 	/** Every argument may be null; the matching section then says it is empty. */
-	HomeView(ConfigBridge* config, Favourites* favourites, Completed* completed,
+	HomeView(ConfigBridge* config, Favourites* favourites, RecentHubs* recent,
+	         HubDirectory* directory, Completed* completed,
 	         TransferBridge* transfers, QWidget* parent = nullptr);
 
 	QString title() const override;
@@ -46,9 +47,15 @@ public:
 	/** Re-read everything. Called on becoming visible and when a store changes. */
 	void refresh();
 
+	/** The hub lists, the favourites and the hubs visited. */
+	HubBrowser* hubs() const;
+
 	/** For tests. */
 	int favouriteCount() const;
-	int recentCount() const;
+	int recentHubCount() const;
+
+	/** How many finished downloads the activity summary is listing. */
+	int completedCount() const;
 
 signals:
 	/**
@@ -66,20 +73,15 @@ protected:
 
 private:
 	QWidget* buildGreeting();
-	QWidget* buildFavourites();
+	QWidget* buildHubs();
 	QWidget* buildActivity();
 
 	void refreshGreeting();
-	void refreshFavourites();
 	void refreshActivity();
 
-    /** Open whatever is selected in the favourites list. */
-	void openSelectedFavourite();
-	void removeSelectedFavourite();
 	void connectToTypedAddress();
 
 	ConfigBridge* m_config;
-	Favourites* m_favourites;
 	Completed* m_completed;
 	TransferBridge* m_transfers;
 
@@ -89,10 +91,7 @@ private:
 	QLineEdit* m_address;
 	QPushButton* m_connect;
 
-	QListWidget* m_favouriteList;
-	QPushButton* m_openFavourite;
-	QPushButton* m_removeFavourite;
-	QLabel* m_favouritesEmpty;
+	HubBrowser* m_hubs;
 
 	QLabel* m_transferSummary;
 	QListWidget* m_recentList;

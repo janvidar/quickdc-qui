@@ -19,7 +19,10 @@ class CornerMask;
 class CoreThread;
 class Favourites;
 class FilelistBridge;
+class HomeView;
+class HubDirectory;
 class HubsView;
+class RecentHubs;
 class Shares;
 class NavigationRail;
 class TransferBridge;
@@ -94,9 +97,22 @@ private:
 	Favourites* m_favourites;
 	Completed* m_completed;
 	Shares* m_shares;
+	RecentHubs* m_recent;
+
+	/**
+	 * The public hub lists.
+	 *
+	 * Owned here rather than by the view that shows them, because it fetches over
+	 * the core thread and so has to be destroyed while the core is still up - which
+	 * is what the order in the destructor arranges.
+	 */
+	HubDirectory* m_directory;
 
 	/** Kept for openHub(), which the Home view will want. */
 	HubsView* m_hubs;
+
+	/** Kept so that it can be destroyed before the stores it was handed. */
+	HomeView* m_home;
 
 	NavigationRail* m_rail;
 	QStackedWidget* m_stack;

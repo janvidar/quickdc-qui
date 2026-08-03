@@ -4,9 +4,10 @@
 
 #include "homeview.h"
 
+#include "hubbrowser.h"
+
 #include <core/completed.h>
 #include <core/configbridge.h>
-#include <core/favourites.h>
 #include <core/transferbridge.h>
 
 #include <QFileInfo>
@@ -63,21 +64,18 @@ QLabel* muted(QLabel* label)
 }
 
 Qdc::HomeView::HomeView(ConfigBridge* config, Favourites* favourites,
+                        RecentHubs* recent, HubDirectory* directory,
                         Completed* completed, TransferBridge* transfers,
                         QWidget* parent)
 	: View(parent)
 	, m_config(config)
-	, m_favourites(favourites)
 	, m_completed(completed)
 	, m_transfers(transfers)
 	, m_greeting(new QLabel(this))
 	, m_identity(new QLabel(this))
 	, m_address(new QLineEdit(this))
 	, m_connect(new QPushButton(tr("Connect"), this))
-	, m_favouriteList(new QListWidget(this))
-	, m_openFavourite(new QPushButton(tr("Connect"), this))
-	, m_removeFavourite(new QPushButton(tr("Remove"), this))
-	, m_favouritesEmpty(new QLabel(this))
+	, m_hubs(new HubBrowser(directory, favourites, recent, this))
 	, m_transferSummary(new QLabel(this))
 	, m_recentList(new QListWidget(this))
 	, m_recentEmpty(new QLabel(this))
@@ -85,13 +83,17 @@ Qdc::HomeView::HomeView(ConfigBridge* config, Favourites* favourites,
 {
 	QWidget* page = new QWidget(this);
 
+	/*
+	 * The hub browser takes the slack rather than a stretch at the foot doing it: a
+	 * list of hubs is what the height of this page is worth spending on, where the
+	 * greeting and the activity summary are each a few lines whatever happens.
+	 */
 	QVBoxLayout* stacked = new QVBoxLayout(page);
 	stacked->setContentsMargins(16, 16, 16, 16);
 	stacked->setSpacing(14);
 	stacked->addWidget(buildGreeting());
-	stacked->addWidget(buildFavourites());
+	stacked->addWidget(buildHubs(), 1);
 	stacked->addWidget(buildActivity());
-	stacked->addStretch(1);
 
 	QScrollArea* scroll = new QScrollArea(this);
 	scroll->setWidget(page);
@@ -109,11 +111,9 @@ Qdc::HomeView::HomeView(ConfigBridge* config, Favourites* favourites,
 		if (m_transfers) m_transfers->refresh();
 	});
 
-	if (m_favourites)
-	{
-		connect(m_favourites, &Favourites::changed,
-		        this, &HomeView::refreshFavourites);
-	}
+	/* A hub chosen in the browser is opened the same way a typed address is: this
+	   view cannot do it, so it asks. */
+	connect(m_hubs, &HubBrowser::hubRequested, this, &HomeView::hubRequested);
 
 	if (m_completed)
 	{
@@ -186,59 +186,15 @@ QWidget* Qdc::HomeView::buildGreeting()
 	layout->addWidget(new QLabel(tr("Connect to a hub by address:"), this));
 	layout->addLayout(addressRow);
 
-	/*
-	 * Said plainly rather than offered as a disabled "browse hubs" button. The core
-	 * has no HTTP client at all, so there is nothing behind such a button and no
-	 * near prospect of there being any.
-	 */
-	layout->addWidget(muted(new QLabel(tr(
-		"There is no public hub list yet — QuickDC has no HTTP client to fetch one "
-		"with, so hubs have to be entered by address."), this)));
-
 	return group;
 }
 
-QWidget* Qdc::HomeView::buildFavourites()
+QWidget* Qdc::HomeView::buildHubs()
 {
-	QGroupBox* group = new QGroupBox(tr("Favourite hubs"), this);
-
-	m_favouriteList->setSelectionMode(QAbstractItemView::SingleSelection);
-
-	connect(m_favouriteList, &QListWidget::activated,
-	        this, &HomeView::openSelectedFavourite);
-	connect(m_openFavourite, &QPushButton::clicked,
-	        this, &HomeView::openSelectedFavourite);
-	connect(m_removeFavourite, &QPushButton::clicked,
-	        this, &HomeView::removeSelectedFavourite);
-
-	const auto followSelection = [this] {
-		const bool chosen = m_favouriteList->currentRow() >= 0;
-		m_openFavourite->setEnabled(chosen);
-		m_removeFavourite->setEnabled(chosen);
-	};
-
-	connect(m_favouriteList, &QListWidget::currentRowChanged, this, followSelection);
-	followSelection();
-
-	muted(m_favouritesEmpty);
-	m_favouritesEmpty->setWordWrap(true);
-	m_favouritesEmpty->setText(tr(
-		"None yet. The star in a hub's header keeps it here."));
-
-	QVBoxLayout* buttons = new QVBoxLayout;
-	buttons->setContentsMargins(0, 0, 0, 0);
-	buttons->addWidget(m_openFavourite);
-	buttons->addWidget(m_removeFavourite);
-	buttons->addStretch(1);
-
-	QHBoxLayout* row = new QHBoxLayout;
-	row->setContentsMargins(0, 0, 0, 0);
-	row->addWidget(m_favouriteList, 1);
-	row->addLayout(buttons);
+	QGroupBox* group = new QGroupBox(tr("Hubs"), this);
 
 	QVBoxLayout* layout = new QVBoxLayout(group);
-	layout->addWidget(m_favouritesEmpty);
-	layout->addLayout(row);
+	layout->addWidget(m_hubs);
 
 	return group;
 }
@@ -265,8 +221,12 @@ QWidget* Qdc::HomeView::buildActivity()
 void Qdc::HomeView::refresh()
 {
 	refreshGreeting();
-	refreshFavourites();
 	refreshActivity();
+}
+
+Qdc::HubBrowser* Qdc::HomeView::hubs() const
+{
+	return m_hubs;
 }
 
 void Qdc::HomeView::refreshGreeting()
@@ -301,27 +261,6 @@ void Qdc::HomeView::refreshGreeting()
 	}
 
 	m_identity->setText(parts.join(QStringLiteral(" · ")));
-}
-
-void Qdc::HomeView::refreshFavourites()
-{
-	m_favouriteList->clear();
-
-	const QStringList urls = m_favourites ? m_favourites->urls() : QStringList();
-
-	for (const QString& url : urls) new QListWidgetItem(url, m_favouriteList);
-
-	/*
-	 * The list is hidden when empty rather than shown as a blank box, so the
-	 * explanation is what occupies the space.
-	 */
-	fit_list(m_favouriteList, 8);
-
-	const bool any = !urls.isEmpty();
-	m_favouriteList->setVisible(any);
-	m_openFavourite->setVisible(any);
-	m_removeFavourite->setVisible(any);
-	m_favouritesEmpty->setVisible(!any);
 }
 
 void Qdc::HomeView::refreshActivity()
@@ -386,25 +325,6 @@ void Qdc::HomeView::refreshActivity()
 	m_recentEmpty->setVisible(!any);
 }
 
-void Qdc::HomeView::openSelectedFavourite()
-{
-	const QListWidgetItem* item = m_favouriteList->currentItem();
-	if (!item) return;
-
-	emit hubRequested(item->text());
-}
-
-void Qdc::HomeView::removeSelectedFavourite()
-{
-	if (!m_favourites) return;
-
-	const QListWidgetItem* item = m_favouriteList->currentItem();
-	if (!item) return;
-
-	/* The store's own signal brings the list back up to date. */
-	m_favourites->remove(item->text());
-}
-
 void Qdc::HomeView::connectToTypedAddress()
 {
 	const QString url = m_address->text().trimmed();
@@ -421,10 +341,15 @@ void Qdc::HomeView::connectToTypedAddress()
 
 int Qdc::HomeView::favouriteCount() const
 {
-	return m_favouriteList->count();
+	return m_hubs->favouriteCount();
 }
 
-int Qdc::HomeView::recentCount() const
+int Qdc::HomeView::recentHubCount() const
+{
+	return m_hubs->recentCount();
+}
+
+int Qdc::HomeView::completedCount() const
 {
 	return m_recentList->count();
 }

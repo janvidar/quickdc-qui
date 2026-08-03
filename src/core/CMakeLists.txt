@@ -21,8 +21,14 @@ add_library(qdcbridge STATIC
     shares.h
     hubbridge.cpp
     hubbridge.h
+    hubdirectory.cpp
+    hubdirectory.h
+    hublistbridge.cpp
+    hublistbridge.h
     mediabridge.cpp
     mediabridge.h
+    recenthubs.cpp
+    recenthubs.h
     transferbridge.cpp
     transferbridge.h)
 

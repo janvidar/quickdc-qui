@@ -164,6 +164,27 @@ struct ChatMessage {
 };
 
 /**
+ * One hub as a public hublist describes it; QuickDC::HubListEntry.
+ *
+ * Mirrored rather than reused, like everything else here. The address is what a
+ * hub is and is the only field that has to be there; the numbers are what the
+ * list claims about it and are nobody's measurement - only the hub itself can say
+ * how many users it has.
+ */
+struct HubListEntry {
+	QString name;
+	QString address;
+	QString description;
+	QString country;
+	quint64 users = 0;
+	quint64 shared = 0;
+	quint64 minshare = 0;
+	quint64 minslots = 0;
+	quint64 maxhubs = 0;
+	quint64 maxusers = 0;
+};
+
+/**
  * One transfer in flight: one file, rather than one piece of one.
  *
  * The core moves a large file in several chunks at once, each of them a Transfer
@@ -291,6 +312,7 @@ struct QueueEntry {
  * nobody should have to solve twice.
  */
 Q_DECLARE_METATYPE(Qdc::UserInfo)
+Q_DECLARE_METATYPE(Qdc::HubListEntry)
 Q_DECLARE_METATYPE(Qdc::ChatMessage)
 Q_DECLARE_METATYPE(Qdc::TransferInfo)
 Q_DECLARE_METATYPE(Qdc::QueueEntry)

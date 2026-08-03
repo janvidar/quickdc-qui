@@ -17,6 +17,8 @@
 #include <core/corethread.h>
 #include <core/favourites.h>
 #include <core/filelistbridge.h>
+#include <core/hubdirectory.h>
+#include <core/recenthubs.h>
 #include <core/shares.h>
 #include <core/transferbridge.h>
 
@@ -53,8 +55,12 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	, m_favourites(new Favourites(m_config, this))
 	, m_completed(new Completed(m_config, this))
 	, m_shares(new Shares(m_config, this))
+	, m_recent(new RecentHubs(m_config, this))
+	, m_directory(new HubDirectory(thread, m_config, QString(), this))
 	, m_hubs(new HubsView(thread, m_favourites, m_filelists, m_transfers, m_config,
-	                      m_completed))
+	                      m_completed, m_recent))
+	, m_home(new HomeView(m_config, m_favourites, m_recent, m_directory,
+	                      m_completed, m_transfers))
 	, m_rail(new NavigationRail)
 	, m_stack(new QStackedWidget)
 {
@@ -92,18 +98,16 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 
 	setCentralWidget(central);
 
-	HomeView* home = new HomeView(m_config, m_favourites, m_completed, m_transfers);
-
 	/*
 	 * Home cannot open a hub itself - they live in another view - so the window
 	 * routes the request and follows it, which is what someone pressing Connect on
 	 * a favourite expects to happen.
 	 */
-	connect(home, &HomeView::hubRequested, this, [this](const QString& url) {
+	connect(m_home, &HomeView::hubRequested, this, [this](const QString& url) {
 		if (m_hubs->openHub(url)) showView(m_views.indexOf(m_hubs));
 	});
 
-	addView(home);
+	addView(m_home);
 	addView(m_hubs);
 	addView(new TransfersView(m_transfers, m_completed));
 
@@ -141,6 +145,18 @@ Qdc::MainWindow::~MainWindow()
 	delete m_hubs;
 	m_hubs = nullptr;
 
+	/*
+	 * And Home before the stores it was handed, for the same reason: it would
+	 * otherwise be destroyed with the rest of the widgets, which happens after this
+	 * body has run and so after everything below has gone.
+	 */
+	delete m_home;
+	m_home = nullptr;
+
+	/* Fetches over the core thread, so it goes while the core is still up. */
+	delete m_directory;
+	m_directory = nullptr;
+
 	delete m_filelists;
 	m_filelists = nullptr;
 
@@ -150,6 +166,9 @@ Qdc::MainWindow::~MainWindow()
 	/* Every store writes through the config bridge, so they go before it. */
 	delete m_shares;
 	m_shares = nullptr;
+
+	delete m_recent;
+	m_recent = nullptr;
 
 	delete m_completed;
 	m_completed = nullptr;

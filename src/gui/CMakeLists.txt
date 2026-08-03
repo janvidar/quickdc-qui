@@ -22,6 +22,10 @@ add_library(qdcgui STATIC
     filelistview.h
     homeview.cpp
     homeview.h
+    hubbrowser.cpp
+    hubbrowser.h
+    hublistmodel.cpp
+    hublistmodel.h
     hubpane.cpp
     hubpane.h
     hubsview.cpp

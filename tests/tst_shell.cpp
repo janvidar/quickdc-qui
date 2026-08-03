@@ -71,6 +71,17 @@ void TestShell::initTestCase()
 	QVERIFY2(m_thread->startAndWait(),
 	         qPrintable(QStringLiteral("the core did not start: ")
 	                    + m_thread->failureReason()));
+
+	/*
+	 * No public hub lists configured, and written explicitly so that the directory
+	 * does not fill in its defaults: the window builds one, and a directory with
+	 * sources fetches them over the internet as soon as the list is looked at. A
+	 * test suite reaches nothing but this machine.
+	 */
+	Qdc::ConfigBridge config(m_thread);
+	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
+	                 QStringLiteral("Total"), 0);
+	QVERIFY(config.save(Qdc::ConfigStore::Application));
 }
 
 void TestShell::cleanupTestCase()
@@ -238,9 +249,10 @@ void TestShell::homeListsFavouritesAndAsksTheWindowToOpenThem()
 	Qdc::Favourites favourites(&config);
 	favourites.remove(QStringLiteral("dchub://home.example.org:411"));
 
-	Qdc::HomeView home(&config, &favourites, nullptr, nullptr);
+	Qdc::HomeView home(&config, &favourites, nullptr, nullptr, nullptr, nullptr);
 	QCOMPARE(home.favouriteCount(), favourites.urls().size());
-	QCOMPARE(home.recentCount(), 0);
+	QCOMPARE(home.recentHubCount(), 0);
+	QCOMPARE(home.completedCount(), 0);
 
 	QSignalSpy requested(&home, &Qdc::HomeView::hubRequested);
 	QVERIFY(requested.isValid());
@@ -256,36 +268,35 @@ void TestShell::homeListsFavouritesAndAsksTheWindowToOpenThem()
 	 * Home cannot open a hub itself, so what it does is ask. The window is what
 	 * turns that into a connection.
 	 */
-	QListWidget* list = home.findChild<QListWidget*>();
+	QListWidget* list = home.findChild<QListWidget*>(QStringLiteral("favouriteHubs"));
 	QVERIFY(list);
 
 	for (int n = 0; n < list->count(); ++n)
 	{
-		if (list->item(n)->text() != hub) continue;
+		if (list->item(n)->data(Qt::UserRole + 1).toString() != hub) continue;
 
 		list->setCurrentRow(n);
 		break;
 	}
 
-	QCOMPARE(list->currentItem()->text(), hub);
+	QVERIFY(list->currentItem());
+	QCOMPARE(list->currentItem()->data(Qt::UserRole + 1).toString(), hub);
 
-	QList<QPushButton*> buttons = home.findChildren<QPushButton*>();
-	QPushButton* open = nullptr;
-	for (QPushButton* button : buttons)
-	{
-		if (button->text() == QStringLiteral("Connect") && button->isEnabled())
-			open = button;
-	}
-
+	QPushButton* open =
+		home.findChild<QPushButton*>(QStringLiteral("connectFavouriteHub"));
 	QVERIFY(open);
+	QVERIFY(open->isEnabled());
 	open->click();
 
 	QCOMPARE(requested.count(), 1);
 	QCOMPARE(requested.at(0).at(0).toString(), hub);
 
-	/* Removing it through Home takes it out of the store, not just the list. */
-	QVERIFY(favourites.contains(hub));
-	favourites.remove(hub);
+	/* Unbookmarking through Home takes it out of the store, not just the list. */
+	QPushButton* unbookmark =
+		home.findChild<QPushButton*>(QStringLiteral("unbookmarkHub"));
+	QVERIFY(unbookmark);
+	unbookmark->click();
+
 	QVERIFY(!favourites.contains(hub));
 	QCOMPARE(home.favouriteCount(), before - 1);
 }

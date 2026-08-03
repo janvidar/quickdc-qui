@@ -8,11 +8,13 @@
 #include <core/filelistbridge.h>
 #include <core/transferbridge.h>
 #include <core/hubbridge.h>
+#include <core/recenthubs.h>
 #include <gui/chatfeed.h>
 #include <gui/chatmodel.h>
 #include <gui/chatpane.h>
 #include <gui/composer.h>
 #include <gui/filelistview.h>
+#include <gui/hubheader.h>
 #include <gui/hubpane.h>
 #include <gui/hubsview.h>
 #include <gui/richtext.h>
@@ -79,6 +81,7 @@ private slots:
 
 	void favouritesRoundTripThroughTheStore();
 	void favouritesShrinkWithoutLeavingATail();
+	void anOpenHubIsRecordedAndFollowsTheFavouritesStore();
 
 	void urlNormalisationFillsInSchemeAndPort();
 	void noHubCarriesRichTextUntilItAnnouncesTheExtension();
@@ -822,6 +825,42 @@ void TestHubs::favouritesShrinkWithoutLeavingATail()
 	QCOMPARE(reloaded.urls().size(), 2);
 	QVERIFY(!reloaded.contains(QStringLiteral("dchub://h0.example.org:411")));
 	QVERIFY(reloaded.contains(QStringLiteral("dchub://h2.example.org:411")));
+}
+
+void TestHubs::anOpenHubIsRecordedAndFollowsTheFavouritesStore()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::Favourites favourites(&config);
+	for (const QString& url : favourites.urls()) favourites.remove(url);
+
+	Qdc::RecentHubs recent(&config);
+	recent.clear();
+
+	Qdc::HubsView hubs(m_thread, &favourites, m_filelists, nullptr, &config, nullptr,
+	                   &recent);
+
+	const QString hub = QStringLiteral("adc://192.0.2.1:412");
+	QVERIFY(hubs.openHub(hub));
+
+	/* Recorded as it is opened, so a hub that never answers can still be found
+	   again. Nothing here connects to anything. */
+	QVERIFY(recent.contains(hub));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+	QVERIFY(!pane->header()->isFavourite());
+
+	/*
+	 * The star follows the store, not only the click on the star: the same hub can be
+	 * unbookmarked from the list on the Home view while this conversation is open.
+	 */
+	QVERIFY(favourites.add(hub));
+	QVERIFY(pane->header()->isFavourite());
+
+	QVERIFY(favourites.remove(hub));
+	QVERIFY(!pane->header()->isFavourite());
+
+	recent.clear();
 }
 
 void TestHubs::noHubCarriesRichTextUntilItAnnouncesTheExtension()
