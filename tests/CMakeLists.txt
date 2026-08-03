@@ -24,10 +24,18 @@ target_link_libraries(tst_settings PRIVATE qdcgui Qt6::Test)
 add_executable(tst_richtext tst_richtext.cpp)
 target_link_libraries(tst_richtext PRIVATE qdcgui Qt6::Test)
 
+# The CommonMark examples are read at run time rather than compiled in: they are
+# the specification's own data file, and a build should not have to be repeated to
+# take a newer one.
+add_executable(tst_markdown tst_markdown.cpp)
+target_link_libraries(tst_markdown PRIVATE qdcgui Qt6::Test)
+target_compile_definitions(tst_markdown PRIVATE
+    QDC_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data")
+
 add_executable(tst_theme tst_theme.cpp)
 target_link_libraries(tst_theme PRIVATE qdcgui Qt6::Test)
 
-foreach(target tst_bridge tst_shell tst_hubs tst_transfers tst_settings tst_richtext tst_theme)
+foreach(target tst_bridge tst_shell tst_hubs tst_transfers tst_settings tst_richtext tst_markdown tst_theme)
     set_target_properties(${target} PROPERTIES
         AUTOMOC ON
         CXX_STANDARD 20
@@ -45,14 +53,15 @@ add_test(NAME hubs COMMAND tst_hubs)
 add_test(NAME transfers COMMAND tst_transfers)
 add_test(NAME settings COMMAND tst_settings)
 add_test(NAME richtext COMMAND tst_richtext)
+add_test(NAME markdown COMMAND tst_markdown)
 add_test(NAME theme COMMAND tst_theme)
 
 # Generous, because most of what these do is wait for the reactor: a job posted
 # while it is in poll() is answered within a quarter of a second, and there are a
 # good many of them.
-set_tests_properties(bridge shell hubs transfers settings richtext theme PROPERTIES TIMEOUT 120)
+set_tests_properties(bridge shell hubs transfers settings richtext markdown theme PROPERTIES TIMEOUT 120)
 
 # The shell test builds real widgets and so needs a QApplication, which wants a
 # display. Offscreen gives it one that does not, so the suite runs over ssh and
 # on a build machine.
-set_tests_properties(shell hubs transfers settings richtext theme PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(shell hubs transfers settings richtext markdown theme PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

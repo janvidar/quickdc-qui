@@ -38,6 +38,8 @@ private slots:
 	void plainRenderingKeepsLineBreaksAndMarkers();
 	void toPlainTextStripsMarkers();
 	void theHangingIndentOnlyPullsBackTheFirstBlock();
+	void everyCommonMarkConstructReachesTheFeed();
+	void nestingIsDrawnAsNesting();
 
 private:
 	static Qdc::RichText::RenderOptions options();
@@ -223,10 +225,11 @@ void TestRichText::boldAndItalicTogetherRoundTrip()
 	const QString html = Qdc::RichText::renderMarkdown(markdown, options());
 
 	/*
-	 * Both, and with nothing left over. A scanner that took "***" for "**" used to emit
-	 * the third asterisk as text and lose the italic with it.
+	 * Both, and with nothing left over. The emphasis is outside the strong, which is the
+	 * nesting CommonMark specifies for a run of three: the closing run pairs with the
+	 * innermost opener it can, so the outer pair is the single asterisk.
 	 */
-	QVERIFY2(html.contains(QStringLiteral("<b><i>very</i></b>")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("<i><b>very</b></i>")), qPrintable(html));
 	QVERIFY2(!html.contains(QStringLiteral("*")), qPrintable(html));
 
 	QCOMPARE(Qdc::RichText::toPlainText(markdown),
@@ -242,7 +245,7 @@ void TestRichText::boldAndItalicTogetherRoundTrip()
 
 	const QString rendered = Qdc::RichText::renderMarkdown(together, options());
 	QVERIFY2(rendered.contains(QStringLiteral("<b>loud</b>")), qPrintable(rendered));
-	QVERIFY2(rendered.contains(QStringLiteral("<b><i>louder</i></b>")),
+	QVERIFY2(rendered.contains(QStringLiteral("<i><b>louder</b></i>")),
 	         qPrintable(rendered));
 
 	/* And a sender who nested them by hand rather than as one run. */
@@ -262,11 +265,15 @@ void TestRichText::boldAndItalicTogetherRoundTrip()
 	QVERIFY2(lone.contains(QStringLiteral("2 * 3 and <i>this</i> only")),
 	         qPrintable(lone));
 
-	/* Leaning on the key is still emphasis, with nothing spilled either side. */
+	/*
+	 * Leaning on the key is still emphasis, with nothing spilled either side. Four
+	 * markers pair up two at a time, which is strong inside strong rather than the
+	 * strongest thing there is - CommonMark counts them rather than capping them.
+	 */
 	const QString heavy = Qdc::RichText::renderMarkdown(
 		QStringLiteral("****four****"), options());
 
-	QVERIFY2(heavy.contains(QStringLiteral("<b><i>four</i></b>")), qPrintable(heavy));
+	QVERIFY2(heavy.contains(QStringLiteral("<b><b>four</b></b>")), qPrintable(heavy));
 	QVERIFY2(!heavy.contains(QStringLiteral("*")), qPrintable(heavy));
 
 	/*
@@ -282,7 +289,7 @@ void TestRichText::boldAndItalicTogetherRoundTrip()
 	QCOMPARE(spaced, QStringLiteral("keep  ***spaced*** out"));
 
 	QVERIFY(Qdc::RichText::renderMarkdown(spaced, options())
-	        .contains(QStringLiteral("<b><i>spaced</i></b>")));
+	        .contains(QStringLiteral("<i><b>spaced</b></i>")));
 }
 
 void TestRichText::quoteAndCodeBlockRoundTrip()
@@ -404,8 +411,13 @@ void TestRichText::proseThatOpensLikeAMarkerStaysProse()
 
 	const QString markdown = Qdc::RichText::toMarkdown(document);
 
+	/*
+	 * The numbered line is escaped at its full stop rather than in front of the digit: a
+	 * backslash before a "1" escapes nothing, so it would arrive as a visible backslash
+	 * and the line would still be a list.
+	 */
 	QCOMPARE(markdown,
-	         QStringLiteral("\\- not a list\n\\1. not numbered\n"
+	         QStringLiteral("\\- not a list\n1\\. not numbered\n"
 	                        "\\> not a quote\n**really**"));
 
 	/* And it comes back out the way it went in. */
@@ -767,6 +779,94 @@ void TestRichText::toPlainTextStripsMarkers()
 
 	QCOMPARE(Qdc::RichText::toPlainText(QStringLiteral("> quoted\nplain")),
 	         QStringLiteral("quoted\nplain"));
+}
+
+void TestRichText::everyCommonMarkConstructReachesTheFeed()
+{
+	/*
+	 * The constructs the parser gained, each drawn as something rather than shown as its
+	 * markers. This is the list a reader of a message is entitled to see working; that
+	 * the parser understands them is tst_markdown's business.
+	 */
+	const QString html = Qdc::RichText::renderMarkdown(
+		QStringLiteral("# Heading\n\n"
+		               "Setext\n======\n\n"
+		               "---\n\n"
+		               "~~struck~~ and _emphasis_ and __strong__\n\n"
+		               "    indented code\n\n"
+		               "| a | b |\n|:--|--:|\n| 1 | 2 |\n\n"
+		               "&amp; and &#65; and <https://example.org/>\n"),
+		options());
+
+	/* A heading is set larger and bold rather than shown with its hashes. */
+	QVERIFY2(!html.contains(QStringLiteral("# Heading")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("<h1>Heading</h1>")), qPrintable(html));
+
+	/* An underlined line is the same heading by another spelling. */
+	QVERIFY2(html.contains(QStringLiteral("<h1>Setext</h1>")), qPrintable(html));
+	QVERIFY2(!html.contains(QStringLiteral("======")), qPrintable(html));
+
+	QVERIFY2(html.contains(QStringLiteral("<hr>")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("<s>struck</s>")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("<i>emphasis</i>")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("<b>strong</b>")), qPrintable(html));
+
+	/* An indented block is code, and gets the panel a fenced one gets. */
+	QVERIFY2(html.contains(QStringLiteral("background-color:#f0f0f0")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("indented&nbsp;code")), qPrintable(html));
+
+	QVERIFY2(html.contains(QStringLiteral("<table")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("align=\"right\"")), qPrintable(html));
+
+	/* An entity is the character it names, and an angle-bracketed URL is a link. */
+	QVERIFY2(html.contains(QStringLiteral("&amp; and A")), qPrintable(html));
+	QVERIFY2(html.contains(QStringLiteral("href=\"https://example.org/\"")),
+	         qPrintable(html));
+
+	/* And the accessible form of all of it is prose. */
+	const QString prose = Qdc::RichText::toPlainText(
+		QStringLiteral("# Heading\n\n~~struck~~ and `code`"));
+
+	QCOMPARE(prose, QStringLiteral("Heading\nstruck and code"));
+}
+
+void TestRichText::nestingIsDrawnAsNesting()
+{
+	const QString html = Qdc::RichText::renderMarkdown(
+		QStringLiteral("- outer\n  - inner\n    - deepest\n"), options());
+
+	/* Three items, each one step further in than the last. */
+	QCOMPARE(html.count(QStringLiteral("&#8226;")), 3);
+
+	/*
+	 * The indent of the three divs that carry a bullet. The message opens with a list
+	 * rather than with prose, so there is a fourth div in front of them holding the
+	 * speaker's name - see renderMarkdown().
+	 */
+	static const QRegularExpression margin(
+		QStringLiteral("margin-left:(\\d+)px[^>]*>[^<]*&#8226;"));
+
+	QList<int> indents;
+	QRegularExpressionMatchIterator each = margin.globalMatch(html);
+	while (each.hasNext()) indents.append(each.next().captured(1).toInt());
+
+	QCOMPARE(indents.size(), 3);
+	QVERIFY2(indents.at(0) < indents.at(1) && indents.at(1) < indents.at(2),
+	         qPrintable(html));
+
+	/* A quote inside a quote carries two rules rather than one. */
+	const QString quoted = Qdc::RichText::renderMarkdown(
+		QStringLiteral("> outer\n> > inner\n"), options());
+
+	QVERIFY2(quoted.count(QStringLiteral("&#9615;")) >= 3, qPrintable(quoted));
+
+	/* A code block inside a list item stays inside it, and stays monospace. */
+	const QString mixed = Qdc::RichText::renderMarkdown(
+		QStringLiteral("1. first\n\n   ```\n   cmake --build .\n   ```\n"), options());
+
+	QVERIFY2(mixed.contains(QStringLiteral("cmake&nbsp;--build&nbsp;.")),
+	         qPrintable(mixed));
+	QVERIFY2(mixed.contains(QStringLiteral("1.&nbsp;")), qPrintable(mixed));
 }
 
 void TestRichText::theHangingIndentOnlyPullsBackTheFirstBlock()

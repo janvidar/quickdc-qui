@@ -30,6 +30,9 @@ add_library(qdcgui STATIC
     hubheader.h
     mainwindow.cpp
     mainwindow.h
+    markdown.cpp
+    markdown.h
+    markdownentities.h
     nativewindow.h
     usermodel.cpp
     usermodel.h

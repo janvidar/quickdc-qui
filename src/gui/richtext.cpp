@@ -4,6 +4,8 @@
 
 #include "richtext.h"
 
+#include "markdown.h"
+
 #include <QFontDatabase>
 #include <QFileInfo>
 #include <QUrlQuery>
@@ -37,32 +39,72 @@ const QStringList& hub_schemes()
 }
 
 /**
- * The characters our own inline scanner gives meaning to.
+ * Escape a plain run so that it survives being parsed back.
  *
- * Underscore is deliberately absent: emphasis is only ever asterisks here, so
- * snake_case survives a formatted message untouched instead of arriving full of
- * backslashes. Every escape we add is noise for somebody reading the raw markers.
+ * Only what could change meaning, and no more: every backslash is noise on a client that
+ * does not know this extension, and a message full of them is worse for its reader than
+ * one where an underscore is occasionally taken for emphasis. So the decision is made per
+ * character, in context.
  */
-bool is_significant(QChar c)
-{
-	return c == QLatin1Char('\\') || c == QLatin1Char('*')
-		|| c == QLatin1Char('`') || c == QLatin1Char('[')
-		|| c == QLatin1Char(']');
-}
-
-/** Escape a plain run so that it survives being parsed back. */
 QString escape_markdown(const QString& text)
 {
-	QString escaped;
-	escaped.reserve(text.size());
+	const int tildes = text.count(QLatin1Char('~'));
 
-	for (const QChar c : text)
+	QString out;
+	out.reserve(text.size());
+
+	for (int i = 0; i < text.size(); ++i)
 	{
-		if (is_significant(c)) escaped += QLatin1Char('\\');
-		escaped += c;
+		const QChar c = text.at(i);
+		const QChar before = i > 0 ? text.at(i - 1) : QChar();
+		const QChar after = i + 1 < text.size() ? text.at(i + 1) : QChar();
+
+		bool escape = false;
+
+		switch (c.unicode())
+		{
+			case u'\\':
+			case u'`':
+			case u'*':
+			case u'[':
+			case u']':
+				escape = true;
+				break;
+
+			case u'_':
+				/*
+				 * Underscore cannot emphasise inside a word, which is what lets
+				 * snake_case through untouched where an asterisk would have to be
+				 * escaped.
+				 */
+				escape = !(before.isLetterOrNumber() && after.isLetterOrNumber());
+				break;
+
+			case u'~':
+				/* A lone tilde pairs with nothing, so "~/Music" needs no help. */
+				escape = tildes > 1;
+				break;
+
+			case u'<':
+				/* Only where it could open an autolink or look like a tag. */
+				escape = after.isLetter() || after == QLatin1Char('/')
+					|| after == QLatin1Char('!') || after == QLatin1Char('?');
+				break;
+
+			case u'&':
+				/* Only where it could begin a character reference. */
+				escape = after.isLetter() || after == QLatin1Char('#');
+				break;
+
+			default:
+				break;
+		}
+
+		if (escape) out += QLatin1Char('\\');
+		out += c;
 	}
 
-	return escaped;
+	return out;
 }
 
 /**
@@ -209,10 +251,6 @@ int scheme_length(const QString& text, int at)
 	return n - at;
 }
 
-QString scan_inline(const QString& text, Mode mode,
-                    const Qdc::RichText::RenderColours& colours,
-                    const Qdc::RichText::RenderOptions* options);
-
 QString wrap_link(const QString& label, const QUrl& url, Mode mode,
                   const Qdc::RichText::RenderColours& colours)
 {
@@ -307,231 +345,6 @@ QString chip_for(const Qdc::RichText::Attachment& file, const QUrl& url, Mode mo
 		     file.name.toHtmlEscaped(), size.toHtmlEscaped());
 }
 
-QString scan_inline(const QString& text, Mode mode,
-                    const Qdc::RichText::RenderColours& colours,
-                    const Qdc::RichText::RenderOptions* options)
-{
-	QString out;
-	QString pending;
-
-	const auto flush = [&] {
-		if (pending.isEmpty()) return;
-		out += emit_text(pending, mode);
-		pending.clear();
-	};
-
-	int i = 0;
-	const int n = text.size();
-
-	while (i < n)
-	{
-		const QChar c = text.at(i);
-
-		/* An escape always yields the next character literally. */
-		if (c == QLatin1Char('\\') && i + 1 < n)
-		{
-			pending += text.at(i + 1);
-			i += 2;
-			continue;
-		}
-
-		if (c == QLatin1Char('`'))
-		{
-			int fence = 0;
-			while (i + fence < n && text.at(i + fence) == QLatin1Char('`')) ++fence;
-
-			const QString close(fence, QLatin1Char('`'));
-			const int end = text.indexOf(close, i + fence);
-
-			if (end > 0)
-			{
-				QString body = text.mid(i + fence, end - i - fence);
-
-				/* Undo the padding code_span() may have added. */
-				if (body.startsWith(QLatin1Char(' ')) && body.endsWith(QLatin1Char(' '))
-				    && body.trimmed().size() != body.size() - 1)
-				{
-					body = body.mid(1, body.size() - 2);
-				}
-
-				flush();
-
-				out += (mode == Mode::Plain)
-					? body
-					: QStringLiteral("<span style=\"font-family:'%1';"
-					                 " background-color:%2; color:%3\">%4</span>")
-						.arg(Qdc::RichText::monospaceFamily(),
-						     colours.codeBack.name(), colours.code.name(),
-						     emit_text(body, mode));
-
-				i = end + fence;
-				continue;
-			}
-		}
-
-		/*
-		 * "![alt](...)" is the sender asking for the media to be shown in the message
-		 * rather than offered as a file. Nothing is fetched here - a chip is drawn until
-		 * somebody asks for it - so the two forms differ only in what the sender meant.
-		 */
-		const bool media = (c == QLatin1Char('!') && i + 1 < n
-		                    && text.at(i + 1) == QLatin1Char('['));
-
-		if (c == QLatin1Char('[') || media)
-		{
-			const int opens = media ? i + 1 : i;
-			const int close = text.indexOf(QLatin1Char(']'), opens + 1);
-
-			if (close > 0 && close + 1 < n
-			    && text.at(close + 1) == QLatin1Char('('))
-			{
-				const int stop = text.indexOf(QLatin1Char(')'), close + 2);
-
-				if (stop > 0)
-				{
-					const QString label = text.mid(opens + 1, close - opens - 1);
-					const QUrl url(text.mid(close + 2, stop - close - 2).trimmed(),
-					               QUrl::StrictMode);
-
-					const Qdc::RichText::Attachment file =
-						Qdc::RichText::readMagnet(url);
-
-					if (file.isValid())
-					{
-						flush();
-
-						/*
-						 * Shown only when the sender asked for it and the file is
-						 * actually here. Anything else is a chip: a picture nobody has
-						 * fetched yet is something to click, not something to look at.
-						 */
-						const Qdc::RichText::LocalMedia here =
-							(media && options && options->media)
-								? options->media(file.tth)
-								: Qdc::RichText::LocalMedia();
-
-						out += (mode == Mode::Html && here.isValid())
-							? picture_for(file, url, here, *options)
-							: chip_for(file, url, mode, colours);
-
-						i = stop + 1;
-						continue;
-					}
-
-					if (!media && Qdc::RichText::isLinkable(url))
-					{
-						flush();
-						out += wrap_link(scan_inline(label, mode, colours, options), url, mode,
-						                 colours);
-						i = stop + 1;
-						continue;
-					}
-
-					/*
-					 * Not a scheme we will open. Shown as the text it is rather than
-					 * dropped, so nothing silently disappears from a message.
-					 */
-					flush();
-					out += emit_text(text.mid(i, stop + 1 - i), mode);
-					i = stop + 1;
-					continue;
-				}
-			}
-		}
-
-		if (c == QLatin1Char('*'))
-		{
-			/*
-			 * Counted rather than tested for one or two, because bold inside italic is
-			 * three of them: a scanner that only knew "**" read the first two of "***"
-			 * as the whole marker and then matched a closing pair inside the word.
-			 */
-			int run = 0;
-			while (i + run < n && text.at(i + run) == QLatin1Char('*')) ++run;
-
-			/* One marker is italic, two bold, three both. More than three is somebody
-			   leaning on the key, and is taken as the strongest we have. */
-			const int strength = qMin(run, 3);
-			const int from = i + run;
-
-			/*
-			 * Emphasis cannot open on whitespace. Without this a lone asterisk - "2 * 3"
-			 * or a dash-like line - pairs up with the next real one and italicises
-			 * everything in between.
-			 */
-			const bool opens = from < n && !text.at(from).isSpace();
-
-			int closing = -1;
-			int closeLength = 0;
-
-			for (int at = from; opens && at < n; )
-			{
-				/* An escaped marker is somebody's asterisk, not the end of emphasis. */
-				if (text.at(at) == QLatin1Char('\\')) { at += 2; continue; }
-
-				if (text.at(at) != QLatin1Char('*')) { ++at; continue; }
-
-				int length = 0;
-				while (at + length < n && text.at(at + length) == QLatin1Char('*'))
-					++length;
-
-				/* Nor can it close on whitespace, for the same reason. */
-				if (length >= strength && at > from && !text.at(at - 1).isSpace())
-				{
-					closing = at;
-					closeLength = qMin(length, run);
-					break;
-				}
-
-				at += length;
-			}
-
-			if (closing > from)
-			{
-				const QString body = text.mid(from, closing - from);
-
-				flush();
-
-				const QString inner = scan_inline(body, mode, colours, options);
-
-				if (mode == Mode::Plain)
-					out += inner;
-				else if (strength >= 3)
-					out += QStringLiteral("<b><i>%1</i></b>").arg(inner);
-				else if (strength == 2)
-					out += QStringLiteral("<b>%1</b>").arg(inner);
-				else
-					out += QStringLiteral("<i>%1</i>").arg(inner);
-
-				i = closing + closeLength;
-				continue;
-			}
-		}
-
-		const int scheme = scheme_length(text, i);
-		if (scheme > 0)
-		{
-			const int end = url_end(text, i);
-			const QUrl url(text.mid(i, end - i), QUrl::StrictMode);
-
-			if (Qdc::RichText::isLinkable(url))
-			{
-				flush();
-				out += wrap_link(emit_text(text.mid(i, end - i), mode), url, mode,
-				                 colours);
-				i = end;
-				continue;
-			}
-		}
-
-		pending += c;
-		++i;
-	}
-
-	flush();
-	return out;
-}
-
 /**
  * Wrap a block's body in whatever the whole message is set in.
  *
@@ -587,182 +400,512 @@ QString wrap_emphasis(const QString& text, const QString& marker)
  * dash. Without this the far end would read the line as a bullet, because by then the
  * only thing telling prose from markup is the marker itself.
  *
- * The shapes here are exactly the ones split_blocks() recognises, and no wider: "**bold"
- * opens with a marker character but no reader would take it for a list, and escaping it
- * would break the emphasis it actually is.
+ * Which character is escaped is not always the first: "1. text" has to become "1\. text",
+ * since a backslash before a digit escapes nothing and would be shown as itself.
+ *
+ * The shapes here are exactly the ones that open a block, and no wider - "**bold" begins
+ * with a marker character but no reader would take it for a list, and escaping it would
+ * break the emphasis it actually is.
  */
 QString protect_markers(const QString& line)
 {
-	static const QRegularExpression marker(
-		QStringLiteral("^\\s*(([-*+]\\s)|([0-9]{1,9}\\.\\s)|(>)|(```))"));
+	struct Shape {
+		QRegularExpression pattern;
 
-	const QRegularExpressionMatch found = marker.match(line);
-	if (!found.hasMatch()) return line;
+		/** Which capture holds the character to put a backslash in front of. */
+		int group;
+	};
 
-	const int at = found.capturedStart(1);
-	return line.left(at) + QLatin1Char('\\') + line.mid(at);
+	static const Shape shapes[] = {
+		/* A bullet, a quote, a heading, a fence. */
+		{ QRegularExpression(QStringLiteral("^ {0,3}([-*+])(\\s|$)")), 1 },
+		{ QRegularExpression(QStringLiteral("^ {0,3}(>)")), 1 },
+		{ QRegularExpression(QStringLiteral("^ {0,3}(#{1,6})(\\s|$)")), 1 },
+		{ QRegularExpression(QStringLiteral("^ {0,3}(```|~~~)")), 1 },
+
+		/* A numbered item, where the delimiter is what has to be escaped. */
+		{ QRegularExpression(QStringLiteral("^ {0,3}[0-9]{1,9}([.)])(\\s|$)")), 1 },
+
+		/* A thematic break, and a line that would underline the one above it. */
+		{ QRegularExpression(
+			QStringLiteral("^ {0,3}([-*_])[ \\t]*(?:\\1[ \\t]*){2,}$")), 1 },
+		{ QRegularExpression(QStringLiteral("^ {0,3}(=+|-+)[ \\t]*$")), 1 },
+
+		/* A row of pipes and dashes, which would turn the line above into a table. */
+		{ QRegularExpression(
+			QStringLiteral("^ {0,3}([|:\\-][|:\\- \\t]*)$")), 1 }
+	};
+
+	for (const Shape& shape : shapes)
+	{
+		const QRegularExpressionMatch found = shape.pattern.match(line);
+		if (!found.hasMatch()) continue;
+
+		const int at = found.capturedStart(shape.group);
+		return line.left(at) + QLatin1Char('\\') + line.mid(at);
+	}
+
+	return line;
 }
 
-/** One rendered block, and what sort it was. */
-struct Block {
-	Qdc::RichText::BlockKind kind = Qdc::RichText::Paragraph;
+/* ---- rendering a parsed document ---- */
+
+using Qdc::Markdown::Kind;
+using Qdc::Markdown::Node;
+
+/** How much further in each level of quoting or nesting sits, in pixels. */
+constexpr int NEST_INDENT = 18;
+
+/**
+ * One line of the rendered message: a div's worth of content and where it sits.
+ *
+ * The message is a list of these rather than one string because the hanging indent
+ * belongs to the first line alone - applied to every line it would drag the top of a
+ * quote or a code block out under the timestamp.
+ */
+struct Line {
 	QString content;
 
-	/** Which item this is, for a numbered list. Zero for anything else. */
-	int ordinal = 0;
+	/** Indent from nesting, on top of the message's own. */
+	int indent = 0;
+
+	/** Draw the code panel behind it. */
+	bool code = false;
+
+	/**
+	 * Whether the speaker's name can sit on this line.
+	 *
+	 * Only a line of ordinary prose at the top level: a name in front of a quote's rule,
+	 * a bullet or a monospace panel reads as part of it.
+	 */
+	bool prose = false;
 };
 
 /**
- * Split markdown into blocks, rendering each one's inline content.
+ * A bare URL in a run of text, linked.
  *
- * Consecutive plain lines join into a single paragraph separated by breaks rather than
- * becoming a block each. Fewer blocks keeps the hanging indent simple, and a chat line
- * has no need of semantic paragraphs.
+ * Not CommonMark - the specification wants angle brackets round a bare address - but chat
+ * has always linked a URL somebody simply typed, and conformance is not worth taking that
+ * away for. It happens to the text of a Text node, so nothing in the parser knows.
  */
-QList<Block> split_blocks(const QString& markdown, Mode mode,
-                          const Qdc::RichText::RenderColours& colours,
-                          const Qdc::RichText::RenderOptions* options = nullptr)
+QString link_bare_urls(const QString& text, Mode mode,
+                       const Qdc::RichText::RenderColours& colours)
 {
-	QList<Block> blocks;
+	QString out;
+	int i = 0;
+	int plainFrom = 0;
 
-	const QStringList lines = normalise_breaks(markdown).split(QLatin1Char('\n'));
-
-	QStringList paragraph;
-	QStringList quote;
-
-	const auto flushParagraph = [&] {
-		if (paragraph.isEmpty()) return;
-
-		Block block;
-		block.kind = Qdc::RichText::Paragraph;
-		block.content = paragraph.join(mode == Mode::Plain ? QStringLiteral("\n")
-		                                                   : QStringLiteral("<br>"));
-		blocks.append(block);
-		paragraph.clear();
+	const auto flush = [&](int upto) {
+		if (upto > plainFrom) out += emit_text(text.mid(plainFrom, upto - plainFrom), mode);
 	};
 
-	const auto flushQuote = [&] {
-		if (quote.isEmpty()) return;
-
-		Block block;
-		block.kind = Qdc::RichText::Quote;
-		block.content = quote.join(mode == Mode::Plain ? QStringLiteral("\n")
-		                                               : QStringLiteral("<br>"));
-		blocks.append(block);
-		quote.clear();
-	};
-
-	for (int n = 0; n < lines.size(); ++n)
+	while (i < text.size())
 	{
-		const QString& line = lines.at(n);
-		const QString trimmed = line.trimmed();
+		if (scheme_length(text, i) <= 0) { ++i; continue; }
 
-		/* A fence of three or more backticks opens a literal block. */
-		if (trimmed.startsWith(QStringLiteral("```")))
-		{
-			flushParagraph();
-			flushQuote();
+		const int end = url_end(text, i);
+		const QUrl url(text.mid(i, end - i), QUrl::StrictMode);
 
-			int fence = 0;
-			while (fence < trimmed.size() && trimmed.at(fence) == QLatin1Char('`'))
-				++fence;
+		if (!Qdc::RichText::isLinkable(url)) { ++i; continue; }
 
-			QStringList body;
-			++n;
+		flush(i);
+		out += wrap_link(emit_text(text.mid(i, end - i), mode), url, mode, colours);
 
-			for (; n < lines.size(); ++n)
-			{
-				const QString candidate = lines.at(n).trimmed();
-				int closing = 0;
-				while (closing < candidate.size()
-				       && candidate.at(closing) == QLatin1Char('`'))
-					++closing;
-
-				if (closing >= fence && closing == candidate.size()) break;
-
-				body.append(lines.at(n));
-			}
-
-			Block block;
-			block.kind = Qdc::RichText::CodeBlock;
-
-			if (mode == Mode::Plain)
-			{
-				block.content = body.join(QLatin1Char('\n'));
-			}
-			else
-			{
-				/*
-				 * Spaces become non-breaking so that indentation inside the block
-				 * survives. Relying on a white-space property would leave the layout
-				 * at the mercy of what this Qt build's CSS subset happens to honour.
-				 */
-				QString escaped = body.join(QLatin1Char('\n')).toHtmlEscaped();
-				escaped.replace(QLatin1Char(' '), QStringLiteral("&nbsp;"));
-				escaped.replace(QLatin1Char('\t'), QStringLiteral("&nbsp;&nbsp;&nbsp;&nbsp;"));
-				escaped.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
-				block.content = escaped;
-			}
-
-			blocks.append(block);
-			continue;
-		}
-
-		static const QRegularExpression bullet(QStringLiteral("^\\s*[-*+]\\s+(.*)$"));
-		static const QRegularExpression numbered(
-			QStringLiteral("^\\s*([0-9]{1,9})\\.\\s+(.*)$"));
-
-		const QRegularExpressionMatch asBullet = bullet.match(line);
-		const QRegularExpressionMatch asNumber = numbered.match(line);
-
-		if (asBullet.hasMatch() || asNumber.hasMatch())
-		{
-			flushParagraph();
-			flushQuote();
-
-			Block block;
-
-			if (asBullet.hasMatch())
-			{
-				block.kind = Qdc::RichText::Bullet;
-				block.content = scan_inline(asBullet.captured(1), mode, colours, options);
-			}
-			else
-			{
-				block.kind = Qdc::RichText::Number;
-
-				/*
-				 * The number as it was written, not a count of the items here: a sender
-				 * who numbered from three meant three, and a list that arrives split
-				 * across two messages still reads in order.
-				 */
-				block.ordinal = asNumber.captured(1).toInt();
-				block.content = scan_inline(asNumber.captured(2), mode, colours, options);
-			}
-
-			blocks.append(block);
-			continue;
-		}
-
-		if (trimmed.startsWith(QLatin1Char('>')))
-		{
-			flushParagraph();
-
-			QString body = trimmed.mid(1);
-			if (body.startsWith(QLatin1Char(' '))) body = body.mid(1);
-
-			quote.append(scan_inline(body, mode, colours, options));
-			continue;
-		}
-
-		flushQuote();
-		paragraph.append(scan_inline(line, mode, colours, options));
+		i = end;
+		plainFrom = end;
 	}
 
-	flushParagraph();
-	flushQuote();
+	flush(text.size());
+	return out;
+}
 
-	return blocks;
+QString render_inlines(const QList<Node>& nodes, Mode mode,
+                       const Qdc::RichText::RenderColours& colours,
+                       const Qdc::RichText::RenderOptions* options);
+
+/**
+ * A link or an image, which in a chat message is usually a file.
+ *
+ * A magnet is the interesting case: it names a file by its hash, so it is drawn as
+ * something to fetch rather than as an address. Everything else is a link if its scheme
+ * is one this client will open, and its own text if it is not - see isLinkable().
+ */
+QString render_link(const Node& node, Mode mode,
+                    const Qdc::RichText::RenderColours& colours,
+                    const Qdc::RichText::RenderOptions* options)
+{
+	const QUrl url(node.destination, QUrl::StrictMode);
+	const Qdc::RichText::Attachment file = Qdc::RichText::readMagnet(url);
+
+	if (file.isValid())
+	{
+		/*
+		 * Shown only when the sender asked for it and the file is actually here. Anything
+		 * else is a chip: a picture nobody has fetched yet is something to click, not
+		 * something to look at.
+		 */
+		const Qdc::RichText::LocalMedia here =
+			(node.kind == Kind::Image && options && options->media)
+				? options->media(file.tth)
+				: Qdc::RichText::LocalMedia();
+
+		if (mode == Mode::Html && node.kind == Kind::Image && here.isValid())
+			return picture_for(file, url, here, *options);
+
+		return chip_for(file, url, mode, colours);
+	}
+
+	/*
+	 * An image that is not a magnet is never fetched - that would hand a stranger the
+	 * address of everyone who read their message - so only its description is shown.
+	 */
+	if (node.kind == Kind::Image)
+		return render_inlines(node.children, mode, colours, options);
+
+	if (!Qdc::RichText::isLinkable(url))
+	{
+		/* Not a scheme we will open. Shown as what it was written as, rather than lost. */
+		return emit_text(QStringLiteral("["), mode)
+			+ render_inlines(node.children, mode, colours, options)
+			+ emit_text(QStringLiteral("](") + node.destination + QStringLiteral(")"),
+			            mode);
+	}
+
+	return wrap_link(render_inlines(node.children, mode, colours, options), url, mode,
+	                 colours);
+}
+
+QString render_inlines(const QList<Node>& nodes, Mode mode,
+                       const Qdc::RichText::RenderColours& colours,
+                       const Qdc::RichText::RenderOptions* options)
+{
+	QString out;
+
+	for (const Node& node : nodes)
+	{
+		switch (node.kind)
+		{
+			case Kind::Text:
+				out += link_bare_urls(node.literal, mode, colours);
+				break;
+
+			case Kind::SoftBreak:
+			case Kind::HardBreak:
+				out += (mode == Mode::Plain) ? QStringLiteral("\n")
+				                             : QStringLiteral("<br>");
+				break;
+
+			case Kind::Emphasis:
+				out += (mode == Mode::Plain)
+					? render_inlines(node.children, mode, colours, options)
+					: QStringLiteral("<i>%1</i>")
+						.arg(render_inlines(node.children, mode, colours, options));
+				break;
+
+			case Kind::Strong:
+				out += (mode == Mode::Plain)
+					? render_inlines(node.children, mode, colours, options)
+					: QStringLiteral("<b>%1</b>")
+						.arg(render_inlines(node.children, mode, colours, options));
+				break;
+
+			case Kind::Strike:
+				out += (mode == Mode::Plain)
+					? render_inlines(node.children, mode, colours, options)
+					: QStringLiteral("<s>%1</s>")
+						.arg(render_inlines(node.children, mode, colours, options));
+				break;
+
+			case Kind::Code:
+				out += (mode == Mode::Plain)
+					? node.literal
+					: QStringLiteral("<span style=\"font-family:'%1';"
+					                 " background-color:%2; color:%3\">%4</span>")
+						.arg(Qdc::RichText::monospaceFamily(),
+						     colours.codeBack.name(), colours.code.name(),
+						     emit_text(node.literal, mode));
+				break;
+
+			case Kind::Link:
+			case Kind::Image:
+				out += render_link(node, mode, colours, options);
+				break;
+
+			default:
+				out += render_inlines(node.children, mode, colours, options);
+				break;
+		}
+	}
+
+	return out;
+}
+
+/** A code block's body, with its spacing kept. */
+QString render_code_block(const QString& literal, Mode mode)
+{
+	QString body = literal;
+	while (body.endsWith(QLatin1Char('\n'))) body.chop(1);
+
+	if (mode == Mode::Plain) return body;
+
+	/*
+	 * Spaces become non-breaking so that indentation inside the block survives. Relying
+	 * on a white-space property would leave the layout at the mercy of what this Qt
+	 * build's CSS subset happens to honour.
+	 */
+	QString escaped = body.toHtmlEscaped();
+	escaped.replace(QLatin1Char(' '), QStringLiteral("&nbsp;"));
+	escaped.replace(QLatin1Char('\t'), QStringLiteral("&nbsp;&nbsp;&nbsp;&nbsp;"));
+	escaped.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+
+	return escaped;
+}
+
+/**
+ * A heading, set as one.
+ *
+ * The tag rather than a font size, because Qt's rich text scales <h1> to <h6> itself and
+ * ignores a font-size given in em or as a percentage - and the point size to scale from
+ * is the delegate's font, which this layer deliberately does not know.
+ */
+QString render_heading(int level, const QString& body)
+{
+	const int tag = qBound(1, level, 6);
+
+	return QStringLiteral("<h%1>%2</h%1>").arg(tag).arg(body);
+}
+
+QString render_table(const Node& table, Mode mode,
+                     const Qdc::RichText::RenderColours& colours,
+                     const Qdc::RichText::RenderOptions* options)
+{
+	if (mode == Mode::Plain)
+	{
+		QStringList rows;
+
+		for (const Node& row : table.children)
+		{
+			QStringList cells;
+			for (const Node& cell : row.children)
+				cells.append(render_inlines(cell.children, mode, colours, options));
+
+			rows.append(cells.join(QStringLiteral(" | ")));
+		}
+
+		return rows.join(QLatin1Char('\n'));
+	}
+
+	QString out = QStringLiteral(
+		"<table border=\"1\" cellspacing=\"0\" cellpadding=\"4\""
+		" style=\"border-color:%1\">").arg(colours.quoteBar.name());
+
+	for (const Node& row : table.children)
+	{
+		out += QStringLiteral("<tr>");
+
+		for (const Node& cell : row.children)
+		{
+			QString align;
+
+			switch (cell.align)
+			{
+				case Qdc::Markdown::Align::Left: align = QStringLiteral("left"); break;
+				case Qdc::Markdown::Align::Centre: align = QStringLiteral("center"); break;
+				case Qdc::Markdown::Align::Right: align = QStringLiteral("right"); break;
+				case Qdc::Markdown::Align::None: break;
+			}
+
+			const QString body = render_inlines(cell.children, mode, colours, options);
+
+			out += QStringLiteral("<td align=\"%1\">%2</td>")
+				.arg(align, cell.header ? QStringLiteral("<b>%1</b>").arg(body) : body);
+		}
+
+		out += QStringLiteral("</tr>");
+	}
+
+	return out + QStringLiteral("</table>");
+}
+
+void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool tight,
+                   const Qdc::RichText::RenderColours& colours,
+                   const Qdc::RichText::RenderOptions* options, QList<Line>* out);
+
+/** One list, its markers drawn as part of each item's first line. */
+void render_list(const Node& list, Mode mode, int depth, bool tight,
+                 const Qdc::RichText::RenderColours& colours,
+                 const Qdc::RichText::RenderOptions* options, QList<Line>* out)
+{
+	int ordinal = list.level > 0 ? list.level : 1;
+
+	for (const Node& item : list.children)
+	{
+		QList<Line> inner;
+		render_blocks(item.children, mode, depth + 1, list.tight, colours, options, &inner);
+
+		/*
+		 * The marker is drawn as part of the line rather than with a QTextList, because
+		 * the whole message is one hanging indent and a list Qt owns would indent against
+		 * the block instead of the text column.
+		 */
+		const QString marker = list.ordered
+			? QStringLiteral("%1.").arg(ordinal)
+			: (mode == Mode::Plain ? QStringLiteral("\u2022")
+			                       : QStringLiteral("&#8226;"));
+
+		if (inner.isEmpty()) inner.append(Line());
+
+		if (mode == Mode::Plain)
+		{
+			inner.first().content = marker + QLatin1Char(' ') + inner.first().content;
+		}
+		else
+		{
+			inner.first().content =
+				marker + QStringLiteral("&nbsp;") + inner.first().content;
+		}
+
+		for (Line& line : inner)
+		{
+			line.prose = false;
+			out->append(line);
+		}
+
+		++ordinal;
+	}
+
+	Q_UNUSED(tight);
+}
+
+/** One quote, with the rule down its left edge on every line of it. */
+void render_quote(const Node& quote, Mode mode, int depth, bool tight,
+                  const Qdc::RichText::RenderColours& colours,
+                  const Qdc::RichText::RenderOptions* options, QList<Line>* out)
+{
+	QList<Line> inner;
+	render_blocks(quote.children, mode, depth + 1, tight, colours, options, &inner);
+
+	for (Line& line : inner)
+	{
+		if (mode == Mode::Html)
+		{
+			/*
+			 * The rule goes down the whole quote, so every line carries it - a bar on the
+			 * opening line alone reads as a stray character.
+			 */
+			QStringList marked;
+
+			for (const QString& part : line.content.split(QStringLiteral("<br>")))
+			{
+				marked.append(QStringLiteral(
+					"<span style=\"color:%1\">&#9615;</span> "
+					"<span style=\"color:%2\">%3</span>")
+					.arg(colours.quoteBar.name(), colours.quote.name(), part));
+			}
+
+			line.content = marked.join(QStringLiteral("<br>"));
+		}
+
+		line.prose = false;
+		out->append(line);
+	}
+}
+
+void render_blocks(const QList<Node>& nodes, Mode mode, int depth, bool tight,
+                   const Qdc::RichText::RenderColours& colours,
+                   const Qdc::RichText::RenderOptions* options, QList<Line>* out)
+{
+	for (const Node& node : nodes)
+	{
+		switch (node.kind)
+		{
+			case Kind::Paragraph:
+			{
+				Line line;
+				line.indent = depth * NEST_INDENT;
+				line.prose = depth == 0;
+				line.content = render_inlines(node.children, mode, colours, options);
+				out->append(line);
+				break;
+			}
+
+			case Kind::Heading:
+			{
+				Line line;
+				line.indent = depth * NEST_INDENT;
+				const QString body = render_inlines(node.children, mode, colours, options);
+
+				line.content = (mode == Mode::Plain)
+					? body
+					: render_heading(node.level, body);
+
+				out->append(line);
+				break;
+			}
+
+			case Kind::ThematicBreak:
+			{
+				Line line;
+				line.indent = depth * NEST_INDENT;
+
+				/*
+				 * A rule rather than "---": the markers were the sender's way of asking
+				 * for a divider, and this is the divider.
+				 */
+				line.content = (mode == Mode::Plain)
+					? QStringLiteral("───")
+					: QStringLiteral("<hr>");
+
+				out->append(line);
+				break;
+			}
+
+			case Kind::CodeBlock:
+			{
+				Line line;
+				line.indent = depth * NEST_INDENT;
+				line.code = mode == Mode::Html;
+				line.content = render_code_block(node.literal, mode);
+
+				if (mode == Mode::Html)
+				{
+					line.content = QStringLiteral(
+						"<span style=\"font-family:'%1'; color:%2\">%3</span>")
+						.arg(Qdc::RichText::monospaceFamily(), colours.code.name(),
+						     line.content);
+				}
+
+				out->append(line);
+				break;
+			}
+
+			case Kind::BlockQuote:
+				render_quote(node, mode, depth, tight, colours, options, out);
+				break;
+
+			case Kind::List:
+				render_list(node, mode, depth, tight, colours, options, out);
+				break;
+
+			case Kind::Table:
+			{
+				Line line;
+				line.indent = depth * NEST_INDENT;
+				line.content = render_table(node, mode, colours, options);
+				out->append(line);
+				break;
+			}
+
+			default:
+			{
+				Line line;
+				line.indent = depth * NEST_INDENT;
+				line.content = render_inlines(node.children, mode, colours, options);
+				out->append(line);
+				break;
+			}
+		}
+	}
 }
 
 }
@@ -842,30 +985,36 @@ Qdc::RichText::Attachment Qdc::RichText::readMagnet(const QUrl& url)
 	return file;
 }
 
+namespace {
+
+void collect_attachments(const Node& node, QList<Qdc::RichText::Attachment>* found)
+{
+	if (node.kind == Kind::Link || node.kind == Kind::Image)
+	{
+		Qdc::RichText::Attachment file =
+			Qdc::RichText::readMagnet(QUrl(node.destination, QUrl::StrictMode));
+
+		if (file.isValid())
+		{
+			file.inlineMedia = node.kind == Kind::Image;
+			found->append(file);
+		}
+	}
+
+	for (const Node& child : node.children) collect_attachments(child, found);
+}
+
+}
+
 QList<Qdc::RichText::Attachment> Qdc::RichText::attachmentsIn(const QString& markdown)
 {
-	QList<Attachment> found;
-
 	/*
-	 * The same shapes the renderer reads, so what is decided about a message and what is
-	 * drawn from it cannot disagree: "[name](magnet:...)" is a file offered and
-	 * "![name](magnet:...)" is one meant to be shown.
+	 * Walked rather than searched for: the same tree the renderer draws from, so what is
+	 * decided about a message and what is drawn from it cannot disagree. A magnet inside
+	 * a code span is not a link, and a pattern over the text would think it was.
 	 */
-	static const QRegularExpression link(
-		QStringLiteral("(!?)\\[[^\\]]*\\]\\((magnet:[^)\\s]+)\\)"));
-
-	QRegularExpressionMatchIterator each = link.globalMatch(markdown);
-
-	while (each.hasNext())
-	{
-		const QRegularExpressionMatch one = each.next();
-
-		Attachment file = readMagnet(QUrl(one.captured(2), QUrl::StrictMode));
-		if (!file.isValid()) continue;
-
-		file.inlineMedia = one.captured(1) == QStringLiteral("!");
-		found.append(file);
-	}
+	QList<Attachment> found;
+	collect_attachments(Markdown::parse(markdown), &found);
 
 	return found;
 }
@@ -1062,29 +1211,17 @@ QString Qdc::RichText::toMarkdown(const QTextDocument& document)
 
 QString Qdc::RichText::toPlainText(const QString& markdown)
 {
+	QList<Line> lines;
+
+	/*
+	 * A list keeps its markers here, where a quote does not: without them the items run
+	 * together as unrelated lines, and this is what a screen reader is given.
+	 */
+	render_blocks(Markdown::parse(markdown).children, Mode::Plain, 0, true,
+	              RenderColours(), nullptr, &lines);
+
 	QStringList out;
-
-	for (const Block& block : split_blocks(markdown, Mode::Plain, RenderColours(), nullptr))
-	{
-		/*
-		 * A list keeps its markers here, where a quote does not: without them the items
-		 * run together as unrelated lines, and this is what a screen reader is given.
-		 */
-		switch (block.kind)
-		{
-			case Bullet:
-				out.append(QStringLiteral("\u2022 ") + block.content);
-				break;
-
-			case Number:
-				out.append(QStringLiteral("%1. ").arg(block.ordinal) + block.content);
-				break;
-
-			default:
-				out.append(block.content);
-				break;
-		}
-	}
+	for (const Line& line : lines) out.append(line.content);
 
 	return out.join(QLatin1Char('\n'));
 }
@@ -1092,89 +1229,41 @@ QString Qdc::RichText::toPlainText(const QString& markdown)
 QString Qdc::RichText::renderMarkdown(const QString& markdown,
                                       const RenderOptions& options)
 {
-	QList<Block> blocks = split_blocks(markdown, Mode::Html, options.colours, &options);
+	QList<Line> lines;
+	render_blocks(Markdown::parse(markdown).children, Mode::Html, 0, true,
+	              options.colours, &options, &lines);
 
 	/*
 	 * The speaker belongs on the first line of prose. When a message opens with a code
 	 * block or a quote there is no such line, so the prefix gets one of its own rather
 	 * than being dragged into a monospace panel.
 	 */
-	if (blocks.isEmpty() || blocks.first().kind != Paragraph)
-	{
-		Block lead;
-		lead.kind = Paragraph;
-		blocks.prepend(lead);
-	}
+	if (lines.isEmpty() || !lines.first().prose) lines.prepend(Line());
 
 	QString html;
 
-	for (int n = 0; n < blocks.size(); ++n)
+	for (int n = 0; n < lines.size(); ++n)
 	{
-		const Block& block = blocks.at(n);
+		const Line& line = lines.at(n);
+
+		QString style = QStringLiteral("margin-left:%1px;")
+			.arg(options.indent + line.indent);
 
 		/*
-		 * Only the first block pulls its opening line back out to the left. Applied to
-		 * every block, a first-line indent would drag the top of a quote or a code
-		 * block out under the timestamp.
+		 * Only the first line pulls its opening words back out to the left. Applied to
+		 * every one, a first-line indent would drag the top of a quote or a code block
+		 * out under the timestamp.
 		 */
-		QString style = QStringLiteral("margin-left:%1px;").arg(options.indent);
 		if (n == 0)
 			style += QStringLiteral(" text-indent:-%1px;").arg(options.indent);
 
-		QString content = block.content;
-
-		switch (block.kind)
+		if (line.code)
 		{
-			case Quote:
-			{
-				/*
-				 * The rule goes down the whole quote, so every line carries it - a
-				 * bar on the opening line alone reads as a stray character.
-				 */
-				QStringList marked;
-				for (const QString& line : content.split(QStringLiteral("<br>")))
-				{
-					marked.append(QStringLiteral(
-						"<span style=\"color:%1\">&#9615;</span> "
-						"<span style=\"color:%2\">%3</span>")
-						.arg(options.colours.quoteBar.name(),
-						     options.colours.quote.name(), line));
-				}
-
-				content = marked.join(QStringLiteral("<br>"));
-				break;
-			}
-
-			case CodeBlock:
-				style += QStringLiteral(" background-color:%1;")
-					.arg(options.colours.codeBack.name());
-				content = QStringLiteral(
-					"<span style=\"font-family:'%1'; color:%2\">%3</span>")
-					.arg(monospaceFamily(), options.colours.code.name(), content);
-				break;
-
-			case Bullet:
-			case Number:
-			{
-				/*
-				 * The marker is drawn as part of the line rather than with a QTextList,
-				 * because the whole message is one hanging indent and a list Qt owns
-				 * would indent against the block instead of the text column.
-				 */
-				const QString marker = block.kind == Bullet
-					? QStringLiteral("&#8226;")
-					: QStringLiteral("%1.").arg(block.ordinal);
-
-				content = QStringLiteral("%1&nbsp;%2").arg(marker, content);
-				break;
-			}
-
-			case Paragraph:
-			default:
-				break;
+			style += QStringLiteral(" background-color:%1;")
+				.arg(options.colours.codeBack.name());
 		}
 
-		content = style_body(content, options);
+		QString content = style_body(line.content, options);
 		if (n == 0) content = options.prefix + content;
 
 		html += QStringLiteral("<div style=\"%1\">%2</div>").arg(style, content);
