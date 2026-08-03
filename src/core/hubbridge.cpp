@@ -327,13 +327,16 @@ public:
 		});
 	}
 
-	void EventHubMessage(const char* fakeuser, const char* message) override
+	void EventHubMessage(const char* fakeuser, const char* message, bool action,
+	                     bool richText) override
 	{
 		ChatMessage chat;
 		chat.hubUrl   = from_utf8(getUrl());
 		chat.fromHub  = from_utf8(fakeuser);
 		chat.text     = from_utf8(message);
 		chat.received = QDateTime::currentDateTime();
+		chat.action   = action;
+		chat.richText = richText;
 
 		report([chat](HubBridge* bridge) {
 			emit bridge->chatReceived(chat);
