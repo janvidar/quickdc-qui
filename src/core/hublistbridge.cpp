@@ -27,8 +27,9 @@ namespace Qdc {
 class HubListFetch final : public QuickDC::HubListListener {
 
 public:
-	HubListFetch(HubListBridge* bridge, QString url)
+	HubListFetch(HubListBridge* bridge, std::shared_ptr<Relay> relay, QString url)
 		: m_bridge(bridge)
+		, m_relay(std::move(relay))
 		, m_url(std::move(url))
 		, m_list(this)
 	{
@@ -107,11 +108,17 @@ private:
 	void report(Work work)
 	{
 		HubListBridge* bridge = m_bridge;
-		QMetaObject::invokeMethod(bridge, [bridge, work] { work(bridge); },
-		                          Qt::QueuedConnection);
+
+		std::shared_ptr<Relay> relay = m_relay;
+		Relay* target = relay.get();
+
+		QMetaObject::invokeMethod(target, [relay = std::move(relay), bridge, work] {
+			if (!relay->detached()) work(bridge);
+		}, Qt::QueuedConnection);
 	}
 
 	HubListBridge* m_bridge;
+	std::shared_ptr<Relay> m_relay;
 	QString m_url;
 	QuickDC::HubList m_list;
 };
@@ -121,6 +128,8 @@ private:
 Qdc::HubListBridge::HubListBridge(CoreThread* thread, QObject* parent)
 	: QObject(parent)
 	, m_thread(thread)
+	, m_fetches(std::make_shared<FetchBox>())
+	, m_relay(Relay::create())
 {
 	/*
 	 * Connected before anybody else can be, so that a handler of either signal
@@ -139,17 +148,20 @@ Qdc::HubListBridge::HubListBridge(CoreThread* thread, QObject* parent)
 
 Qdc::HubListBridge::~HubListBridge()
 {
+	/* Nothing in flight has anywhere to report to from here on. */
+	m_relay->detach();
+
 	if (!m_thread) return;
 
 	/*
-	 * On the core thread, and blocking, because a fetch still in flight owns a
-	 * socket the reactor is watching - abandoning it would leave the monitor
-	 * holding a client that has gone away. Queued after any job already posted, so
-	 * a download started a moment ago is aborted rather than missed.
+	 * On the core thread, because a fetch still in flight owns a socket the reactor
+	 * is watching - abandoning it would leave the monitor holding a client that has
+	 * gone away. Posted rather than waited on, and queued after any job already
+	 * posted, so a download started a moment ago is aborted rather than missed.
 	 */
-	m_thread->invoke([this] {
-		for (HubListFetch* fetch : m_fetches) delete fetch;
-		m_fetches.clear();
+	m_thread->post([holder = m_fetches] {
+		for (HubListFetch* fetch : holder->fetches) delete fetch;
+		holder->fetches.clear();
 	});
 }
 
@@ -182,17 +194,21 @@ void Qdc::HubListBridge::fetch(const QString& url)
 
 	const std::string target = wanted.toStdString();
 
-	m_thread->post([this, wanted, target] {
-		QuickDC::Core* core = m_thread->core();
+	m_thread->post([thread = m_thread, holder = m_fetches, relay = m_relay,
+	                bridge = this, wanted, target] {
+		QuickDC::Core* core = thread->core();
 
 		if (!core)
 		{
 			const QString reason = tr("The core is not running, so nothing can be "
 			                          "fetched.");
 
-			QMetaObject::invokeMethod(this, [this, wanted, reason] {
-				emit failed(wanted, reason);
-			}, Qt::QueuedConnection);
+			Relay* answer = relay.get();
+
+			QMetaObject::invokeMethod(answer,
+				[relay, bridge, wanted, reason] {
+					if (!relay->detached()) emit bridge->failed(wanted, reason);
+				}, Qt::QueuedConnection);
 			return;
 		}
 
@@ -202,8 +218,8 @@ void Qdc::HubListBridge::fetch(const QString& url)
 		 * leaves this download unanswered - acceptable only because the alternative
 		 * is answering a view that is being torn down with it.
 		 */
-		HubListFetch*& fetch = m_fetches[wanted];
-		if (!fetch) fetch = new HubListFetch(this, wanted);
+		HubListFetch*& fetch = holder->fetches[wanted];
+		if (!fetch) fetch = new HubListFetch(bridge, relay, wanted);
 
 		fetch->download(target);
 	});

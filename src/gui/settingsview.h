@@ -16,6 +16,7 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 class QSpinBox;
+class QTabWidget;
 
 namespace Qdc {
 
@@ -23,7 +24,12 @@ class ConfigBridge;
 class Shares;
 
 /**
- * Identity, limits and folders, bound to the core's configuration.
+ * The configuration, bound to the core's, a tab at a time.
+ *
+ * One tab per subject rather than one page of everything, so that a setting is
+ * found by reading the tab strip rather than by scrolling. Save and Revert sit
+ * below the tabs and belong to all of them, because a save writes every field
+ * wherever it happens to be showing.
  *
  * Loaded on construction and written only when Save is pressed, rather than on
  * every keystroke: half a nickname is not a nickname, and the store writes the
@@ -68,9 +74,18 @@ signals:
 
 private:
 	QWidget* buildIdentity();
-	QWidget* buildLimits();
-	QWidget* buildDirectories();
+	QWidget* buildConnection();
+	QWidget* buildTransfers();
+	QWidget* buildSharing();
+	QWidget* buildChat();
 	QWidget* buildAppearance();
+
+	/**
+	 * A tab page: the form given its margins, and scrolled when the window is too
+	 * short for it. Every tab goes through this, so that the six of them are inset
+	 * by the same amount and none of them clips instead of scrolling.
+	 */
+	QWidget* makePage(QWidget* page);
 
 	/** Mark the form dirty and enable Save. Connected to every field. */
 	void markModified();
@@ -96,6 +111,8 @@ private:
 
 	ConfigBridge* m_config;
 	Shares* m_shares;
+
+	QTabWidget* m_tabs;
 
 	QLineEdit* m_nickname;
 	QLineEdit* m_description;

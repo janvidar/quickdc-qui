@@ -165,6 +165,20 @@ QWidget#hubHeader {
     border-bottom: 1px solid %(border);
 }
 
+/*
+ * The band over a conversation that cannot be used. A rule along the bottom rather
+ * than none, because it is laid over the feed rather than given a row of its own and
+ * without one the text under it runs straight into the band's own.
+ */
+QWidget#connectionBar {
+    background: %(warning);
+    border-bottom: 1px solid %(border);
+}
+
+QLabel#connectionBarText {
+    color: %(warningText);
+}
+
 QListView, QTreeView, QTableView {
     background: %(content);
     border: 1px solid %(border);
@@ -335,17 +349,6 @@ QTabBar::tab:selected {
 QSplitter::handle           { background: %(border); }
 QSplitter::handle:horizontal { width: 1px; }
 QSplitter::handle:vertical   { height: 1px; }
-
-/* Part of the frame, so the chrome closes the window on all four sides. */
-QStatusBar {
-    background: %(frame);
-    border: none;
-    color: %(railText);
-}
-
-QStatusBar QLabel {
-    color: %(railText);
-}
 
 QScrollBar:vertical {
     background: transparent;

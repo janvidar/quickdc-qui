@@ -4,9 +4,20 @@
 
 #include <core/configbridge.h>
 #include <core/corethread.h>
+#include <core/filelistbridge.h>
 #include <core/hubbridge.h>
+#include <core/hublistbridge.h>
 #include <core/mediabridge.h>
+#include <core/searchbridge.h>
 #include <core/transferbridge.h>
+
+/*
+ * The core's own headers, which nothing above this layer may reach for - and this
+ * is the test of the layer itself, whose job includes checking that the two sides
+ * agree about things neither can see the other decide.
+ */
+#include <api/core.h>
+#include <network/hubmanager.h>
 
 #include <QCoreApplication>
 #include <QDir>
@@ -37,7 +48,7 @@ private slots:
 
 	void coreIsOnlyReachableFromItsOwnThread();
 	void jobsRunInOrderOnTheCoreThread();
-	void invokeDoesNotWaitForThePollInterval();
+	void aBlockingCallDoesNotWaitForThePollInterval();
 	void snapshotsDoNotWaitForABusyCore();
 	void anOfferedFileIsRecognisedAfterARestart();
 	void configRoundTripsThroughTheStore();
@@ -46,6 +57,9 @@ private slots:
 	void hubBridgeReportsErrorsOnTheCallingThread();
 	void transfersAndQueueStartEmpty();
 	void bridgesSurviveBeingDestroyedWhileRunning();
+	void nothingAViewAsksForWaitsForABusyCore();
+	void bridgesAreBuiltAndTornDownWithoutWaiting();
+	void theCoreKnowsAHubByTheNameTheViewsFileItUnder();
 
 private:
 	QString path(const QString& name) const;
@@ -90,7 +104,7 @@ void TestBridge::coreIsOnlyReachableFromItsOwnThread()
 	bool visible = false;
 	QThread* ran_on = nullptr;
 
-	QVERIFY(m_thread->invoke([&] {
+	QVERIFY(m_thread->runOnCoreBlocking([&] {
 		visible = m_thread->core() != nullptr;
 		ran_on = QThread::currentThread();
 	}));
@@ -108,21 +122,20 @@ void TestBridge::jobsRunInOrderOnTheCoreThread()
 		m_thread->post([&order, n] { order.append(n); });
 
 	/* Ordered behind all eight, so its completion means they have all run. */
-	QVERIFY(m_thread->invoke([] { }));
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
 
 	QCOMPARE(order.size(), 8);
 	for (int n = 0; n < 8; ++n)
 		QCOMPARE(order.at(n), n);
 }
 
-void TestBridge::invokeDoesNotWaitForThePollInterval()
+void TestBridge::aBlockingCallDoesNotWaitForThePollInterval()
 {
 	/*
 	 * The reactor blocks in its poll for a quarter of a second at a time. A job posted
-	 * from another thread is supposed to wake it, so invoke() costs no more than the job
-	 * itself - and every view that asks the core for a snapshot on a timer depends on
-	 * that. Without the wake, each ask blocks the interface for up to a full interval,
-	 * and two such timers are enough to stall it altogether.
+	 * from another thread is supposed to wake it, so a blocking call costs no more than
+	 * the job itself. Nothing drawn on screen makes one any more, but a bridge being set
+	 * up does, and a start-up that waited out a poll interval per bridge would be felt.
 	 */
 	QElapsedTimer timer;
 	timer.start();
@@ -132,18 +145,19 @@ void TestBridge::invokeDoesNotWaitForThePollInterval()
 	for (int n = 0; n < rounds; ++n)
 	{
 		int answered = 0;
-		QVERIFY(m_thread->invoke([&answered] { ++answered; }));
+		QVERIFY(m_thread->runOnCoreBlocking([&answered] { ++answered; }));
 		QCOMPARE(answered, 1);
 	}
 
 	const qint64 each = timer.elapsed() / rounds;
 
-	qWarning() << "invoke() took" << each << "ms on average over" << rounds << "calls";
+	qWarning() << "a blocking call took" << each << "ms on average over" << rounds
+	           << "calls";
 
 	QVERIFY2(each < 50,
-	         qPrintable(QStringLiteral("invoke() averaged %1 ms, which is the reactor's "
-	                                   "poll interval rather than the job's own cost")
-	                    .arg(each)));
+	         qPrintable(QStringLiteral("a blocking call averaged %1 ms, which is the "
+	                                   "reactor's poll interval rather than the job's "
+	                                   "own cost").arg(each)));
 }
 
 void TestBridge::snapshotsDoNotWaitForABusyCore()
@@ -292,13 +306,12 @@ void TestBridge::aGroupIsReadInOneTrip()
 	QCOMPARE(read.value(QStringLiteral("Absent number")).toInt(), 7);
 
 	/*
-	 * And the default was written back into the store, exactly as reading the key on its
-	 * own would have done - the core's habit, which a batch must not quietly change.
+	 * And the default was not written back. Reading is only looking: a key nobody has
+	 * ever set stays absent however often it is asked after, which is what lets a
+	 * caller tell "never decided" from "decided, and the answer was the default".
 	 */
-	QVERIFY(config.contains(Qdc::ConfigStore::Application, group,
-	                        QStringLiteral("Absent")));
-	QCOMPARE(config.getString(Qdc::ConfigStore::Application, group,
-	                          QStringLiteral("Absent")), QStringLiteral("fallback"));
+	QVERIFY(!config.contains(Qdc::ConfigStore::Application, group,
+	                         QStringLiteral("Absent")));
 
 	/* Nothing asked for, nothing read. */
 	QVERIFY(config.readGroup(Qdc::ConfigStore::Application, group, {}).isEmpty());
@@ -318,14 +331,15 @@ void TestBridge::configWritesTheFileItWasGiven()
 	config.setString(Qdc::ConfigStore::Application, QStringLiteral("User"),
 	                 QStringLiteral("Description"), QStringLiteral("a test"));
 
-	QVERIFY(config.save(Qdc::ConfigStore::Application));
-	QVERIFY(QFile::exists(path(QStringLiteral("quickdc.conf"))));
+	/* Written a moment later rather than before save() returns, so this waits. */
+	config.save(Qdc::ConfigStore::Application);
+	QTRY_VERIFY(QFile::exists(path(QStringLiteral("quickdc.conf"))));
 
 	/* Not the other store: save() takes one, and must not write both. */
 	QVERIFY(!QFile::exists(path(QStringLiteral("session.conf"))));
 
 	config.notifyChanged();
-	QVERIFY(m_thread->invoke([] { }));
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
 }
 
 void TestBridge::hubBridgeReportsErrorsOnTheCallingThread()
@@ -386,8 +400,162 @@ void TestBridge::bridgesSurviveBeingDestroyedWhileRunning()
 	}
 
 	/* Still answering, so nothing above left the reactor wedged. */
-	QVERIFY(m_thread->invoke([] { }));
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
 	QVERIFY(m_thread->isCoreRunning());
+}
+
+/**
+ * The rule this whole layer exists for, checked against every bridge at once.
+ *
+ * The core thread is held for a second and a half, as it is by a transfer writing
+ * chunks, a share's file list being compressed, or somebody else's search being
+ * answered out of the whole index. Everything a view can ask for has to answer
+ * anyway. Anything that waits here is a frozen window for exactly as long.
+ */
+void TestBridge::nothingAViewAsksForWaitsForABusyCore()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::TransferBridge transfers(m_thread);
+	Qdc::FilelistBridge filelists(m_thread);
+	Qdc::SearchBridge search(m_thread);
+	Qdc::MediaBridge media(m_thread, &config);
+	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.1:412"));
+
+	const QString group = QStringLiteral("Busy");
+
+	config.setString(Qdc::ConfigStore::Application, group,
+	                 QStringLiteral("Nickname"), QStringLiteral("somebody"));
+
+	m_thread->post([] { QThread::msleep(1500); });
+
+	QElapsedTimer timer;
+	timer.start();
+
+	/* Reading the configuration, which is what a settings page opening does. */
+	QCOMPARE(config.getString(Qdc::ConfigStore::Application, group,
+	                          QStringLiteral("Nickname")),
+	         QStringLiteral("somebody"));
+
+	config.getNumber(Qdc::ConfigStore::Application, group, QStringLiteral("Port"), 411);
+	config.getBool(Qdc::ConfigStore::Application, group, QStringLiteral("Active"), true);
+	config.contains(Qdc::ConfigStore::Application, group, QStringLiteral("Nickname"));
+
+	config.readGroup(Qdc::ConfigStore::Application, group, {
+		{QStringLiteral("Nickname"), QString()},
+		{QStringLiteral("Port"), 411}
+	});
+
+	/* Writing it, and asking for it to be saved. */
+	config.setBool(Qdc::ConfigStore::Application, group, QStringLiteral("Active"), false);
+	config.remove(Qdc::ConfigStore::Application, group, QStringLiteral("Port"));
+	config.save(Qdc::ConfigStore::Application);
+
+	/* The transfer figures a list draws from. */
+	transfers.activeTransfers();
+	transfers.queueSnapshot();
+	transfers.activeTransferCount();
+	transfers.refresh();
+
+	/* And everything else a view reaches for while it is on screen. */
+	filelists.pendingCount();
+	filelists.request(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("ABCDEF"));
+	search.start(Qdc::SearchQuery{QStringLiteral("anything"), {}, {}, 0});
+	media.pathFor(QStringLiteral("L6LKZG4CUXDSCJQHBLL5GFG6FWAPSLKK2S3VIFA"));
+	media.attach(QStringLiteral("/nonexistent/file.png"));
+	hub.url();
+	hub.netStatus();
+	hub.hubStatus();
+	hub.connectToHub();
+	hub.sendChat(QStringLiteral("hello"), false);
+	hub.disconnectFromHub();
+
+	const qint64 spent = timer.elapsed();
+
+	QVERIFY2(spent < 100,
+	         qPrintable(QStringLiteral("asking the bridges took %1 ms while the core "
+	                                   "was busy").arg(spent)));
+
+	config.remove(Qdc::ConfigStore::Application, group, QStringLiteral("Nickname"));
+	config.remove(Qdc::ConfigStore::Application, group, QStringLiteral("Active"));
+}
+
+/**
+ * Building a bridge registers a listener with the core, and taking one down
+ * unregisters it. Both used to wait for the reactor, which made opening a hub
+ * while a transfer was moving hang the window - and a window with several bridges
+ * paid it once each before it was even shown.
+ */
+void TestBridge::bridgesAreBuiltAndTornDownWithoutWaiting()
+{
+	/*
+	 * Built before the core is made busy, because filling its copy of both
+	 * preference files is the one call in this layer that still waits - once, at
+	 * start-up, before there is a window to freeze. Everything else is measured
+	 * against a core that is not answering.
+	 */
+	Qdc::ConfigBridge config(m_thread);
+
+	m_thread->post([] { QThread::msleep(1500); });
+
+	QElapsedTimer timer;
+	timer.start();
+
+	{
+		Qdc::TransferBridge transfers(m_thread);
+		Qdc::MediaBridge media(m_thread, &config);
+		Qdc::FilelistBridge filelists(m_thread);
+		Qdc::HubListBridge hublists(m_thread);
+		Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.2:412"));
+	}
+
+	const qint64 spent = timer.elapsed();
+
+	QVERIFY2(spent < 100,
+	         qPrintable(QStringLiteral("building and destroying the bridges took %1 ms "
+	                                   "while the core was busy").arg(spent)));
+
+	/* The jobs they left behind still run, and leave the reactor answering. */
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(m_thread->isCoreRunning());
+}
+
+/**
+ * The name a hub is known by has to be the same on both sides.
+ *
+ * The core builds a canonical "{scheme}://{host}:{port}" for every hub and files
+ * everything about it - the remembered certificate, the nickname, the password -
+ * under that. The views work one out for themselves, from the address somebody
+ * typed, and read and write the same settings through it.
+ *
+ * Nothing forces the two to agree, and if they ever stop the symptom is not an
+ * error: a nickname set for a hub is simply never the one the hub is told,
+ * because each side is using a section the other does not write. So this asks the
+ * core, which is the only side whose answer counts.
+ */
+void TestBridge::theCoreKnowsAHubByTheNameTheViewsFileItUnder()
+{
+	const QString typed =
+		QStringLiteral("adc://192.0.2.9:412/?kp=SHA256/ZZZZZZZZZZZZZZZZZZZZZZZZZZ");
+
+	Qdc::HubBridge hub(m_thread, typed);
+
+	/* Ordered behind the job that builds the session, so this returns once it has. */
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+
+	const QByteArray asked = Qdc::HubBridge::settingsUrl(typed).toUtf8();
+	bool found = false;
+
+	QVERIFY(m_thread->runOnCoreBlocking([&] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->hubs) return;
+
+		found = core->hubs->getHubByUrl(asked.constData()) != nullptr;
+	}));
+
+	QVERIFY2(found,
+	         qPrintable(QStringLiteral("the core does not know a hub called '%1', which "
+	                                   "is the name every view files its settings under")
+	                    .arg(QString::fromUtf8(asked))));
 }
 
 QTEST_GUILESS_MAIN(TestBridge)

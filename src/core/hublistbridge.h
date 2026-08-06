@@ -6,11 +6,14 @@
 #define HAVE_QUICKDC_QUI_HUBLISTBRIDGE_H
 
 #include "coretypes.h"
+#include "relay.h"
 
 #include <QHash>
 #include <QObject>
 #include <QSet>
 #include <QString>
+
+#include <memory>
 #include <QVector>
 
 namespace Qdc {
@@ -81,7 +84,20 @@ private:
 	 *
 	 * Only ever touched from a job on the core thread.
 	 */
-	QHash<QString, HubListFetch*> m_fetches;
+	/**
+	 * One downloader per source, in a box that outlives this object.
+	 *
+	 * Owned by the core thread, including the job that deletes them - which runs
+	 * after this bridge is gone, so it cannot be reached through it.
+	 */
+	struct FetchBox {
+		QHash<QString, HubListFetch*> fetches;
+	};
+
+	std::shared_ptr<FetchBox> m_fetches;
+
+	/** Where an event from the core lands; see Qdc::Relay. */
+	std::shared_ptr<Relay> m_relay;
 
 	/** What is outstanding, as this thread sees it; see isFetching(). */
 	QSet<QString> m_busy;

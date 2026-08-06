@@ -4,6 +4,7 @@
 
 #include "usermodel.h"
 
+#include "glyphs.h"
 #include "theme.h"
 
 #include <QIcon>
@@ -14,35 +15,89 @@
 namespace {
 
 /**
- * The presence dot, made once and reused.
+ * 'ink' moved 'percent' of the way towards 'muted'.
  *
- * Built rather than shipped as an asset so it follows the theme, and cached
- * because a user list asks for it on every row of every repaint.
+ * A blend rather than the same colour at a lower alpha, which is what this was
+ * first: alpha takes its contrast from whatever is behind it, and a pale figure
+ * faded against a white user list came out almost invisible while the same fade
+ * over the dark scheme was fine. Mixing keeps the ink opaque, so what changes is
+ * the colour rather than how much of the background shows through it.
  */
-QIcon presence_dot()
+QColor faded_toward(const QColor& ink, const QColor& muted, int percent)
 {
-	static QIcon dot;
+	const int keep = 100 - percent;
 
-	if (dot.isNull())
+	return QColor((ink.red()   * keep + muted.red()   * percent) / 100,
+	              (ink.green() * keep + muted.green() * percent) / 100,
+	              (ink.blue()  * keep + muted.blue()  * percent) / 100);
+}
+
+/**
+ * A figure for one user, saying two things at once.
+ *
+ * The shape is whether they are here: filled for present, an outline for somebody who
+ * says they are away. The colour is what they are: the operator colour for an
+ * operator, the presence colour for everybody else.
+ *
+ * Two attributes, two ways of showing them, so neither hides the other. Colour alone
+ * would leave the two states of an operator indistinguishable to somebody who cannot
+ * tell the inks apart, and shape alone would lose the operator.
+ *
+ * Which is why an away user keeps their own colour, dimmed, rather than going a
+ * neutral grey: grey would say "away" a second time and stop saying who they are, and
+ * an operator is worth knowing about whether or not they are reading the chat.
+ *
+ * Built rather than shipped as an asset so it follows the theme, and cached because a
+ * user list asks for it on every row of every repaint. Cached against the theme's own
+ * name as well, since the colours can change while a list is open and a pixmap made
+ * before that would keep the old ink.
+ */
+QIcon presence_figure(bool away, bool op)
+{
+	constexpr int SIZE = 13;
+	constexpr qreal RATIO = 3.0;
+
+	/* here, away, operator here, operator away. */
+	static QIcon figures[4];
+	static QString painted;
+
+	if (painted != Qdc::theme().name)
 	{
-		constexpr int SIZE = 8;
-		constexpr qreal RATIO = 3.0;
+		for (QIcon& figure : figures) figure = QIcon();
+		painted = Qdc::theme().name;
+	}
 
+	QIcon& icon = figures[(op ? 2 : 0) + (away ? 1 : 0)];
+
+	if (icon.isNull())
+	{
 		QPixmap pixmap(QSize(SIZE, SIZE) * RATIO);
 		pixmap.setDevicePixelRatio(RATIO);
 		pixmap.fill(Qt::transparent);
 
+		/*
+		 * Faded towards the muted colour rather than replaced by it: enough to
+		 * recede next to a filled figure, and not so far that an away operator stops
+		 * being tellable from anybody else who has stepped out.
+		 */
+		constexpr int AWAY_MIX = 45;
+
+		QColor ink = op ? Qdc::theme().presenceOperator : Qdc::theme().presence;
+
+		if (away) ink = faded_toward(ink, Qdc::theme().contentMuted, AWAY_MIX);
+
 		QPainter painter(&pixmap);
-		painter.setRenderHint(QPainter::Antialiasing, true);
-		painter.setPen(Qt::NoPen);
-		painter.setBrush(Qdc::theme().presence);
-		painter.drawEllipse(QRectF(1.0, 1.0, SIZE - 2.0, SIZE - 2.0));
+
+		Qdc::paint_glyph(painter,
+		                 away ? Qdc::Glyph::PersonOutline : Qdc::Glyph::Person,
+		                 QRectF(0, 0, SIZE, SIZE), ink);
+
 		painter.end();
 
-		dot = QIcon(pixmap);
+		icon = QIcon(pixmap);
 	}
 
-	return dot;
+	return icon;
 }
 
 }
@@ -74,12 +129,18 @@ QVariant Qdc::UserModel::data(const QModelIndex& index, int role) const
 
 		case Qt::DecorationRole:
 			/*
-			 * A presence dot. Everyone listed is on the hub - there is no away or
-			 * busy state in either protocol - so the dot says "here" and nothing
-			 * more, which is still worth saying: it is what makes the column read
-			 * as people rather than as strings.
+			 * A figure rather than a dot, so the column reads as people rather than
+			 * as strings, and hollow for somebody who says they are away.
+			 *
+			 * Away is what the user claims, in the AW field of an ADC INF or the
+			 * status byte of an NMDC $MyINFO. Nothing else is known about anybody's
+			 * attention, so there are two states and not three: a hub that says
+			 * nothing leaves a user drawn as present.
+			 *
+			 * The colour says whether they are an operator, which is the other thing
+			 * about a user worth seeing without reading the list.
 			 */
-			return presence_dot();
+			return presence_figure(user.away, user.op);
 
 		case Qt::ToolTipRole:
 		{
@@ -97,6 +158,9 @@ QVariant Qdc::UserModel::data(const QModelIndex& index, int role) const
 
 			if (!user.userAgent.isEmpty()) lines << user.userAgent;
 			if (user.op) lines << tr("Operator");
+
+			/* Said as well as drawn: a hollow figure is not self-explanatory. */
+			if (user.away) lines << tr("Away");
 
 			/*
 			 * A keyprint means they published a certificate for peer connections.

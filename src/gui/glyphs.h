@@ -24,6 +24,7 @@ enum class Glyph {
 	/* Navigation rail destinations. */
 	Home,
 	Hubs,
+	Search,
 	Transfers,
 	Settings,
 
@@ -33,7 +34,18 @@ enum class Glyph {
 	Lock,
 	LockOpen,
 	People,
-	Close
+	Close,
+
+	/**
+	 * One user, in a list of them.
+	 *
+	 * Two forms rather than two colours, as with the star: filled for somebody who
+	 * is here, an outline for somebody who says they are away. A difference in shape
+	 * is one that survives being looked at by somebody who cannot tell the two inks
+	 * apart.
+	 */
+	Person,
+	PersonOutline
 };
 
 /**

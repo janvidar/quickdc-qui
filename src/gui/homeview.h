@@ -73,8 +73,13 @@ protected:
 
 private:
 	QWidget* buildGreeting();
-	QWidget* buildHubs();
 	QWidget* buildActivity();
+
+	/**
+	 * A tab page: the content given its margins, and scrolled when the window is too
+	 * short for it. As SettingsView does it, and for the same reason.
+	 */
+	QWidget* makePage(QWidget* page);
 
 	void refreshGreeting();
 	void refreshActivity();

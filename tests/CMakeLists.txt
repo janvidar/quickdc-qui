@@ -7,7 +7,10 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
 # Deliberately only the bridge: a test that could reach a core header would not
 # be testing the isolation it is here to check.
 add_executable(tst_bridge tst_bridge.cpp)
-target_link_libraries(tst_bridge PRIVATE qdcbridge Qt6::Test)
+# quickdc::quickdc as well as the bridge, and only here: this is the test of the
+# isolation layer, and part of that is checking that what the views work out for
+# themselves still matches what the core decided.
+target_link_libraries(tst_bridge PRIVATE qdcbridge quickdc::quickdc Qt6::Test)
 
 add_executable(tst_shell tst_shell.cpp)
 target_link_libraries(tst_shell PRIVATE qdcgui Qt6::Test)
@@ -24,6 +27,9 @@ target_link_libraries(tst_hublist PRIVATE qdcgui Qt6::Test)
 add_executable(tst_settings tst_settings.cpp)
 target_link_libraries(tst_settings PRIVATE qdcgui Qt6::Test)
 
+add_executable(tst_search tst_search.cpp)
+target_link_libraries(tst_search PRIVATE qdcgui Qt6::Test)
+
 add_executable(tst_richtext tst_richtext.cpp)
 target_link_libraries(tst_richtext PRIVATE qdcgui Qt6::Test)
 
@@ -38,7 +44,7 @@ target_compile_definitions(tst_markdown PRIVATE
 add_executable(tst_theme tst_theme.cpp)
 target_link_libraries(tst_theme PRIVATE qdcgui Qt6::Test)
 
-foreach(target tst_bridge tst_shell tst_hubs tst_hublist tst_transfers tst_settings tst_richtext tst_markdown tst_theme)
+foreach(target tst_bridge tst_shell tst_hubs tst_hublist tst_transfers tst_settings tst_search tst_richtext tst_markdown tst_theme)
     set_target_properties(${target} PROPERTIES
         AUTOMOC ON
         CXX_STANDARD 20
@@ -56,9 +62,15 @@ add_test(NAME hubs COMMAND tst_hubs)
 add_test(NAME hublist COMMAND tst_hublist)
 add_test(NAME transfers COMMAND tst_transfers)
 add_test(NAME settings COMMAND tst_settings)
+add_test(NAME search COMMAND tst_search)
 add_test(NAME richtext COMMAND tst_richtext)
 add_test(NAME markdown COMMAND tst_markdown)
 add_test(NAME theme COMMAND tst_theme)
+
+# Not a program but a rule: see the script for which files may wait for the core.
+add_test(NAME blocking
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/nothing-blocks-the-views.sh
+            ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # Generous, because most of what these do is wait for the reactor: a job posted
 # while it is in poll() is answered within a quarter of a second, and there are a

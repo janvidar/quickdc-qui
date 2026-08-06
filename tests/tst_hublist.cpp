@@ -23,6 +23,7 @@
 #include <QSignalSpy>
 #include <QSortFilterProxyModel>
 #include <QStackedWidget>
+#include <QTabWidget>
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTest>
@@ -127,7 +128,7 @@ void TestHubList::configureSources(const QStringList& urls)
 
 	m_config->replaceGroup(Qdc::ConfigStore::Application,
 	                       QStringLiteral("Hublists"), stale, values);
-	QVERIFY(m_config->save(Qdc::ConfigStore::Application));
+	m_config->save(Qdc::ConfigStore::Application);
 }
 
 void TestHubList::cache(const Qdc::HubDirectory& directory, const QString& url,
@@ -309,7 +310,7 @@ void TestHubList::aDirectoryWithNoConfigurationWritesTheDefaults()
 	/* And a store that says nought is respected rather than filled in again. */
 	m_config->setNumber(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
 	                    QStringLiteral("Total"), 0);
-	QVERIFY(m_config->save(Qdc::ConfigStore::Application));
+	m_config->save(Qdc::ConfigStore::Application);
 
 	Qdc::HubDirectory empty(nullptr, m_config, cacheDir());
 	QVERIFY(empty.sources().isEmpty());
@@ -649,7 +650,29 @@ void TestHubList::theBrowserStaysOnTheTabItIsShowing()
 	QVERIFY(QTest::qWaitForWindowExposed(&stack));
 
 	QCOMPARE(home->hubs()->favouriteCount(), 1);
-	QCOMPARE(home->hubs()->currentTab(), Qdc::HubBrowser::PublicTab);
+
+	/*
+	 * Home shares the browser's tab strip and opens on its own first page, so what is
+	 * current here is the welcome rather than a hub list. Asserted through the strip
+	 * rather than through currentTab(), which answers about the three hub lists and
+	 * says PublicTab when none of them is showing.
+	 */
+	QTabWidget* strip = home->hubs()->tabs();
+	QVERIFY(strip);
+	QCOMPARE(strip->currentIndex(), 0);
+	QCOMPARE(strip->tabText(0), QStringLiteral("Welcome"));
+
+	/* And the hub lists are all in the one strip, after it. */
+	QCOMPARE(strip->count(), 5);
+	QCOMPARE(strip->tabText(1), QStringLiteral("Visited"));
+	QCOMPARE(strip->tabText(2), QStringLiteral("Public hubs"));
+	QCOMPARE(strip->tabText(3), QStringLiteral("Favourites"));
+	QCOMPARE(strip->tabText(4), QStringLiteral("Activity"));
+
+	/* Selecting one still lands on that list, index shift and all. */
+	home->hubs()->showTab(Qdc::HubBrowser::FavouritesTab);
+	QCOMPARE(home->hubs()->currentTab(), Qdc::HubBrowser::FavouritesTab);
+	QCOMPARE(strip->currentIndex(), 3);
 }
 
 void TestHubList::theBrowserBookmarksAndUnbookmarks()
@@ -700,7 +723,7 @@ void TestHubList::theBrowserForgetsARecentHub()
 	recent.note(QStringLiteral("dchub://unwanted.example.org:411"));
 
 	Qdc::HubBrowser browser(nullptr, nullptr, &recent);
-	browser.showTab(Qdc::HubBrowser::RecentTab);
+	browser.showTab(Qdc::HubBrowser::VisitedTab);
 
 	QCOMPARE(browser.recentCount(), 2);
 

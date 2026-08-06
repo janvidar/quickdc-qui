@@ -6,9 +6,11 @@
 
 #include "fileactions.h"
 #include "composer.h"
+#include "glyphs.h"
 #include "hubheader.h"
 #include "hubpane.h"
 #include "richtext.h"
+#include "theme.h"
 #include "usermodel.h"
 
 #include <core/completed.h>
@@ -23,6 +25,7 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QDesktopServices>
 #include <QFileDialog>
@@ -35,8 +38,12 @@
 #include <QActionGroup>
 #include <QMenu>
 #include <QMessageBox>
+#include <QApplication>
+#include <QPainter>
+#include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
+#include <QStyledItemDelegate>
 #include <QSplitter>
 #include <QTimer>
 #include <QStackedWidget>
@@ -50,6 +57,9 @@ const QString CHAT_MEDIA = QStringLiteral("Chat media");
 const QString MEDIA_FETCH = QStringLiteral("Fetch automatically");
 const QString MEDIA_LIMIT = QStringLiteral("Maximum size");
 const QString MEDIA_KEEP = QStringLiteral("Keep pasted for days");
+
+/** Where the folder a fetched picture lands in is named. */
+const QString DOWNLOADS_GROUP = QStringLiteral("Downloads");
 
 /** Two megabytes: enough for a photograph, small enough to arrive unnoticed. */
 constexpr int MEDIA_LIMIT_DEFAULT = 2 * 1024 * 1024;
@@ -75,6 +85,103 @@ constexpr int TREE_MINIMUM = 150;
 
 /** Marks a tree row as a hub rather than a conversation. */
 constexpr int HubRole = Qt::UserRole + 1;
+
+constexpr int NameColumn = 0;
+
+/** Carries the padlock for a row, for HubRowDelegate to draw; see refreshItem(). */
+constexpr int LockRole = Qt::UserRole + 2;
+
+/** The glyph beside a row, and the padlock after it, in logical pixels. */
+constexpr int ROW_GLYPH = 15;
+constexpr int LOCK_GLYPH = 12;
+
+/** How far the padlock sits in from the end of the row. */
+constexpr int LOCK_MARGIN = 6;
+
+/**
+ * A glyph for a tree row, in the two inks a row is ever drawn in.
+ *
+ * Both states are put in the one icon rather than the colour being chosen when the
+ * row is built, because a row changes ink when it is selected and an item's icon is
+ * not asked again. Qt requests the Selected pixmap for the row under the pill, so
+ * giving it one is all it takes for the glyph to follow the words.
+ */
+QIcon row_icon(Qdc::Glyph glyph, int size, qreal ratio)
+{
+	const auto paint = [glyph, size, ratio](const QColor& ink) {
+		QPixmap pixmap(QSize(size, size) * ratio);
+		pixmap.setDevicePixelRatio(ratio);
+		pixmap.fill(Qt::transparent);
+
+		QPainter painter(&pixmap);
+		Qdc::paint_glyph(painter, glyph, QRectF(0, 0, size, size), ink);
+		painter.end();
+
+		return pixmap;
+	};
+
+	QIcon icon;
+	icon.addPixmap(paint(Qdc::theme().sidebarText), QIcon::Normal);
+	icon.addPixmap(paint(Qdc::theme().sidebarTextActive), QIcon::Selected);
+
+	return icon;
+}
+
+/**
+ * Draws a tree row, with the padlock at the end of it.
+ *
+ * The padlock cannot be a column of its own. A cell is what the stylesheet rounds
+ * into the selection pill, so a second column gives a selected row two pills with a
+ * seam down the middle, which reads as two things selected rather than one - the same
+ * trouble the branch indentation caused, and noted where that was cured in
+ * widgets.qss.
+ *
+ * So one column, and the lock is drawn over the end of the row it belongs to. The
+ * name is elided before it rather than left to run underneath.
+ */
+class HubRowDelegate final : public QStyledItemDelegate {
+public:
+	using QStyledItemDelegate::QStyledItemDelegate;
+
+	void paint(QPainter* painter, const QStyleOptionViewItem& option,
+	           const QModelIndex& index) const override
+	{
+		QStyleOptionViewItem opt = option;
+		initStyleOption(&opt, index);
+
+		const QIcon lock = qvariant_cast<QIcon>(index.data(LockRole));
+
+		if (!lock.isNull())
+		{
+			const int reserve = LOCK_GLYPH + LOCK_MARGIN * 2;
+
+			/*
+			 * Elided here rather than by leaving the text less room, because the
+			 * room is also what the pill is drawn to and the pill wants the whole
+			 * row.
+			 */
+			opt.text = opt.fontMetrics.elidedText(opt.text, Qt::ElideRight,
+				qMax(0, opt.rect.width() - reserve - ROW_GLYPH * 2));
+		}
+
+		/*
+		 * drawControl rather than the base paint(), which would run
+		 * initStyleOption again and put the full text back.
+		 */
+		QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
+		style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
+
+		if (lock.isNull()) return;
+
+		const QRect box(opt.rect.right() - LOCK_MARGIN - LOCK_GLYPH,
+		                opt.rect.center().y() - LOCK_GLYPH / 2,
+		                LOCK_GLYPH, LOCK_GLYPH);
+
+		lock.paint(painter, box, Qt::AlignCenter,
+		           (opt.state & QStyle::State_Selected) ? QIcon::Selected
+		                                                : QIcon::Normal);
+	}
+};
 
 QString decorate(const QString& title, int unread)
 {
@@ -103,7 +210,12 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 {
 	m_tree->setObjectName(QStringLiteral("hubTree"));
 	m_tree->setHeaderHidden(true);
+
 	m_tree->setColumnCount(1);
+
+	/* Draws the glyph, the name and the padlock as one row; see HubRowDelegate. */
+	m_tree->setItemDelegate(new HubRowDelegate(m_tree));
+
 	m_tree->setFrameShape(QFrame::NoFrame);
 	m_tree->setMinimumWidth(TREE_MINIMUM);
 	m_tree->setAccessibleName(tr("Open hubs"));
@@ -146,13 +258,26 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	sweepPastedMedia();
 
 	/*
-	 * Either store: the general settings live in one and what a single hub decided lives
-	 * in the other, and reloadMediaPolicy() picks up both.
+	 * The change rather than the save, and the group it happened in rather than any
+	 * change at all. A save is reported once the file has been written, which is a
+	 * moment after the setting took effect; and re-reading every hub's policy because
+	 * some unrelated store wrote a numbered list was work nobody asked for.
 	 */
 	if (m_config)
 	{
-		connect(m_config, &ConfigBridge::saved,
-		        this, [this](ConfigStore) { reloadMediaPolicy(); });
+		connect(m_config, &ConfigBridge::changed, this,
+		        [this](ConfigStore store, const QString& group, const QString&) {
+			if (store == ConfigStore::Application)
+			{
+				if (group == CHAT_MEDIA || group == DOWNLOADS_GROUP)
+					reloadMediaPolicy();
+
+				return;
+			}
+
+			/* A session group is named after the hub it belongs to. */
+			loadHubMediaPolicy(group);
+		});
 	}
 
 	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -286,7 +411,7 @@ bool Qdc::HubsView::openHub(const QString& url)
 
 	Entry* entry = new Entry;
 	entry->bridge = bridge;
-	entry->pane = new HubPane(bridge);
+	entry->pane = new HubPane(bridge, m_config);
 
 	entry->item = new QTreeWidgetItem(m_tree);
 	entry->item->setData(0, HubRole, true);
@@ -314,6 +439,17 @@ bool Qdc::HubsView::openHub(const QString& url)
 		if (Entry* found = entryFor(bridge)) showPane(openDm(*found, user));
 	});
 
+	connect(entry->pane, &HubPane::filesRequested, this,
+	        [this, bridge](const UserInfo& user) {
+		Entry* found = entryFor(bridge);
+		if (!found) return;
+
+		/* The same conversation, opened on its Files tab rather than its messages. */
+		DmPane* pane = openDm(*found, user);
+		showPane(pane);
+		pane->showFiles();
+	});
+
 	connect(entry->pane, &ChatPane::closeRequested, this, [this, bridge] {
 		closeHub(bridge->url());
 	});
@@ -333,6 +469,10 @@ bool Qdc::HubsView::openHub(const QString& url)
 		if (Entry* found = entryFor(bridge)) promptForPassword(*found);
 	});
 
+	/* Straight out again: nothing here wants a search reply, only passes it on. */
+	connect(bridge, &HubBridge::searchResultsReceived,
+	        this, &HubsView::searchResultsReceived);
+
 	connect(bridge, &HubBridge::hubNameChanged, this, [this, bridge] {
 		if (Entry* found = entryFor(bridge))
 			refreshItem(found->item, found->pane);
@@ -345,6 +485,20 @@ bool Qdc::HubsView::openHub(const QString& url)
 		 */
 		if (m_recent) m_recent->setName(bridge->url(), bridge->hubName());
 	});
+
+	/*
+	 * Both of these move the padlock on the row: whether the connection is up at all,
+	 * and whether it turned out to be encrypted. They arrive separately - the socket
+	 * is connected before anything is known about its encryption - so the row is
+	 * rebuilt on either.
+	 */
+	const auto followConnection = [this, bridge] {
+		if (Entry* found = entryFor(bridge))
+			refreshItem(found->item, found->pane);
+	};
+
+	connect(bridge, &HubBridge::netStatusChanged, this, followConnection);
+	connect(bridge, &HubBridge::secureChanged, this, followConnection);
 
 	/* The row's label is the hub's name once it has one, and the URL until then. */
 	refreshItem(entry->item, entry->pane);
@@ -475,6 +629,16 @@ void Qdc::HubsView::route(Entry& entry, const ChatMessage& message)
 	pane->post(message);
 }
 
+Qdc::DmPane* Qdc::HubsView::dmFor(Entry& entry, const UserInfo& user) const
+{
+	for (DmPane* pane : entry.dms)
+	{
+		if (pane && pane->isWith(user)) return pane;
+	}
+
+	return nullptr;
+}
+
 Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 {
 	const QString context = user.id;
@@ -485,6 +649,32 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 		/* Details may have improved since; the pane follows them. */
 		existing->setUser(user);
 		return existing;
+	}
+
+	/*
+	 * Not filed under this id, but possibly the same person: somebody who left and
+	 * came back has a new session id, and on ADC a new nickname with it. Asked of the
+	 * conversations themselves, since what counts as the same person is theirs to
+	 * decide - see DmPane::isThisUser().
+	 *
+	 * Without this, whichever arrived first - the hub announcing them or a message
+	 * from them - would decide whether the conversation carried on or a second one
+	 * opened beside it.
+	 */
+	if (DmPane* known = dmFor(entry, user))
+	{
+		const QString was = known->context();
+
+		known->setUser(user);
+
+		if (was != user.id)
+		{
+			entry.dms.remove(was);
+			entry.dms.insert(user.id, known);
+		}
+
+		refreshItem(m_items.value(known, nullptr), known);
+		return known;
 	}
 
 	DmPane* pane = new DmPane(entry.bridge, user, m_filelists);
@@ -521,8 +711,26 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 	entry.dms.insert(context, pane);
 	adopt(pane, item);
 
-	connect(pane, &ChatPane::closeRequested, this, [this, &entry, context] {
-		DmPane* closing = entry.dms.take(context);
+	/*
+	 * The pane keeps its own name for the conversation and tells us when it changes;
+	 * the key it is filed under here has to move with it or the next message from
+	 * them would open a second conversation.
+	 */
+	connect(pane, &DmPane::contextChanged, this,
+	        [this, &entry, pane](const QString& from, const QString& to) {
+		if (from == to || to.isEmpty()) return;
+		if (entry.dms.value(from, nullptr) != pane) return;
+
+		entry.dms.remove(from);
+		entry.dms.insert(to, pane);
+
+		/* The row says who it is with, and who it is with has just changed. */
+		refreshItem(m_items.value(pane, nullptr), pane);
+	});
+
+	/* By pane rather than by the key it was opened under, which may have moved. */
+	connect(pane, &ChatPane::closeRequested, this, [this, &entry, pane] {
+		DmPane* closing = entry.dms.take(entry.dms.key(pane));
 		if (!closing) return;
 
 		QTreeWidgetItem* row = m_items.take(closing);
@@ -921,12 +1129,64 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 
 	const QString label = decorate(pane->paneTitle(), pane->unreadCount());
 
-	item->setText(0, label);
-	item->setToolTip(0, pane->paneTitle());
+	item->setText(NameColumn, label);
+	item->setToolTip(NameColumn, pane->paneTitle());
 
-	QFont face = item->font(0);
+	QFont face = item->font(NameColumn);
 	face.setBold(pane->unreadCount() > 0);
-	item->setFont(0, face);
+	item->setFont(NameColumn, face);
+
+	const bool isHub = item->data(0, HubRole).toBool();
+	const qreal ratio = devicePixelRatioF();
+
+	item->setIcon(NameColumn, row_icon(isHub ? Glyph::Hubs : Glyph::People,
+	                                   ROW_GLYPH, ratio));
+
+	HubBridge* bridge = isHub ? pane->hub() : nullptr;
+
+	/*
+	 * A padlock only while the connection is up, and it says what is true of that
+	 * connection rather than what the address asked for. A hub that is not connected
+	 * gets none: an open padlock there would read as "this hub is insecure" when all
+	 * it means is that there is nothing to secure yet.
+	 */
+	const bool live = bridge
+		&& (bridge->netStatus() == NetStatus::Connected
+		    || bridge->netStatus() == NetStatus::TlsConnected);
+
+	if (!live)
+	{
+		item->setData(NameColumn, LockRole, QVariant());
+		return;
+	}
+
+	const bool secure = bridge->isSecure();
+
+	item->setData(NameColumn, LockRole, QVariant::fromValue(
+		row_icon(secure ? Glyph::Lock : Glyph::LockOpen, LOCK_GLYPH, ratio)));
+
+	/*
+	 * On the row's own tooltip, since the padlock is painted over the row rather than
+	 * being an item of its own with somewhere to put one.
+	 */
+	item->setToolTip(NameColumn, secure
+		? tr("%1\nEncrypted with TLS").arg(pane->paneTitle())
+		: tr("%1\nNot encrypted").arg(pane->paneTitle()));
+}
+
+void Qdc::HubsView::changeEvent(QEvent* event)
+{
+	View::changeEvent(event);
+
+	if (event->type() != QEvent::PaletteChange
+	    && event->type() != QEvent::StyleChange)
+	{
+		return;
+	}
+
+	/* Every row, since each one carries a glyph painted in the old ink. */
+	for (auto row = m_panes.cbegin(); row != m_panes.cend(); ++row)
+		refreshItem(row.key(), row.value());
 }
 
 void Qdc::HubsView::refreshBadge()
@@ -960,7 +1220,7 @@ void Qdc::HubsView::reloadMediaPolicy()
 	m_mediaLimit = static_cast<quint64>(qMax(0, limit));
 
 	const QString configured = m_config->getString(ConfigStore::Application,
-		QStringLiteral("Downloads"), QStringLiteral("Directory")).trimmed();
+		DOWNLOADS_GROUP, QStringLiteral("Directory")).trimmed();
 
 	m_downloadDir = configured.isEmpty() ? QStringLiteral("~/.quickdc/downloads")
 	                                     : configured;
@@ -973,9 +1233,17 @@ void Qdc::HubsView::reloadMediaPolicy()
 		if (entry->bridge) loadHubMediaPolicy(entry->bridge->url());
 }
 
-void Qdc::HubsView::loadHubMediaPolicy(const QString& hubUrl)
+void Qdc::HubsView::loadHubMediaPolicy(const QString& url)
 {
-	if (!m_config || hubUrl.isEmpty()) return;
+	if (!m_config || url.isEmpty()) return;
+
+	/*
+	 * Cached under the canonical form, because that is what a message carries when
+	 * fetchesMediaOn() comes to look it up - ChatMessage::hubUrl is the core's own
+	 * canonical URL. Stored under the address as given, the entry for a hub opened
+	 * with a keyprint in its address was never found again.
+	 */
+	const QString hubUrl = HubBridge::settingsUrl(url);
 
 	if (!m_config->contains(ConfigStore::Session, hubUrl, MEDIA_FETCH))
 	{
@@ -999,7 +1267,7 @@ void Qdc::HubsView::showHubMenu(const QPoint& at)
 	ChatPane* pane = m_panes.value(item, nullptr);
 	if (!pane || !pane->hub()) return;
 
-	const QString hubUrl = pane->hub()->url();
+	const QString hubUrl = HubBridge::settingsUrl(pane->hub()->url());
 
 	QMenu menu(this);
 	menu.addAction(tr("Fetch pictures on this hub"))->setEnabled(false);

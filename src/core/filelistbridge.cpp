@@ -63,15 +63,30 @@ Qdc::RemoteDirInfo convert(const Share::RemoteDir* dir)
 	return info;
 }
 
+/** What one outstanding request turned out to be, decided on the core thread. */
+struct Outcome {
+	QString hubUrl;
+	QString sourceId;
+	bool ready = false;
+	Qdc::RemoteDirInfo root;
+};
+
 }
 
 Qdc::FilelistBridge::FilelistBridge(CoreThread* thread, QObject* parent)
 	: QObject(parent)
 	, m_thread(thread)
+	, m_relay(Relay::create())
 	, m_timer(new QTimer(this))
 {
 	m_timer->setInterval(POLL_INTERVAL_MS);
 	connect(m_timer, &QTimer::timeout, this, &FilelistBridge::poll);
+}
+
+Qdc::FilelistBridge::~FilelistBridge()
+{
+	/* A pass still out with the core has nowhere to report to now. */
+	m_relay->detach();
 }
 
 void Qdc::FilelistBridge::request(const QString& hubUrl, const QString& sourceId)
@@ -81,16 +96,25 @@ void Qdc::FilelistBridge::request(const QString& hubUrl, const QString& sourceId
 
 	const QByteArray hub = hubUrl.toUtf8();
 	const QByteArray cid = sourceId.toUtf8();
-	QString localFile;
 
-	m_thread->invoke([this, &hub, &cid, &localFile] {
-		QuickDC::Core* core = m_thread->core();
-		if (!core || !core->queue) return;
+	/*
+	 * Recorded before the core has been asked, so that a second request for the same
+	 * peer while this one is still out is turned away rather than made twice. Where
+	 * it will land is filled in when the core says, and the entry is taken out again
+	 * if the queue would not have it.
+	 */
+	m_pending.append(Pending{hubUrl, sourceId, QString()});
+
+	m_thread->call(m_relay, [thread = m_thread, hub, cid] {
+		QString localFile;
+
+		QuickDC::Core* core = thread->core();
+		if (!core || !core->queue) return localFile;
 
 		QuickDC::FilelistRequest* request =
 			core->queue->requestFilelist(hub.constData(), cid.constData());
 
-		if (!request) return;
+		if (!request) return localFile;
 
 		if (const char* path = request->getLocalFilename())
 			localFile = QString::fromUtf8(path);
@@ -100,18 +124,31 @@ void Qdc::FilelistBridge::request(const QString& hubUrl, const QString& sourceId
 		 * goes out immediately. The reference client does the same in cmd_browse().
 		 */
 		core->queue->process();
+
+		return localFile;
+	}, [this, hubUrl, sourceId](const QString& localFile) {
+		for (int n = 0; n < m_pending.size(); ++n)
+		{
+			if (m_pending.at(n).hubUrl != hubUrl) continue;
+			if (m_pending.at(n).sourceId != sourceId) continue;
+
+			if (localFile.isEmpty())
+			{
+				m_pending.removeAt(n);
+
+				emit filelistFailed(hubUrl, sourceId,
+					tr("The download queue would not take the request."));
+
+				if (m_pending.isEmpty()) m_timer->stop();
+				return;
+			}
+
+			m_pending[n].localFile = localFile;
+
+			if (!m_timer->isActive()) m_timer->start();
+			return;
+		}
 	});
-
-	if (localFile.isEmpty())
-	{
-		emit filelistFailed(hubUrl, sourceId,
-			tr("The download queue would not take the request."));
-		return;
-	}
-
-	m_pending.append(Pending{hubUrl, sourceId, localFile});
-
-	if (!m_timer->isActive()) m_timer->start();
 }
 
 bool Qdc::FilelistBridge::isPending(const QString& hubUrl, const QString& sourceId) const
@@ -137,28 +174,33 @@ void Qdc::FilelistBridge::poll()
 		return;
 	}
 
+	if (m_polling) return;
+
 	/*
-	 * What each outstanding request resolved to, decided in one pass on the core
-	 * thread. Collected rather than acted on there: emitting from inside a job
-	 * would run a slot on the core thread.
+	 * Carried into the job by value rather than read from there. The list belongs to
+	 * this thread, and a job that walked it would be reading it while this thread is
+	 * free to add to it - which it no longer is prevented from doing, now that
+	 * nothing waits here.
 	 */
-	struct Outcome {
-		int index = 0;
-		bool done = false;
-		bool ready = false;
-		RemoteDirInfo root;
-	};
+	QList<Pending> asking;
 
-	QList<Outcome> outcomes;
+	for (const Pending& pending : m_pending)
+	{
+		if (!pending.localFile.isEmpty()) asking.append(pending);
+	}
 
-	m_thread->invoke([this, &outcomes] {
-		QuickDC::Core* core = m_thread->core();
-		if (!core || !core->queue) return;
+	if (asking.isEmpty()) return;
 
-		for (int n = 0; n < m_pending.size(); ++n)
+	m_polling = true;
+
+	m_thread->call(m_relay, [thread = m_thread, asking] {
+		QList<Outcome> outcomes;
+
+		QuickDC::Core* core = thread->core();
+		if (!core || !core->queue) return outcomes;
+
+		for (const Pending& pending : asking)
 		{
-			const Pending& pending = m_pending.at(n);
-
 			const QByteArray hub = pending.hubUrl.toUtf8();
 			const QByteArray cid = pending.sourceId.toUtf8();
 
@@ -167,8 +209,8 @@ void Qdc::FilelistBridge::poll()
 				continue;
 
 			Outcome outcome;
-			outcome.index = n;
-			outcome.done = true;
+			outcome.hubUrl = pending.hubUrl;
+			outcome.sourceId = pending.sourceId;
 
 			/*
 			 * The request is gone, which means either the list arrived or the
@@ -191,25 +233,35 @@ void Qdc::FilelistBridge::poll()
 
 			outcomes.append(outcome);
 		}
+
+		return outcomes;
+	}, [this](const QList<Outcome>& outcomes) {
+		m_polling = false;
+
+		for (const Outcome& outcome : outcomes)
+		{
+			/*
+			 * Looked up again rather than by the index the job saw: nothing stopped
+			 * this thread adding to or taking from the list while the core was
+			 * working through the copy it was given.
+			 */
+			for (int n = 0; n < m_pending.size(); ++n)
+			{
+				if (m_pending.at(n).hubUrl != outcome.hubUrl) continue;
+				if (m_pending.at(n).sourceId != outcome.sourceId) continue;
+
+				m_pending.removeAt(n);
+
+				if (outcome.ready)
+					emit filelistReady(outcome.hubUrl, outcome.sourceId, outcome.root);
+				else
+					emit filelistFailed(outcome.hubUrl, outcome.sourceId,
+						tr("The file list did not arrive."));
+
+				break;
+			}
+		}
+
+		if (m_pending.isEmpty()) m_timer->stop();
 	});
-
-	/*
-	 * Removed back to front, so that an earlier removal does not shift the index
-	 * of a later one.
-	 */
-	for (int n = static_cast<int>(outcomes.size()) - 1; n >= 0; --n)
-	{
-		const Outcome& outcome = outcomes.at(n);
-		if (!outcome.done) continue;
-
-		const Pending pending = m_pending.takeAt(outcome.index);
-
-		if (outcome.ready)
-			emit filelistReady(pending.hubUrl, pending.sourceId, outcome.root);
-		else
-			emit filelistFailed(pending.hubUrl, pending.sourceId,
-				tr("The file list did not arrive."));
-	}
-
-	if (m_pending.isEmpty()) m_timer->stop();
 }

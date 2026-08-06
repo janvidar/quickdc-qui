@@ -23,6 +23,8 @@ class HomeView;
 class HubDirectory;
 class HubsView;
 class RecentHubs;
+class SearchBridge;
+class SearchView;
 class Shares;
 class NavigationRail;
 class TransferBridge;
@@ -94,6 +96,7 @@ private:
 	ConfigBridge* m_config;
 	TransferBridge* m_transfers;
 	FilelistBridge* m_filelists;
+	SearchBridge* m_searches;
 	Favourites* m_favourites;
 	Completed* m_completed;
 	Shares* m_shares;
@@ -113,6 +116,9 @@ private:
 
 	/** Kept so that it can be destroyed before the stores it was handed. */
 	HomeView* m_home;
+
+	/** Kept so that hub replies can be routed to it; see the constructor. */
+	SearchView* m_search;
 
 	NavigationRail* m_rail;
 	QStackedWidget* m_stack;

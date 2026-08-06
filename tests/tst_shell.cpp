@@ -81,7 +81,7 @@ void TestShell::initTestCase()
 	Qdc::ConfigBridge config(m_thread);
 	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
 	                 QStringLiteral("Total"), 0);
-	QVERIFY(config.save(Qdc::ConfigStore::Application));
+	config.save(Qdc::ConfigStore::Application);
 }
 
 void TestShell::cleanupTestCase()
@@ -165,7 +165,8 @@ void TestShell::windowHasEveryDestinationInPlanOrder()
 {
 	Qdc::MainWindow window(m_thread);
 
-	QCOMPARE(window.rail()->count(), 4);
+	/* Home, Hubs, Search, Transfers, and Settings at the foot. */
+	QCOMPARE(window.rail()->count(), 5);
 	QCOMPARE(window.currentIndex(), 0);
 
 	/*
@@ -174,7 +175,10 @@ void TestShell::windowHasEveryDestinationInPlanOrder()
 	 */
 	QCOMPARE(window.windowTitle(), QStringLiteral("Home — QuickDC"));
 
-	window.setCurrentIndex(3);
+	window.setCurrentIndex(2);
+	QCOMPARE(window.windowTitle(), QStringLiteral("Search — QuickDC"));
+
+	window.setCurrentIndex(4);
 	QCOMPARE(window.windowTitle(), QStringLiteral("Settings — QuickDC"));
 }
 
@@ -184,16 +188,16 @@ void TestShell::selectingARailDestinationSwapsTheView()
 	Qdc::NavigationRail* rail = window.rail();
 
 	/* Driving the rail, as a click would, has to move the content with it. */
-	rail->setCurrentIndex(2);
-	QCOMPARE(window.currentIndex(), 2);
+	rail->setCurrentIndex(3);
+	QCOMPARE(window.currentIndex(), 3);
 	QCOMPARE(window.windowTitle(), QStringLiteral("Transfers — QuickDC"));
 
 	rail->setCurrentIndex(1);
 	QCOMPARE(window.currentIndex(), 1);
 
 	/* And driving the router has to move the rail, so the two cannot diverge. */
-	window.setCurrentIndex(3);
-	QCOMPARE(rail->currentIndex(), 3);
+	window.setCurrentIndex(4);
+	QCOMPARE(rail->currentIndex(), 4);
 }
 
 void TestShell::viewBadgesReachTheRail()
@@ -239,7 +243,7 @@ void TestShell::windowSurvivesRepeatedConstruction()
 		window.setCurrentIndex(n % 4);
 	}
 
-	QVERIFY(m_thread->invoke([] { }));
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
 	QVERIFY(m_thread->isCoreRunning());
 }
 

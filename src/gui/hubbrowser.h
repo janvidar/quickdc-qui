@@ -29,6 +29,11 @@ class RecentHubs;
  * answers to the same question and only one of them is ever being read. The public
  * list is also thousands of rows and wants the height to itself.
  *
+ * The tab strip is offered rather than kept private - see tabs(). Home puts its own
+ * pages in it, so that a window showing this has one row of tabs and not a row under
+ * a row, and the tabs here are addressed by their page rather than by an index for
+ * exactly that reason.
+ *
  * Nothing here opens a hub. The chat lives in another view, so a choice made here
  * leaves as hubRequested() and whoever placed this widget routes it - the same
  * arrangement HomeView already has with the address box.
@@ -40,7 +45,9 @@ public:
 	enum Tab {
 		PublicTab,
 		FavouritesTab,
-		RecentTab
+
+		/** The hubs already visited; labelled "Visited". */
+		VisitedTab
 	};
 
 	/**
@@ -52,7 +59,23 @@ public:
 	           QWidget* parent = nullptr);
 
 	void showTab(Tab tab);
+
+	/**
+	 * Which of the three is showing.
+	 *
+	 * PublicTab when what is showing is a page somebody else added to the strip,
+	 * because the question this answers is which hub list is current and the answer
+	 * is then none of them.
+	 */
 	Tab currentTab() const;
+
+	/**
+	 * The tab strip, so that the page hosting this can add its own tabs to it.
+	 *
+	 * The same arrangement as ChatPane: this owns the strip and whoever places it
+	 * appends to it, which is what keeps one window to one row of tabs.
+	 */
+	QTabWidget* tabs() const;
 
 	/** Fetch the public lists that are stale, or all of them. */
 	void refreshPublicLists(bool force);
@@ -127,6 +150,17 @@ private:
 	RecentHubs* m_recent;
 
 	QTabWidget* m_tabs;
+
+	/**
+	 * The three pages, kept so that a tab can be found by what is on it.
+	 *
+	 * By page rather than by index because the strip is shared: Home inserts its own
+	 * tabs into it, and an index that meant one thing on its own means another once
+	 * somebody has added a page in front.
+	 */
+	QWidget* m_visitedPage = nullptr;
+	QWidget* m_publicPage = nullptr;
+	QWidget* m_favouritesPage = nullptr;
 
 	QLineEdit* m_search;
 	QPushButton* m_refresh;

@@ -14,6 +14,8 @@ add_library(qdcgui STATIC
     chatpane.h
     composer.cpp
     composer.h
+    connectionbar.cpp
+    connectionbar.h
     cornermask.cpp
     cornermask.h
     fileactions.cpp
@@ -50,6 +52,10 @@ add_library(qdcgui STATIC
     progressdelegate.h
     richtext.cpp
     richtext.h
+    searchmodel.cpp
+    searchmodel.h
+    searchview.cpp
+    searchview.h
     settingsview.cpp
     settingsview.h
     theme.cpp

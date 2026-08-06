@@ -21,6 +21,7 @@ namespace Qdc {
 class ChatFeed;
 class ChatModel;
 class Composer;
+class ConnectionBar;
 class HubBridge;
 class HubHeader;
 
@@ -115,6 +116,15 @@ protected:
 	Composer* composer() const;
 
 	/**
+	 * The band across the top of the pages, saying why this cannot be used.
+	 *
+	 * Built here because both kinds of conversation depend on the same hub and go
+	 * the same way when it does, but driven by the subclass: the hub-wide state is
+	 * what a subclass subscribes to, per the note above.
+	 */
+	ConnectionBar* connectionBar() const;
+
+	/**
 	 * Put a panel beside the conversation - the context sidebar of the layout.
 	 *
 	 * The Messages page is a splitter from the outset with the conversation as its
@@ -132,6 +142,7 @@ private:
 	HubBridge* m_hub;
 	HubHeader* m_header;
 	QTabWidget* m_tabs;
+	ConnectionBar* m_connection;
 	ChatModel* m_model;
 	ChatFeed* m_feed;
 	Composer* m_composer;

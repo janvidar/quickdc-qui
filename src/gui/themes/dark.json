@@ -20,6 +20,10 @@
 		"than white: here it is lighter than the content it sits on, because that is",
 		"the direction a tint has to go to be seen on a dark page.",
 
+		"The warning band keeps its amber but swaps which end of it is the surface and",
+		"which is the ink, for the same reason the accent pair does: the tint has to sit",
+		"darker than a dark page to read as a band, and the ink on it lighter.",
+
 		"The radii are Indigo's and are not restated - anything this file leaves out",
 		"is inherited from the theme it extends."
 	],
@@ -44,6 +48,7 @@
 	"selectionText": "#eef1fb",
 
 	"presence": "#f5c48d",
+	"presenceOperator": "#5cc8e0",
 
 	"notification": "#7c8cdf",
 	"notificationText": "#11142b",
@@ -56,6 +61,9 @@
 
 	"notice": "#2f3559",
 	"noticeText": "#c3c9e6",
+
+	"warning": "#4a3416",
+	"warningText": "#f3c98b",
 
 	"accent": "#7d8ff0",
 	"accentText": "#10132a",

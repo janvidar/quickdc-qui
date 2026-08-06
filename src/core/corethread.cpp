@@ -7,8 +7,46 @@
 #include <api/core.h>
 #include <samurai/io/net/notifier.h>
 
+#include <QDebug>
+#include <QElapsedTimer>
+
+#include <chrono>
 #include <exception>
 #include <utility>
+
+namespace {
+
+/**
+ * What a blocking call and the job it queued say to each other.
+ *
+ * Shared rather than left on the waiter's stack, because the two ends do not
+ * finish together: a wait that expires returns while the job is still queued, and
+ * a condition variable the waiter has already destroyed is not one the core
+ * thread can safely notify.
+ */
+struct Rendezvous {
+	std::mutex mutex;
+	std::condition_variable changed;
+
+	bool started = false;
+	bool done = false;
+
+	/** Set by a waiter that gave up, and the job's instruction not to run. */
+	bool abandoned = false;
+
+	std::exception_ptr failure;
+};
+
+/**
+ * How long a blocking call may park the caller before it is worth saying so.
+ *
+ * Generous on purpose: registering a listener behind a reactor mid-turn is
+ * allowed to cost a turn. Anything past this is a call that does not belong on
+ * the thread that draws.
+ */
+const int SLOW_CALL_MS = 100;
+
+}
 
 Qdc::CoreThread::CoreThread(QObject* parent)
 	: QThread(parent)
@@ -107,7 +145,7 @@ void Qdc::CoreThread::post(std::function<void()> job)
 	wake();
 }
 
-bool Qdc::CoreThread::invoke(std::function<void()> job)
+bool Qdc::CoreThread::runOnCoreBlocking(std::function<void()> job, int timeout)
 {
 	if (!job) return false;
 
@@ -118,34 +156,102 @@ bool Qdc::CoreThread::invoke(std::function<void()> job)
 	}
 
 	/*
-	 * Local rather than shared, so two callers waiting at once do not wake each
-	 * other. Safe to capture by reference because we do not return until the
-	 * wrapper has run, and the wrapper is either run by the reactor or by the
-	 * final drain in run() - a queued job is never simply dropped.
+	 * One per call, so two callers waiting at once do not wake each other, and
+	 * shared so that whichever end finishes last is the one that destroys it.
 	 */
-	std::mutex done_mutex;
-	std::condition_variable done_changed;
-	bool done = false;
+	auto meeting = std::make_shared<Rendezvous>();
 
 	{
 		std::lock_guard<std::mutex> guard(m_mutex);
 		if (m_state != State::Running) return false;
 
-		m_jobs.push_back([&] {
-			job();
+		m_jobs.push_back([meeting, job = std::move(job)] {
 			{
-				std::lock_guard<std::mutex> inner(done_mutex);
-				done = true;
+				std::lock_guard<std::mutex> inner(meeting->mutex);
+
+				/*
+				 * The waiter gave up before this job was reached, and its stack -
+				 * which is what the job captured - is gone with it. Not running
+				 * the job is the whole of what abandoning one means.
+				 */
+				if (meeting->abandoned) return;
+
+				meeting->started = true;
 			}
-			done_changed.notify_one();
+
+			std::exception_ptr failure;
+
+			try
+			{
+				job();
+			}
+			catch (...)
+			{
+				failure = std::current_exception();
+			}
+
+			{
+				/*
+				 * Held across the notify rather than released before it: the
+				 * waiter wakes, sees the flag and returns, and a notify made
+				 * after that lands on a condition variable nothing owns.
+				 */
+				std::lock_guard<std::mutex> inner(meeting->mutex);
+				meeting->failure = failure;
+				meeting->done = true;
+				meeting->changed.notify_one();
+			}
 		});
 	}
 
 	wake();
 
-	std::unique_lock<std::mutex> lock(done_mutex);
-	done_changed.wait(lock, [&done] { return done; });
-	return true;
+	QElapsedTimer parked;
+	parked.start();
+
+	bool answered = false;
+
+	{
+		std::unique_lock<std::mutex> lock(meeting->mutex);
+
+		const auto deadline = std::chrono::steady_clock::now()
+			+ std::chrono::milliseconds(timeout);
+
+		/*
+		 * A job that has started cannot be abandoned - it is reading this thread's
+		 * stack - so the deadline only decides whether a job still queued is
+		 * called off. Once it is running there is nothing to do but see it out.
+		 */
+		answered = meeting->changed.wait_until(lock, deadline, [&meeting] {
+			return meeting->done;
+		});
+
+		if (!answered && meeting->started)
+		{
+			meeting->changed.wait(lock, [&meeting] { return meeting->done; });
+			answered = true;
+		}
+
+		if (!answered) meeting->abandoned = true;
+
+		if (meeting->failure)
+		{
+			std::exception_ptr failure = meeting->failure;
+			lock.unlock();
+			std::rethrow_exception(failure);
+		}
+	}
+
+	const qint64 spent = parked.elapsed();
+
+	if (spent > SLOW_CALL_MS)
+	{
+		qWarning("a blocking core call held the calling thread for %lld ms; "
+		         "if this was the thread that draws, that was a frozen window",
+		         static_cast<long long>(spent));
+	}
+
+	return answered;
 }
 
 void Qdc::CoreThread::wake()
@@ -253,7 +359,7 @@ void Qdc::CoreThread::run()
 
 	/*
 	 * Refuse new jobs and take the ones already queued in the same breath, so
-	 * that a caller blocked in invoke() is either in this batch or was told the
+	 * that a caller blocked in runOnCoreBlocking() is either in this batch or was told the
 	 * core had stopped. Anything either of these jobs posts is dropped.
 	 */
 	std::deque<std::function<void()>> remaining;

@@ -72,6 +72,32 @@ enum class Priority {
 };
 Q_ENUM_NS(Priority)
 
+/** How a search treats the size it was given; Share::SearchRequest::SizePolicy. */
+enum class SearchSize {
+	Any,
+	AtLeast,
+	AtMost
+};
+Q_ENUM_NS(SearchSize)
+
+/**
+ * A named group of file extensions.
+ *
+ * A convention of the clients rather than of either protocol: the wire carries a
+ * list of extensions, and every client offers the same handful of groupings over
+ * it. The list each of these stands for is in searchbridge.cpp, beside the code
+ * that puts it on the wire.
+ */
+enum class SearchCategory {
+	Any,
+	Audio,
+	Video,
+	Picture,
+	Document,
+	Archive
+};
+Q_ENUM_NS(SearchCategory)
+
 /** Which of the Core's two preference stores a setting belongs to. */
 enum class ConfigStore {
 	/** ~/.quickdc/quickdc.conf; the settings listed in api/config.h. */
@@ -120,6 +146,15 @@ struct UserInfo {
 	quint32 slotCount = 0;
 
 	bool op = false;
+
+	/**
+	 * The user says they are away.
+	 *
+	 * Their claim rather than an observation - nothing measures whether somebody is
+	 * at the keyboard. A hub that says nothing leaves this false, so it means "said
+	 * to be away" rather than "known to be present".
+	 */
+	bool away = false;
 };
 
 /** A chat line, public or private, detached from the core's buffers. */
@@ -161,6 +196,70 @@ struct ChatMessage {
 	bool richText = false;
 
 	bool privateMessage = false;
+};
+
+/** What to go looking for. */
+struct SearchQuery {
+	/**
+	 * Split on whitespace, and every word has to appear in a name for it to match.
+	 * A word beginning with '-' is one that must not appear.
+	 */
+	QString terms;
+
+	SearchCategory category = SearchCategory::Any;
+
+	SearchSize sizePolicy = SearchSize::Any;
+
+	/** Meaningless unless sizePolicy says otherwise. */
+	quint64 size = 0;
+};
+
+/**
+ * One answer from one peer; Share::SearchResult.
+ *
+ * A copy, for the same reason as everything else here: the session deletes the
+ * result it hands a listener on the line after the call.
+ *
+ * There is no total-slot count of its own. The result carries only how many slots
+ * are free, and what the peer advertises overall is in 'user' already.
+ */
+struct SearchHit {
+	/** The hub it arrived on, in canonical form, as ChatMessage::hubUrl is. */
+	QString hubUrl;
+
+	/**
+	 * Which search this answers.
+	 *
+	 * Empty on NMDC, which has nowhere to put one - so a hit without a token is
+	 * not an error, and has to be matched to a search by what it contains
+	 * instead.
+	 */
+	QString token;
+
+	/** The name as the peer gave it, which for ADC is a path within their share. */
+	QString name;
+
+	/** The TTH root in base32, or empty when the result carried none. */
+	QString tth;
+
+	quint64 size = 0;
+	quint32 freeSlots = 0;
+
+	/**
+	 * The reply is a folder rather than a file.
+	 *
+	 * A search asks for both, and a hub answers for both. What marks a folder is a
+	 * trailing separator on the name, which is the only thing distinguishing the
+	 * two: there is no field for it, and a folder's reported size is the sum of
+	 * what is under it.
+	 *
+	 * Nothing can be downloaded from one - the queue holds files - so it is a lead
+	 * to whoever has it rather than something to act on directly.
+	 */
+	bool directory = false;
+
+	/** Who has it. UserInfo::sourceId is what a download has to ask for. */
+	UserInfo user;
 };
 
 /**
@@ -318,5 +417,6 @@ Q_DECLARE_METATYPE(Qdc::TransferInfo)
 Q_DECLARE_METATYPE(Qdc::QueueEntry)
 Q_DECLARE_METATYPE(Qdc::RemoteFileInfo)
 Q_DECLARE_METATYPE(Qdc::RemoteDirInfo)
+Q_DECLARE_METATYPE(Qdc::SearchHit)
 
 #endif // HAVE_QUICKDC_QUI_CORETYPES_H

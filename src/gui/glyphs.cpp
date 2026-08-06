@@ -254,6 +254,76 @@ QPainterPath people_path()
 	return path;
 }
 
+/**
+ * A magnifier: a ring, and a handle running down from its lower right.
+ *
+ * The handle starts inside the ring rather than at its edge, so that the join is
+ * covered by the ring's own stroke. Butted against the outside instead, the two
+ * strokes meet at a tangent and leave a notch at small sizes.
+ */
+QPainterPath search_path()
+{
+	constexpr qreal RADIUS = 6.1;
+	const QPointF centre(10.3, 10.3);
+
+	QPainterPath ring;
+	ring.addEllipse(centre, RADIUS, RADIUS);
+
+	QPainterPathStroker hoop;
+	hoop.setWidth(2.2);
+
+	/*
+	 * Down the diagonal, which is where the ring's own centre line points, so the
+	 * start is one component of a 45 degree offset in from the rim.
+	 */
+	constexpr qreal DIAGONAL = 0.70710678;
+	const qreal inset = (RADIUS - 1.0) * DIAGONAL;
+
+	QPainterPath handle;
+	handle.moveTo(centre.x() + inset, centre.y() + inset);
+	handle.lineTo(19.3, 19.3);
+
+	QPainterPathStroker grip;
+	grip.setWidth(2.5);
+	grip.setCapStyle(Qt::RoundCap);
+
+	QPainterPath path;
+	path.addPath(hoop.createStroke(ring).united(grip.createStroke(handle)));
+
+	return path;
+}
+
+/**
+ * One figure: a head, and shoulders under it.
+ *
+ * The same construction as the front figure of people_path(), which is what makes a
+ * row in the user list and the button that reveals it read as the same thing.
+ */
+QPainterPath person_path()
+{
+	QPainterPath path;
+	path.addEllipse(QPointF(12.0, 8.0), 3.9, 3.9);
+	path.addRoundedRect(QRectF(5.4, 13.4, 13.2, 7.4), 3.6, 3.6);
+
+	return path;
+}
+
+/**
+ * The same figure as an outline.
+ *
+ * Stroked from the filled shape rather than drawn as a smaller figure inside a
+ * larger one, for the reason given at star_outline_path(): scaling a shape down
+ * moves its edges by different amounts and the gap comes out uneven.
+ */
+QPainterPath person_outline_path()
+{
+	QPainterPathStroker stroker;
+	stroker.setWidth(1.7);
+	stroker.setJoinStyle(Qt::RoundJoin);
+
+	return stroker.createStroke(person_path());
+}
+
 /** A cross, for leaving a conversation. */
 QPainterPath close_path()
 {
@@ -276,6 +346,7 @@ QPainterPath glyph_path(Qdc::Glyph glyph)
 	{
 		case Qdc::Glyph::Home:        return home_path();
 		case Qdc::Glyph::Hubs:        return hubs_path();
+		case Qdc::Glyph::Search:      return search_path();
 		case Qdc::Glyph::Transfers:   return transfers_path();
 		case Qdc::Glyph::Settings:    return settings_path();
 		case Qdc::Glyph::Star:        return star_path();
@@ -284,6 +355,8 @@ QPainterPath glyph_path(Qdc::Glyph glyph)
 		case Qdc::Glyph::LockOpen:    return lock_path(false);
 		case Qdc::Glyph::People:      return people_path();
 		case Qdc::Glyph::Close:       return close_path();
+		case Qdc::Glyph::Person:      return person_path();
+		case Qdc::Glyph::PersonOutline: return person_outline_path();
 	}
 
 	return QPainterPath();

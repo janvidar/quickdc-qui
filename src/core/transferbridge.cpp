@@ -8,6 +8,8 @@
 
 #include <api/core.h>
 #include <api/transfers.h>
+#include <network/downloadqueue.h>
+#include <network/filesource.h>
 #include <samurai/io/file.h>
 
 #include <QByteArray>
@@ -123,6 +125,13 @@ Qdc::QueueEntry convert(const QuickDC::QueueStatus& status)
 
 namespace Qdc {
 
+/** Everything one pass over the core gathers, carried back in one piece. */
+struct Snapshot {
+	QVector<TransferInfo> active;
+	QVector<QueueEntry> queued;
+	quint32 count = 0;
+};
+
 /**
  * The core side half of a TransferBridge.
  *
@@ -134,8 +143,9 @@ namespace Qdc {
 class TransferReporter final : public QuickDC::TransferListener {
 
 public:
-	explicit TransferReporter(TransferBridge* bridge)
+	TransferReporter(TransferBridge* bridge, std::shared_ptr<Relay> relay)
 		: m_bridge(bridge)
+		, m_relay(std::move(relay))
 	{
 	}
 
@@ -165,20 +175,25 @@ private:
 	/**
 	 * Queued explicitly, for the same reason as in HubBridge: this only ever
 	 * runs on the core thread, where an inline call would mean emitting straight
-	 * into a view. The bridge is the context object, so a bridge that has gone
-	 * away takes its pending events with it.
+	 * into a view. Addressed to the relay, which a bridge detaches on its way out,
+	 * so an event in flight when that happens becomes nothing.
 	 */
 	void report(QuickDC::Transfer* transfer, Signal signal)
 	{
 		const TransferInfo info = convert(transfer);
 		TransferBridge* bridge = m_bridge;
 
-		QMetaObject::invokeMethod(bridge, [bridge, signal, info] {
-			(bridge->*signal)(info);
-		}, Qt::QueuedConnection);
+		std::shared_ptr<Relay> relay = m_relay;
+		Relay* target = relay.get();
+
+		QMetaObject::invokeMethod(target,
+			[relay = std::move(relay), bridge, signal, info] {
+				if (!relay->detached()) (bridge->*signal)(info);
+			}, Qt::QueuedConnection);
 	}
 
 	TransferBridge* m_bridge;
+	std::shared_ptr<Relay> m_relay;
 };
 
 /**
@@ -191,8 +206,9 @@ private:
 class QueueReporter final : public QuickDC::QueueListener {
 
 public:
-	explicit QueueReporter(TransferBridge* bridge)
+	QueueReporter(TransferBridge* bridge, std::shared_ptr<Relay> relay)
 		: m_bridge(bridge)
+		, m_relay(std::move(relay))
 	{
 	}
 
@@ -218,9 +234,14 @@ public:
 
 		TransferBridge* bridge = m_bridge;
 
-		QMetaObject::invokeMethod(bridge, [bridge, filename, size, tth] {
-			emit bridge->downloadCompleted(filename, size, tth);
-		}, Qt::QueuedConnection);
+		std::shared_ptr<Relay> relay = m_relay;
+		Relay* target = relay.get();
+
+		QMetaObject::invokeMethod(target,
+			[relay = std::move(relay), bridge, filename, size, tth] {
+				if (!relay->detached())
+					emit bridge->downloadCompleted(filename, size, tth);
+			}, Qt::QueuedConnection);
 	}
 
 private:
@@ -228,13 +249,19 @@ private:
 	{
 		TransferBridge* bridge = m_bridge;
 
-		QMetaObject::invokeMethod(bridge, [bridge] {
+		std::shared_ptr<Relay> relay = m_relay;
+		Relay* target = relay.get();
+
+		QMetaObject::invokeMethod(target, [relay = std::move(relay), bridge] {
+			if (relay->detached()) return;
+
 			emit bridge->queueChanged();
 			bridge->refresh();
 		}, Qt::QueuedConnection);
 	}
 
 	TransferBridge* m_bridge;
+	std::shared_ptr<Relay> m_relay;
 };
 
 }
@@ -242,46 +269,60 @@ private:
 Qdc::TransferBridge::TransferBridge(CoreThread* thread, QObject* parent)
 	: QObject(parent)
 	, m_thread(thread)
+	, m_reporters(std::make_shared<ReporterBox>())
+	, m_relay(Relay::create())
 {
 	if (!m_thread) return;
 
-	m_thread->invoke([this] {
-		QuickDC::Core* core = m_thread->core();
+	/*
+	 * Posted rather than waited on. Registering a listener happens between turns of
+	 * the reactor, and the window is built before anything has been transferred, so
+	 * there is nothing to miss by not waiting - and a great deal to lose by waiting,
+	 * since the wait is a whole core turn at whatever the core is busy with.
+	 */
+	m_thread->post([holder = m_reporters, relay = m_relay, thread = m_thread,
+	                bridge = this] {
+		QuickDC::Core* core = thread->core();
 		if (!core || !core->transfers) return;
 
-		m_reporter = new TransferReporter(this);
-		core->transfers->addListener(m_reporter);
+		holder->transfers = new TransferReporter(bridge, relay);
+		core->transfers->addListener(holder->transfers);
 
 		/* A core built without a queue file has no queue to listen to. */
 		if (!core->queue) return;
 
-		m_queueReporter = new QueueReporter(this);
-		core->queue->addListener(m_queueReporter);
+		holder->queue = new QueueReporter(bridge, relay);
+		core->queue->addListener(holder->queue);
 	});
 }
 
 Qdc::TransferBridge::~TransferBridge()
 {
-	if (!m_thread || (!m_reporter && !m_queueReporter)) return;
+	/* Nothing in flight has anywhere to report to from here on. */
+	m_relay->detach();
+
+	if (!m_thread) return;
 
 	/*
-	 * Blocking: the manager holds a raw pointer to the reporter and would call
-	 * it on the next transfer event. Unregistering has to be finished before
-	 * this object goes.
+	 * Posted, and no longer blocking. The manager holds a raw pointer to each
+	 * reporter and would call it on the next transfer event, but the call goes to
+	 * the relay rather than to this object and the relay is detached above - so an
+	 * event landing between here and the job running has nowhere to go.
 	 */
-	m_thread->invoke([this] {
-		QuickDC::Core* core = m_thread->core();
-		if (core && core->transfers)
-			core->transfers->removeListener(m_reporter);
+	m_thread->post([holder = m_reporters, thread = m_thread] {
+		QuickDC::Core* core = thread->core();
 
-		if (core && core->queue && m_queueReporter)
-			core->queue->removeListener(m_queueReporter);
+		if (core && core->transfers && holder->transfers)
+			core->transfers->removeListener(holder->transfers);
 
-		delete m_reporter;
-		m_reporter = nullptr;
+		if (core && core->queue && holder->queue)
+			core->queue->removeListener(holder->queue);
 
-		delete m_queueReporter;
-		m_queueReporter = nullptr;
+		delete holder->transfers;
+		holder->transfers = nullptr;
+
+		delete holder->queue;
+		holder->queue = nullptr;
 	});
 }
 
@@ -567,12 +608,13 @@ void Qdc::TransferBridge::refresh()
 	 * rule every event here follows: copy what the core lent us, then hand the copy
 	 * to the thread that will draw it.
 	 */
-	m_thread->post([this] {
-		QuickDC::Core* core = m_thread->core();
+	m_thread->call(m_relay, [thread = m_thread] {
+		QuickDC::Core* core = thread->core();
 
-		QVector<TransferInfo> active;
-		QVector<QueueEntry> queued;
-		quint32 count = 0;
+		Snapshot taken;
+		QVector<TransferInfo>& active = taken.active;
+		QVector<QueueEntry>& queued = taken.queued;
+		quint32& count = taken.count;
 
 		if (core && core->transfers)
 		{
@@ -595,26 +637,26 @@ void Qdc::TransferBridge::refresh()
 			count = static_cast<quint32>(core->queue->countActiveTransfers());
 		}
 
-		QMetaObject::invokeMethod(this, [this, active, queued, count] {
-			/*
-			 * Folded here rather than in each view, so that all of them are handed
-			 * the same rows and none has to know that one file arrives in several
-			 * pieces. On this side of the hand-over rather than the core's, because
-			 * holding a row steady means reading the one before it - and the rows
-			 * belong to this thread.
-			 */
-			const int since = m_taken.isValid()
-				? static_cast<int>(m_taken.restart()) : 0;
+		return taken;
+	}, [this](const Snapshot& taken) {
+		/*
+		 * Folded here rather than in each view, so that all of them are handed
+		 * the same rows and none has to know that one file arrives in several
+		 * pieces. On this side of the hand-over rather than the core's, because
+		 * holding a row steady means reading the one before it - and the rows
+		 * belong to this thread.
+		 */
+		const int since = m_taken.isValid()
+			? static_cast<int>(m_taken.restart()) : 0;
 
-			if (!m_taken.isValid()) m_taken.start();
+		if (!m_taken.isValid()) m_taken.start();
 
-			m_active = foldByFile(active, queued, m_active, since);
-			m_queue = markTransferring(queued, m_active);
-			m_activeCount = count;
-			m_reading = false;
+		m_active = foldByFile(taken.active, taken.queued, m_active, since);
+		m_queue = markTransferring(taken.queued, m_active);
+		m_activeCount = taken.count;
+		m_reading = false;
 
-			emit snapshotChanged();
-		}, Qt::QueuedConnection);
+		emit snapshotChanged();
 	});
 }
 
@@ -693,5 +735,42 @@ void Qdc::TransferBridge::enqueue(const QString& filename, const QString& tth,
 		                 hash.isEmpty() ? nullptr : hash.constData(), size);
 
 		/* The queue's own event reports the new entry, which refreshes the figures. */
+	});
+}
+
+void Qdc::TransferBridge::enqueue(const QString& filename, const Qdc::SearchHit& hit)
+{
+	if (!m_thread || filename.isEmpty()) return;
+
+	/* Nowhere to download from, which is the one thing this overload is for. */
+	if (hit.hubUrl.isEmpty() || hit.user.sourceId.isEmpty()) return;
+
+	const QByteArray name = filename.toUtf8();
+	const QByteArray hash = hit.tth.toUtf8();
+	const QByteArray hub = hit.hubUrl.toUtf8();
+	const QByteArray source = hit.user.sourceId.toUtf8();
+	const QByteArray remote = hit.name.toUtf8();
+	const quint64 size = hit.size;
+
+	m_thread->post([this, name, hash, hub, source, remote, size] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->queue) return;
+
+		QuickDC::QueueFile* file = core->queue->add(
+			name.constData(), hash.isEmpty() ? nullptr : hash.constData(), size);
+
+		if (!file) return;
+
+		/*
+		 * The same shape the sessions use when a reply matches something already
+		 * queued, in ADC::HubSession::onSearchResult(): a source names the hub, the
+		 * user, and what the file is called on their side, and one we already have
+		 * is left alone rather than added twice.
+		 */
+		if (file->findSource(hub.constData(), source.constData())) return;
+
+		file->addSource(new QuickDC::FileSource(
+			hub.constData(), source.constData(),
+			remote.isEmpty() ? nullptr : remote.constData()));
 	});
 }

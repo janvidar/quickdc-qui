@@ -29,6 +29,10 @@ add_library(qdcbridge STATIC
     mediabridge.h
     recenthubs.cpp
     recenthubs.h
+    relay.cpp
+    relay.h
+    searchbridge.cpp
+    searchbridge.h
     transferbridge.cpp
     transferbridge.h)
 

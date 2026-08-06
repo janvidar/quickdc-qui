@@ -13,6 +13,7 @@
 #include <gui/chatmodel.h>
 #include <gui/chatpane.h>
 #include <gui/composer.h>
+#include <gui/connectionbar.h>
 #include <gui/filelistview.h>
 #include <gui/hubheader.h>
 #include <gui/hubpane.h>
@@ -29,8 +30,12 @@
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QImage>
+#include <QIcon>
 #include <QImageReader>
+#include <QLineEdit>
 #include <QPainter>
+#include <QPushButton>
+#include <QTabWidget>
 #include <QTextBlock>
 #include <QTextEdit>
 #include <QTextList>
@@ -70,6 +75,8 @@ private slots:
 	void userModelReplacesOnUpdate();
 	void userModelForgetsUsersWhoLeave();
 	void userModelListsAdcUsersOnce();
+	void userModelDrawsAnAwayUserAsAnOutline();
+	void userModelColoursAnOperatorApartEvenWhenAway();
 	void chatFeedGivesMultiLineMessagesMoreHeight();
 	void chatFeedGivesAMarkdownMessageRoomForItsBlocks();
 	void chatFeedForgetsItsLayoutsWhenRowsMove();
@@ -85,6 +92,12 @@ private slots:
 
 	void urlNormalisationFillsInSchemeAndPort();
 	void noHubCarriesRichTextUntilItAnnouncesTheExtension();
+
+	void settingsUrlDropsWhatDoesNotNameTheHub();
+	void aHubKeepsAnIdentityOfItsOwn();
+	void aKeyprintInTheAddressIsStillTheSameHubsSettings();
+	void clearingAHubsIdentityHandsItBackToTheGeneralOne();
+	void aUserOffersMoreThanAConversationOnASecondClick();
 
 	void composerFlagsOnlyWhatItActuallyFormatted();
 	void composerSerializesEachConstructToMarkdown();
@@ -103,6 +116,8 @@ private slots:
 
 	void openingTheSameHubTwiceReusesThePane();
 	void privateMessagesOpenAConversation();
+	void aConversationShutsWhenTheOtherPartyLeaves();
+	void aConversationFollowsThemBackUnderANewNickname();
 	void unreadCountsReachTheRailBadge();
 	void aRichTextFlagReachesThePane();
 	void hubPasswordIsAskedForOnce();
@@ -115,6 +130,9 @@ private slots:
 	void theAttachButtonAsksForAFile();
 	void everyControlLooksDisabledWhenItIs();
 	void anEchoOfOurOwnPrivateMessageOpensTheirConversation();
+	void theConnectionBandOnlyShowsWhileAHubCannotBeUsed();
+	void theConnectionBandCountsTheWaitDownAndForgetsIt();
+	void aScheduledReconnectReachesTheBand();
 
 private:
 	Qdc::UserInfo user(const QString& nick, bool op = false) const;
@@ -308,6 +326,118 @@ void TestHubs::userModelForgetsUsersWhoLeave()
 
 	model.clear();
 	QCOMPARE(model.count(), 0);
+}
+
+void TestHubs::userModelDrawsAnAwayUserAsAnOutline()
+{
+	Qdc::UserModel model;
+
+	Qdc::UserInfo here;
+	here.id = QStringLiteral("AAAB");
+	here.nick = QStringLiteral("alice");
+
+	Qdc::UserInfo gone;
+	gone.id = QStringLiteral("AAAC");
+	gone.nick = QStringLiteral("bob");
+	gone.away = true;
+
+	model.upsert(here);
+	model.upsert(gone);
+
+	const QModelIndex first = model.index(0);
+	const QModelIndex second = model.index(1);
+
+	QCOMPARE(model.at(0).nick, QStringLiteral("alice"));
+	QCOMPARE(model.at(1).nick, QStringLiteral("bob"));
+
+	const QIcon present = qvariant_cast<QIcon>(model.data(first, Qt::DecorationRole));
+	const QIcon away = qvariant_cast<QIcon>(model.data(second, Qt::DecorationRole));
+
+	QVERIFY(!present.isNull());
+	QVERIFY(!away.isNull());
+
+	/*
+	 * Two different figures, not two colourings of one: the filled form and the
+	 * outline are what makes the two states tellable apart by somebody who cannot
+	 * distinguish the inks. Compared as images, which is the only thing a QIcon will
+	 * answer about what it looks like.
+	 */
+	const QSize size(13, 13);
+	QVERIFY(present.pixmap(size).toImage() != away.pixmap(size).toImage());
+
+	/* And it is said in words as well as drawn. */
+	QVERIFY(model.data(second, Qt::ToolTipRole).toString().contains(
+		QStringLiteral("Away")));
+
+	QVERIFY(!model.data(first, Qt::ToolTipRole).toString().contains(
+		QStringLiteral("Away")));
+
+	/* Coming back is an update like any other, and the row redraws as present. */
+	gone.away = false;
+	model.upsert(gone);
+
+	QVERIFY(model.data(second, Qt::DecorationRole).isValid());
+	QVERIFY(!model.data(second, Qt::ToolTipRole).toString().contains(
+		QStringLiteral("Away")));
+}
+
+void TestHubs::userModelColoursAnOperatorApartEvenWhenAway()
+{
+	Qdc::UserModel model;
+
+	const auto figureFor = [](bool op, bool away) {
+		Qdc::UserModel one;
+
+		Qdc::UserInfo user;
+		user.id = QStringLiteral("AAAB");
+		user.nick = QStringLiteral("someone");
+		user.op = op;
+		user.away = away;
+
+		one.upsert(user);
+
+		return qvariant_cast<QIcon>(one.data(one.index(0), Qt::DecorationRole))
+			.pixmap(QSize(13, 13)).toImage();
+	};
+
+	const QImage user = figureFor(false, false);
+	const QImage op = figureFor(true, false);
+
+	QVERIFY(!user.isNull());
+	QVERIFY(!op.isNull());
+
+	/* An operator is a different colour from everybody else. */
+	QVERIFY(user != op);
+
+	/*
+	 * And still is when they are away. The shape carries being away and the colour
+	 * carries being an operator, so neither state can hide the other - an away
+	 * operator drawn in a neutral grey would be indistinguishable from anybody else
+	 * who had stepped out.
+	 */
+	const QImage userAway = figureFor(false, true);
+	const QImage opAway = figureFor(true, true);
+
+	QVERIFY(userAway != opAway);
+
+	/* Away is still visibly away for both of them. */
+	QVERIFY(userAway != user);
+	QVERIFY(opAway != op);
+
+	/* And the model puts the operators at the top regardless. */
+	Qdc::UserInfo plain;
+	plain.id = QStringLiteral("AAAC");
+	plain.nick = QStringLiteral("alice");
+
+	Qdc::UserInfo boss;
+	boss.id = QStringLiteral("AAAD");
+	boss.nick = QStringLiteral("zoe");
+	boss.op = true;
+
+	model.upsert(plain);
+	model.upsert(boss);
+
+	QCOMPARE(model.at(0).nick, QStringLiteral("zoe"));
 }
 
 void TestHubs::userModelListsAdcUsersOnce()
@@ -861,6 +991,215 @@ void TestHubs::anOpenHubIsRecordedAndFollowsTheFavouritesStore()
 	QVERIFY(!pane->header()->isFavourite());
 
 	recent.clear();
+}
+
+namespace {
+
+/** The Save button of the per-hub identity form, found by its text. */
+QPushButton* session_save(Qdc::ChatPane* pane)
+{
+	for (QPushButton* button : pane->findChildren<QPushButton*>())
+		if (button->text() == QStringLiteral("Save")) return button;
+
+	return nullptr;
+}
+
+}
+
+void TestHubs::settingsUrlDropsWhatDoesNotNameTheHub()
+{
+	using Qdc::HubBridge;
+
+	const QString bare = QStringLiteral("adcs://adcs.uhub.org:1511");
+
+	/* The keyprint is how a hub is verified, not which hub it is. */
+	QCOMPARE(HubBridge::settingsUrl(bare + QStringLiteral("/?kp=SHA256/ABCDEF")), bare);
+	QCOMPARE(HubBridge::settingsUrl(bare + QStringLiteral("?kp=SHA256/ABCDEF")), bare);
+	QCOMPARE(HubBridge::settingsUrl(bare + QStringLiteral("/")), bare);
+	QCOMPARE(HubBridge::settingsUrl(bare + QStringLiteral("#anchor")), bare);
+	QCOMPARE(HubBridge::settingsUrl(bare), bare);
+
+	/* The scheme and the port are filled in first, as they are for any address. */
+	QCOMPARE(HubBridge::settingsUrl(QStringLiteral("example.org/?kp=x")),
+	         QStringLiteral("dchub://example.org:411"));
+
+	/* An IPv6 literal keeps the colons inside its brackets. */
+	QCOMPARE(HubBridge::settingsUrl(QStringLiteral("adc://[2001:db8::1]:412/?kp=x")),
+	         QStringLiteral("adc://[2001:db8::1]:412"));
+
+	QVERIFY(HubBridge::settingsUrl(QString()).isEmpty());
+}
+
+void TestHubs::aKeyprintInTheAddressIsStillTheSameHubsSettings()
+{
+	using Qdc::ConfigStore;
+
+	Qdc::ConfigBridge config(m_thread);
+
+	const QString bare = QStringLiteral("adc://192.0.2.11:412");
+	const QString withKeyprint = bare + QStringLiteral("/?kp=SHA256/ABCDEFGH");
+
+	/*
+	 * The same hub, reached two ways. Somebody who pastes an address carrying a
+	 * keyprint must not find the nickname they set up for that hub gone - which is
+	 * what happened while the settings were keyed on the address as it was typed.
+	 */
+	{
+		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+		QVERIFY(hubs.openHub(bare));
+
+		Qdc::ChatPane* pane = hubs.currentPane();
+		QVERIFY(pane);
+
+		QLineEdit* nickname =
+			pane->findChild<QLineEdit*>(QStringLiteral("sessionNickname"));
+		QVERIFY(nickname);
+
+		nickname->setText(QStringLiteral("known-here"));
+		emit nickname->textEdited(QStringLiteral("known-here"));
+
+		QPushButton* save = session_save(pane);
+		QVERIFY(save);
+		save->click();
+	}
+
+	/* Opened by the longer address, the form arrives already filled in. */
+	{
+		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+		QVERIFY(hubs.openHub(withKeyprint));
+
+		Qdc::ChatPane* pane = hubs.currentPane();
+		QVERIFY(pane);
+
+		QLineEdit* nickname =
+			pane->findChild<QLineEdit*>(QStringLiteral("sessionNickname"));
+		QVERIFY(nickname);
+
+		QCOMPARE(nickname->text(), QStringLiteral("known-here"));
+	}
+
+	/* And there is one group, under the address without the keyprint. */
+	QCOMPARE(config.getString(ConfigStore::Session, bare, QStringLiteral("Nickname")),
+	         QStringLiteral("known-here"));
+
+	QVERIFY(!config.contains(ConfigStore::Session, withKeyprint,
+	                         QStringLiteral("Nickname")));
+
+	config.remove(ConfigStore::Session, bare, QStringLiteral("Nickname"));
+	config.save(ConfigStore::Session);
+}
+
+void TestHubs::aHubKeepsAnIdentityOfItsOwn()
+{
+	using Qdc::ConfigStore;
+
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+
+	const QString hub = QStringLiteral("adc://192.0.2.7:412");
+	QVERIFY(hubs.openHub(hub));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	QLineEdit* nickname = pane->findChild<QLineEdit*>(QStringLiteral("sessionNickname"));
+	QVERIFY(nickname);
+
+	/*
+	 * Typed rather than set, because setText() is not editing and the form only offers
+	 * to save what somebody actually changed.
+	 */
+	nickname->setText(QStringLiteral("someone-else"));
+	emit nickname->textEdited(QStringLiteral("someone-else"));
+
+	QPushButton* save = session_save(pane);
+	QVERIFY(save);
+	QVERIFY(save->isEnabled());
+
+	save->click();
+
+	/*
+	 * Under the hub's address, which is the group the core reads its identity from
+	 * when it builds a session - so this is the value the next connection uses.
+	 */
+	QCOMPARE(config.getString(ConfigStore::Session, hub, QStringLiteral("Nickname")),
+	         QStringLiteral("someone-else"));
+
+	config.remove(ConfigStore::Session, hub, QStringLiteral("Nickname"));
+	config.save(ConfigStore::Session);
+}
+
+void TestHubs::clearingAHubsIdentityHandsItBackToTheGeneralOne()
+{
+	using Qdc::ConfigStore;
+
+	Qdc::ConfigBridge config(m_thread);
+
+	const QString hub = QStringLiteral("adc://192.0.2.8:412");
+
+	config.setString(ConfigStore::Session, hub, QStringLiteral("Nickname"),
+	                 QStringLiteral("per-hub"));
+	config.save(ConfigStore::Session);
+
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	QVERIFY(hubs.openHub(hub));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	QLineEdit* nickname = pane->findChild<QLineEdit*>(QStringLiteral("sessionNickname"));
+	QVERIFY(nickname);
+
+	/* Loaded from the hub's own group, so the field arrives filled in. */
+	QCOMPARE(nickname->text(), QStringLiteral("per-hub"));
+
+	nickname->clear();
+	emit nickname->textEdited(QString());
+
+	QPushButton* save = session_save(pane);
+	QVERIFY(save);
+	save->click();
+
+	/*
+	 * Gone rather than stored empty, and that distinction is the whole feature: the
+	 * core falls back to the identity in Settings only for a key that is absent, and
+	 * reads one that is present and empty as a nickname of nothing.
+	 */
+	QVERIFY(!config.contains(ConfigStore::Session, hub, QStringLiteral("Nickname")));
+}
+
+void TestHubs::aUserOffersMoreThanAConversationOnASecondClick()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.9:412")));
+
+	Qdc::HubPane* pane = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(pane);
+
+	Qdc::UserInfo user;
+	user.id = QStringLiteral("SID1");
+	user.nick = QStringLiteral("alice");
+	user.sourceId = QStringLiteral("CID-ALICE");
+
+	pane->users()->upsert(user);
+
+	/*
+	 * Browsing opens the same conversation as talking does, on its Files tab - so the
+	 * two menu items differ in where they land rather than in what they open. Driven
+	 * through the signal, since a context menu cannot be clicked from here.
+	 */
+	emit pane->filesRequested(user);
+
+	Qdc::ChatPane* shown = hubs.currentPane();
+	QVERIFY(shown);
+	QVERIFY(shown != pane);
+
+	QTabWidget* tabs = shown->findChild<QTabWidget*>();
+	QVERIFY(tabs);
+
+	QCOMPARE(tabs->tabText(tabs->currentIndex()), QStringLiteral("Files"));
 }
 
 void TestHubs::noHubCarriesRichTextUntilItAnnouncesTheExtension()
@@ -1699,6 +2038,164 @@ void TestHubs::openingTheSameHubTwiceReusesThePane()
 	QCOMPARE(hubs.openHubs().size(), 1);
 }
 
+namespace {
+
+/** An ADC user: a session id that lasts one visit, and a client ID that does not. */
+Qdc::UserInfo adcUser(const QString& sid, const QString& nick, const QString& cid)
+{
+	Qdc::UserInfo who;
+	who.id = sid;
+	who.nick = nick;
+	who.sourceId = cid;
+
+	return who;
+}
+
+/** Bring a freshly opened hub up to the point where a message could be sent. */
+void logIn(Qdc::HubBridge* bridge)
+{
+	emit bridge->netStatusChanged(Qdc::NetStatus::Connected);
+	emit bridge->hubStatusChanged(Qdc::HubStatus::LoggedIn);
+}
+
+/*
+ * The one open conversation. Found among the children rather than through
+ * currentPane(), because a message arriving opens a conversation without moving to
+ * it - reading somebody's message is not the same as being taken to it.
+ */
+Qdc::DmPane* theConversation(Qdc::HubsView& hubs)
+{
+	const QList<Qdc::DmPane*> open = hubs.findChildren<Qdc::DmPane*>();
+	return open.size() == 1 ? open.first() : nullptr;
+}
+
+}
+
+void TestHubs::aConversationShutsWhenTheOtherPartyLeaves()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.20:412")));
+
+	Qdc::ChatPane* hub = hubs.currentPane();
+	QVERIFY(hub);
+
+	Qdc::HubBridge* bridge = hub->hub();
+	QVERIFY(bridge);
+
+	const Qdc::UserInfo alice =
+		adcUser(QStringLiteral("AAAB"), QStringLiteral("alice"),
+		        QStringLiteral("CID-ALICE"));
+
+	emit bridge->userUpdated(alice);
+
+	Qdc::ChatMessage hello;
+	hello.from = alice;
+	hello.context = alice.id;
+	hello.privateMessage = true;
+	hello.text = QStringLiteral("are you there?");
+	emit bridge->chatReceived(hello);
+
+	Qdc::DmPane* dm = theConversation(hubs);
+	QVERIFY(dm);
+
+	/*
+	 * Logged in only now: a pane reads the connection off the bridge when it is
+	 * built, and the bridge only moves on events from the core - so a conversation
+	 * opened after the fact would never hear the status this test is about.
+	 */
+	logIn(bridge);
+
+	Qdc::Composer* composer = dm->findChild<Qdc::Composer*>();
+	QVERIFY(composer);
+	QVERIFY(composer->isSendable());
+
+	/*
+	 * A message goes to one person by way of the hub, so a hub that is up and has
+	 * let us in is not enough: it cannot relay anything to somebody who has gone.
+	 */
+	emit bridge->userLeft(alice, QString(), true);
+
+	QVERIFY(!composer->isSendable());
+
+	/* And the band says which of the two reasons it is. */
+	Qdc::ConnectionBar* band = dm->findChild<Qdc::ConnectionBar*>();
+	QVERIFY(band);
+	QVERIFY2(band->text().contains(QStringLiteral("alice")), qPrintable(band->text()));
+
+	/* The hub going away as well does not un-say it. */
+	emit bridge->netStatusChanged(Qdc::NetStatus::Disconnected);
+	QVERIFY(!composer->isSendable());
+}
+
+void TestHubs::aConversationFollowsThemBackUnderANewNickname()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.21:412")));
+
+	Qdc::ChatPane* hub = hubs.currentPane();
+	QVERIFY(hub);
+
+	Qdc::HubBridge* bridge = hub->hub();
+	QVERIFY(bridge);
+
+	const QString cid = QStringLiteral("CID-ALICE");
+	const Qdc::UserInfo before = adcUser(QStringLiteral("AAAB"),
+	                                     QStringLiteral("alice"), cid);
+
+	emit bridge->userUpdated(before);
+
+	Qdc::ChatMessage hello;
+	hello.from = before;
+	hello.context = before.id;
+	hello.privateMessage = true;
+	hello.text = QStringLiteral("back shortly");
+	emit bridge->chatReceived(hello);
+
+	const int panes = hubs.paneCount();
+	Qdc::DmPane* dm = theConversation(hubs);
+	QVERIFY(dm);
+
+	/* As above: the conversation has to exist before the status reaches it. */
+	logIn(bridge);
+
+	Qdc::Composer* composer = dm->findChild<Qdc::Composer*>();
+	QVERIFY(composer);
+	QVERIFY(composer->isSendable());
+
+	emit bridge->userLeft(before, QString(), true);
+	QVERIFY(!composer->isSendable());
+
+	/*
+	 * The same person back: a new session id, a new nickname, the client ID they
+	 * had before. That last one is the whole of what says it is them.
+	 */
+	const Qdc::UserInfo after = adcUser(QStringLiteral("AAAC"),
+	                                    QStringLiteral("alice_away"), cid);
+
+	emit bridge->userUpdated(after);
+
+	/* The conversation carried on rather than a second one opening beside it. */
+	QCOMPARE(hubs.paneCount(), panes);
+	QCOMPARE(theConversation(hubs), dm);
+
+	/* Under their new name, and writable again. */
+	QCOMPARE(dm->paneTitle(), QStringLiteral("alice_away"));
+	QVERIFY(composer->isSendable());
+
+	/*
+	 * And a message from the new session lands in it, which is what the re-keying is
+	 * for: the conversation was filed under the session id they no longer have.
+	 */
+	Qdc::ChatMessage again;
+	again.from = after;
+	again.context = after.id;
+	again.privateMessage = true;
+	again.text = QStringLiteral("back now");
+	emit bridge->chatReceived(again);
+
+	QCOMPARE(hubs.paneCount(), panes);
+}
+
 void TestHubs::privateMessagesOpenAConversation()
 {
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
@@ -1871,7 +2368,7 @@ void TestHubs::hubPasswordIsAskedForOnce()
 	QCOMPARE(declined.size(), 1);
 
 	/* And the view is still working afterwards. */
-	QVERIFY(m_thread->invoke([] { }));
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
 }
 
 QTEST_MAIN(TestHubs)
@@ -1934,7 +2431,7 @@ void TestHubs::loopback()
 	Qdc::ConfigBridge config(m_thread);
 	config.setString(Qdc::ConfigStore::Application, QStringLiteral("User"),
 	                 QStringLiteral("Nickname"), nick);
-	QVERIFY(config.save(Qdc::ConfigStore::Application));
+	config.save(Qdc::ConfigStore::Application);
 
 	Qdc::HubBridge hub(m_thread, url);
 
@@ -2466,6 +2963,113 @@ void TestHubs::anEchoOfOurOwnPrivateMessageOpensTheirConversation()
 	emit bridge->chatReceived(reply);
 
 	QCOMPARE(hubs.paneCount(), 2);
+}
+
+void TestHubs::theConnectionBandOnlyShowsWhileAHubCannotBeUsed()
+{
+	/*
+	 * Driven directly rather than through a hub: every state the band has to draw is
+	 * one a real connection passes through in its own time, and half of them cannot
+	 * be reached at all without a hub to refuse us.
+	 */
+	Qdc::ConnectionBar bar;
+
+	QVERIFY(bar.isHidden());
+
+	bar.setStatus(Qdc::NetStatus::Lookup, Qdc::HubStatus::None);
+	QVERIFY(!bar.isHidden());
+	QVERIFY(!bar.text().isEmpty());
+
+	/* Reachable, but not yet admitted - which is not the same as being able to talk. */
+	bar.setStatus(Qdc::NetStatus::TlsConnected, Qdc::HubStatus::Login);
+	QVERIFY(!bar.isHidden());
+
+	bar.setStatus(Qdc::NetStatus::TlsConnected, Qdc::HubStatus::Password);
+	QVERIFY(!bar.isHidden());
+
+	/*
+	 * The one state with no band. It is what a hub looks like for all the time it is
+	 * working, so anything left showing here is showing for ever.
+	 */
+	bar.setStatus(Qdc::NetStatus::TlsConnected, Qdc::HubStatus::LoggedIn);
+	QVERIFY(bar.isHidden());
+	QVERIFY(bar.text().isEmpty());
+
+	bar.setStatus(Qdc::NetStatus::Disconnected, Qdc::HubStatus::None);
+	QVERIFY(!bar.isHidden());
+	QVERIFY(!bar.text().isEmpty());
+}
+
+void TestHubs::theConnectionBandCountsTheWaitDownAndForgetsIt()
+{
+	Qdc::ConnectionBar bar;
+
+	bar.setStatus(Qdc::NetStatus::Disconnected, Qdc::HubStatus::None);
+	const QString bare = bar.text();
+	QVERIFY(!bare.isEmpty());
+
+	/* Nothing pending says nothing about a wait, rather than a wait of no seconds. */
+	bar.setReconnectIn(-1);
+	QCOMPARE(bar.text(), bare);
+
+	bar.setReconnectIn(2);
+	const QString waiting = bar.text();
+	QVERIFY(waiting.contains(QStringLiteral("2")));
+	QVERIFY(waiting.length() > bare.length());
+
+	/*
+	 * The point of the counter: a second later it says something else. A number
+	 * stated once and left alone reads as current when it is not, which is the one
+	 * thing being asked of it.
+	 */
+	QTest::qWait(1200);
+	QVERIFY(bar.text() != waiting);
+	QVERIFY(bar.text().contains(QStringLiteral("1")));
+
+	/*
+	 * The attempt reports itself, and that retires the wait. Without this the band
+	 * would go on offering a countdown beside a hub that is connecting.
+	 */
+	bar.setReconnectIn(30);
+	QVERIFY(bar.text().contains(QStringLiteral("30")));
+
+	bar.setStatus(Qdc::NetStatus::Connecting, Qdc::HubStatus::None);
+	QVERIFY(!bar.text().contains(QStringLiteral("30")));
+
+	/*
+	 * A login state arriving on its own must not: it says nothing about the network,
+	 * and a countdown it cancelled would be one the hub is still waiting out.
+	 */
+	bar.setStatus(Qdc::NetStatus::Disconnected, Qdc::HubStatus::None);
+	bar.setReconnectIn(40);
+	bar.setStatus(Qdc::NetStatus::Disconnected, Qdc::HubStatus::Login);
+	QVERIFY(bar.text().contains(QStringLiteral("40")));
+}
+
+void TestHubs::aScheduledReconnectReachesTheBand()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	Qdc::HubBridge* bridge = pane->hub();
+	QVERIFY(bridge);
+
+	Qdc::ConnectionBar* bar = pane->findChild<Qdc::ConnectionBar*>();
+	QVERIFY(bar);
+
+	/*
+	 * Emitted in the order the core reports them - the status that ended the session,
+	 * then what happens next - because the band retires a wait on a change of status
+	 * and the other order would retire this one immediately.
+	 */
+	emit bridge->netStatusChanged(Qdc::NetStatus::ErrorConnectionRefused);
+	emit bridge->reconnectScheduled(25);
+
+	QVERIFY(!bar->isHidden());
+	QVERIFY(bar->text().contains(QStringLiteral("25")));
 }
 
 #include "tst_hubs.moc"

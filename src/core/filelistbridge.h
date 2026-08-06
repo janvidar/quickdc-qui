@@ -6,10 +6,13 @@
 #define HAVE_QUICKDC_QUI_FILELISTBRIDGE_H
 
 #include "coretypes.h"
+#include "relay.h"
 
 #include <QList>
 #include <QObject>
 #include <QString>
+
+#include <memory>
 
 class QTimer;
 
@@ -37,6 +40,7 @@ class FilelistBridge final : public QObject {
 
 public:
 	explicit FilelistBridge(CoreThread* thread, QObject* parent = nullptr);
+	~FilelistBridge() override;
 
 	/**
 	 * Ask for a user's file list.
@@ -85,8 +89,20 @@ private:
 	};
 
 	CoreThread* m_thread;
+
+	/** Where a reply from the core lands; see Qdc::Relay. */
+	std::shared_ptr<Relay> m_relay;
+
 	QTimer* m_timer;
 	QList<Pending> m_pending;
+
+	/**
+	 * A pass is out with the core and has not answered yet.
+	 *
+	 * Without it a core that is busy for longer than the interval collects a pass
+	 * per tick, all of them asking the same question.
+	 */
+	bool m_polling = false;
 };
 
 }

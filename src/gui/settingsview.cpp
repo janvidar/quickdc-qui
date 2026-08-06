@@ -13,7 +13,6 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFormLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
@@ -23,6 +22,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -69,6 +69,7 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 	: View(parent)
 	, m_config(config)
 	, m_shares(shares)
+	, m_tabs(new QTabWidget(this))
 	, m_nickname(new QLineEdit(this))
 	, m_description(new QLineEdit(this))
 	, m_email(new QLineEdit(this))
@@ -89,21 +90,13 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 	, m_revert(new QPushButton(tr("Revert"), this))
 	, m_status(new QLabel(this))
 {
-	QWidget* page = new QWidget(this);
-
-	QVBoxLayout* stacked = new QVBoxLayout(page);
-	stacked->setContentsMargins(16, 16, 16, 16);
-	stacked->setSpacing(14);
-	stacked->addWidget(buildIdentity());
-	stacked->addWidget(buildLimits());
-	stacked->addWidget(buildDirectories());
-	stacked->addWidget(buildAppearance());
-	stacked->addStretch(1);
-
-	QScrollArea* scroll = new QScrollArea(this);
-	scroll->setWidget(page);
-	scroll->setWidgetResizable(true);
-	scroll->setFrameShape(QFrame::NoFrame);
+	m_tabs->setDocumentMode(true);
+	m_tabs->addTab(makePage(buildIdentity()), tr("Identity"));
+	m_tabs->addTab(makePage(buildConnection()), tr("Connection"));
+	m_tabs->addTab(makePage(buildTransfers()), tr("Transfers"));
+	m_tabs->addTab(makePage(buildSharing()), tr("Sharing"));
+	m_tabs->addTab(makePage(buildChat()), tr("Chat"));
+	m_tabs->addTab(makePage(buildAppearance()), tr("Appearance"));
 
 	m_status->setContentsMargins(4, 0, 4, 0);
 	m_status->setObjectName(QStringLiteral("mutedText"));
@@ -117,7 +110,7 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 	QVBoxLayout* layout = new QVBoxLayout(this);
 	layout->setContentsMargins(0, 0, 0, 0);
 	layout->setSpacing(0);
-	layout->addWidget(scroll, 1);
+	layout->addWidget(m_tabs, 1);
 	layout->addLayout(buttons);
 
 	connect(m_save, &QPushButton::clicked, this, [this] { save(); });
@@ -125,12 +118,17 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 
 	if (!m_config)
 	{
-		page->setEnabled(false);
+		m_tabs->setEnabled(false);
 		m_save->setEnabled(false);
 		m_revert->setEnabled(false);
 		m_status->setText(tr("The configuration is not available."));
 		return;
 	}
+
+	connect(m_config, &ConfigBridge::saveFailed, this, [this](ConfigStore store) {
+		if (store == ConfigStore::Application)
+			m_status->setText(tr("The configuration could not be written."));
+	});
 
 	load();
 }
@@ -159,9 +157,22 @@ QLabel* Qdc::SettingsView::makeNote(const QString& text)
 	return note;
 }
 
+QWidget* Qdc::SettingsView::makePage(QWidget* page)
+{
+	if (QLayout* form = page->layout())
+		form->setContentsMargins(16, 16, 16, 16);
+
+	QScrollArea* scroll = new QScrollArea(this);
+	scroll->setWidget(page);
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+
+	return scroll;
+}
+
 QWidget* Qdc::SettingsView::buildIdentity()
 {
-	QGroupBox* group = new QGroupBox(tr("Identity"), this);
+	QWidget* page = new QWidget(this);
 
 	m_nickname->setMaxLength(63);
 	m_nickname->setPlaceholderText(tr("How other users see you"));
@@ -175,6 +186,27 @@ QWidget* Qdc::SettingsView::buildIdentity()
 	mono.setFamily(QStringLiteral("monospace"));
 	m_clientId->setFont(mono);
 
+	QFormLayout* form = new QFormLayout(page);
+	form->addRow(tr("Nickname"), m_nickname);
+	form->addRow(tr("Description"), m_description);
+	form->addRow(tr("E-mail"), m_email);
+	form->addRow(tr("Client ID"), m_clientId);
+
+	form->addRow(makeNote(tr(
+		"The client ID is derived from a private key and identifies this "
+		"installation.")));
+
+	connect(m_nickname, &QLineEdit::textEdited, this, &SettingsView::markModified);
+	connect(m_description, &QLineEdit::textEdited, this, &SettingsView::markModified);
+	connect(m_email, &QLineEdit::textEdited, this, &SettingsView::markModified);
+
+	return page;
+}
+
+QWidget* Qdc::SettingsView::buildConnection()
+{
+	QWidget* page = new QWidget(this);
+
 	/*
 	 * Active or passive. The core reads this as a boolean; the words are the ones
 	 * the protocol uses, because "Active mode: off" says less than "Passive".
@@ -186,35 +218,27 @@ QWidget* Qdc::SettingsView::buildIdentity()
 	m_bind->setPlaceholderText(DEFAULT_BIND);
 	m_address->setPlaceholderText(tr("Detected automatically"));
 
-	QFormLayout* form = new QFormLayout(group);
-	form->addRow(tr("Nickname"), m_nickname);
-	form->addRow(tr("Description"), m_description);
-	form->addRow(tr("E-mail"), m_email);
-	form->addRow(tr("Client ID"), m_clientId);
+	QFormLayout* form = new QFormLayout(page);
 	form->addRow(tr("Connection"), m_mode);
 	form->addRow(tr("Port"), m_port);
 	form->addRow(tr("Bind to"), m_bind);
 	form->addRow(tr("External address"), m_address);
 
 	form->addRow(makeNote(tr(
-		"The client tag hubs see is built from the version and this connection "
-		"setting and cannot be changed. The client ID is derived from a private "
-		"key and identifies this installation.")));
+		"The client tag hubs see is built from the version and whether this is "
+		"active or passive, and cannot be changed.")));
 
-	connect(m_nickname, &QLineEdit::textEdited, this, &SettingsView::markModified);
-	connect(m_description, &QLineEdit::textEdited, this, &SettingsView::markModified);
-	connect(m_email, &QLineEdit::textEdited, this, &SettingsView::markModified);
 	connect(m_bind, &QLineEdit::textEdited, this, &SettingsView::markModified);
 	connect(m_address, &QLineEdit::textEdited, this, &SettingsView::markModified);
 	connect(m_mode, &QComboBox::currentIndexChanged, this, &SettingsView::markModified);
 	connect(m_port, &QSpinBox::valueChanged, this, &SettingsView::markModified);
 
-	return group;
+	return page;
 }
 
-QWidget* Qdc::SettingsView::buildLimits()
+QWidget* Qdc::SettingsView::buildTransfers()
 {
-	QGroupBox* group = new QGroupBox(tr("Limits"), this);
+	QWidget* page = new QWidget(this);
 
 	m_slots->setRange(0, 999);
 	m_slots->setToolTip(tr("How many users may download from you at once"));
@@ -228,10 +252,22 @@ QWidget* Qdc::SettingsView::buildLimits()
 	m_chunkSize->setToolTip(tr("The least that is asked of one peer at a time; a "
 	                           "peer that turns out to be fast is asked for more"));
 
-	QFormLayout* form = new QFormLayout(group);
+	m_downloadDir->setPlaceholderText(DEFAULT_DOWNLOAD_DIR);
+
+	QPushButton* browse = new QPushButton(tr("Browse…"), page);
+	connect(browse, &QPushButton::clicked, this,
+	        &SettingsView::chooseDownloadDirectory);
+
+	QHBoxLayout* downloadRow = new QHBoxLayout;
+	downloadRow->setContentsMargins(0, 0, 0, 0);
+	downloadRow->addWidget(m_downloadDir, 1);
+	downloadRow->addWidget(browse);
+
+	QFormLayout* form = new QFormLayout(page);
 	form->addRow(tr("Upload slots"), m_slots);
 	form->addRow(tr("Concurrent downloads"), m_maxDownloads);
 	form->addRow(tr("Smallest chunk"), m_chunkSize);
+	form->addRow(tr("Save downloads to"), downloadRow);
 
 	/*
 	 * Said because the field is now a floor rather than the size, and somebody who
@@ -254,38 +290,35 @@ QWidget* Qdc::SettingsView::buildLimits()
 		"but has nothing that slows a transfer down, so a limit set here would "
 		"have no effect and is not offered.")));
 
+	/*
+	 * Said here rather than in a tooltip, because somebody looking for the folder
+	 * their unfinished downloads are in will not find one and is owed the reason.
+	 */
+	form->addRow(makeNote(tr(
+		"An unfinished download is kept beside its final name with \".part\" "
+		"added, so there is no separate folder for incomplete files.")));
+
 	connect(m_slots, &QSpinBox::valueChanged, this, &SettingsView::markModified);
 	connect(m_maxDownloads, &QSpinBox::valueChanged, this, &SettingsView::markModified);
 	connect(m_chunkSize, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+	connect(m_downloadDir, &QLineEdit::textEdited, this, &SettingsView::markModified);
 
-	return group;
+	return page;
 }
 
-QWidget* Qdc::SettingsView::buildDirectories()
+QWidget* Qdc::SettingsView::buildSharing()
 {
-	QGroupBox* group = new QGroupBox(tr("Folders"), this);
-
-	m_downloadDir->setPlaceholderText(DEFAULT_DOWNLOAD_DIR);
-
-	QPushButton* browse = new QPushButton(tr("Browse…"), this);
-	connect(browse, &QPushButton::clicked, this,
-	        &SettingsView::chooseDownloadDirectory);
-
-	QHBoxLayout* downloadRow = new QHBoxLayout;
-	downloadRow->setContentsMargins(0, 0, 0, 0);
-	downloadRow->addWidget(m_downloadDir, 1);
-	downloadRow->addWidget(browse);
+	QWidget* page = new QWidget(this);
 
 	m_shareList->setSelectionMode(QAbstractItemView::SingleSelection);
 
 	/*
-	 * Bounded at both ends. Without a maximum the form layout gives the list every
-	 * spare pixel and pushes the notes under it off the bottom of the page.
+	 * A floor only. The list has the tab to itself and is the thing being read on
+	 * it, so it is given whatever height the window has to spare.
 	 */
 	m_shareList->setMinimumHeight(96);
-	m_shareList->setMaximumHeight(150);
 
-	QPushButton* addShareButton = new QPushButton(tr("Add folder…"), this);
+	QPushButton* addShareButton = new QPushButton(tr("Add folder…"), page);
 	connect(addShareButton, &QPushButton::clicked, this, &SettingsView::addShare);
 	connect(m_removeShare, &QPushButton::clicked,
 	        this, &SettingsView::removeSelectedShare);
@@ -313,19 +346,42 @@ QWidget* Qdc::SettingsView::buildDirectories()
 	shareRow->addWidget(m_shareList, 1);
 	shareRow->addLayout(shareButtons);
 
-	m_fetchMedia = new QCheckBox(tr("Fetch pictures sent in chat automatically"), group);
+	/*
+	 * A column rather than a form: the list is the page, so it is given a heading of
+	 * its own and the height, instead of sitting in a field beside a label.
+	 */
+	QVBoxLayout* column = new QVBoxLayout(page);
+	column->addWidget(new QLabel(tr("Shared folders"), page));
+	column->addLayout(shareRow, 1);
+
+	/*
+	 * Said rather than left to be discovered: somebody who adds a folder and then
+	 * looks for it on the hub will think the share is broken.
+	 */
+	column->addWidget(makeNote(tr(
+		"Shared folders are read when QuickDC starts, so a change here takes "
+		"effect the next time it is started.")));
+
+	return page;
+}
+
+QWidget* Qdc::SettingsView::buildChat()
+{
+	QWidget* page = new QWidget(this);
+
+	m_fetchMedia = new QCheckBox(tr("Fetch pictures sent in chat automatically"), page);
 	connect(m_fetchMedia, &QCheckBox::toggled, this, &SettingsView::markModified);
 	m_fetchMedia->setToolTip(tr("Ask whoever sent a picture for the file, as soon as "
 	                            "the message arrives"));
 
-	m_mediaLimit = new QSpinBox(group);
+	m_mediaLimit = new QSpinBox(page);
 	m_mediaLimit->setRange(0, 1024);
 	m_mediaLimit->setSuffix(tr(" MiB"));
 	m_mediaLimit->setSpecialValueText(tr("no limit"));
 	m_mediaLimit->setToolTip(tr("Larger pictures are left for you to fetch by hand"));
 	connect(m_mediaLimit, &QSpinBox::valueChanged, this, &SettingsView::markModified);
 
-	m_mediaKeep = new QSpinBox(group);
+	m_mediaKeep = new QSpinBox(page);
 	m_mediaKeep->setRange(0, 3650);
 	m_mediaKeep->setSuffix(tr(" days"));
 	m_mediaKeep->setSpecialValueText(tr("keep for ever"));
@@ -333,9 +389,7 @@ QWidget* Qdc::SettingsView::buildDirectories()
 	                           "somebody follows a link to one later"));
 	connect(m_mediaKeep, &QSpinBox::valueChanged, this, &SettingsView::markModified);
 
-	QFormLayout* form = new QFormLayout(group);
-	form->addRow(tr("Save downloads to"), downloadRow);
-	form->addRow(tr("Shared folders"), shareRow);
+	QFormLayout* form = new QFormLayout(page);
 	form->addRow(QString(), m_fetchMedia);
 	form->addRow(tr("Fetch pictures up to"), m_mediaLimit);
 	form->addRow(tr("Keep pictures you send for"), m_mediaKeep);
@@ -350,25 +404,12 @@ QWidget* Qdc::SettingsView::buildDirectories()
 		"them you are there. A single hub can be set to do this or not from its own "
 		"page, whatever is chosen here.")));
 
-	/*
-	 * Both notes are about the core rather than about this form, which is why they
-	 * are here and not in a tooltip: a user who does not know either of these will
-	 * think something is broken.
-	 */
-	form->addRow(makeNote(tr(
-		"Shared folders are read when QuickDC starts, so a change here takes "
-		"effect the next time it is started.\n\n"
-		"An unfinished download is kept beside its final name with \".part\" "
-		"added, so there is no separate folder for incomplete files.")));
-
-	connect(m_downloadDir, &QLineEdit::textEdited, this, &SettingsView::markModified);
-
-	return group;
+	return page;
 }
 
 QWidget* Qdc::SettingsView::buildAppearance()
 {
-	QGroupBox* group = new QGroupBox(tr("Appearance"), this);
+	QWidget* page = new QWidget(this);
 
 	/*
 	 * Filled in load() rather than here, so that Revert picks up a theme file that
@@ -378,7 +419,7 @@ QWidget* Qdc::SettingsView::buildAppearance()
 
 	connect(m_theme, &QComboBox::currentIndexChanged, this, &SettingsView::markModified);
 
-	QFormLayout* form = new QFormLayout(group);
+	QFormLayout* form = new QFormLayout(page);
 	form->addRow(tr("Theme"), m_theme);
 
 	/*
@@ -394,7 +435,7 @@ QWidget* Qdc::SettingsView::buildAppearance()
 		"borders, padding and corners are changed rather than only colours.")
 			.arg(themeDirectory())));
 
-	return group;
+	return page;
 }
 
 void Qdc::SettingsView::markModified()
@@ -540,13 +581,12 @@ bool Qdc::SettingsView::save()
 	m_config->setString(ConfigStore::Application, INTERFACE, THEME_KEY,
 	                    m_theme->currentData().toString());
 
-	const bool written = m_config->save(ConfigStore::Application);
-
-	if (!written)
-	{
-		m_status->setText(tr("The configuration could not be written."));
-		return false;
-	}
+	/*
+	 * The file is written a moment later, on the core's own thread. Waiting to be
+	 * told whether it worked is what made this page stall for as long as the core
+	 * was busy; a write that fails reports itself through saveFailed() instead.
+	 */
+	m_config->save(ConfigStore::Application);
 
 	/*
 	 * Storing a nickname is not the same as using it: the hubs republish only when

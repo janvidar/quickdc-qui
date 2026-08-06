@@ -280,26 +280,29 @@ void TestSettings::formDoesNotWaitForABusyCore()
 	Qdc::Shares shares(&config);
 
 	/*
-	 * The page is read a group at a time. Read key by key it was fourteen blocking trips
-	 * to the core thread, so opening it while the core was busy - a transfer moving
-	 * chunks, a finished hash - waited a whole core turn fourteen times over.
+	 * The page used to be read a key at a time, each one a blocking job on the core
+	 * thread, so opening it while the core was busy waited out a whole core turn
+	 * fourteen times over. It reads its own copy now, and so does the store behind
+	 * the share list, and saving posts the write rather than waiting for it.
 	 *
-	 * Four groups still means four waits, so this does not assert that the page is
-	 * instant; it asserts that it costs a handful of turns rather than a page of them.
+	 * The copy is filled when the bridge is built, which is why that happens above
+	 * rather than below - it is the one call left in this layer that waits, and it
+	 * happens once, at start-up, before there is a window to freeze.
 	 */
-	m_thread->post([] { QThread::msleep(300); });
+	m_thread->post([] { QThread::msleep(1500); });
 
 	QElapsedTimer timer;
 	timer.start();
 
 	Qdc::SettingsView view(&config, &shares);
 	view.load();
+	view.save();
 
 	const qint64 spent = timer.elapsed();
 
-	QVERIFY2(spent < 1200,
-	         qPrintable(QStringLiteral("loading the page took %1 ms while the core was "
-	                                   "busy").arg(spent)));
+	QVERIFY2(spent < 100,
+	         qPrintable(QStringLiteral("loading and saving the page took %1 ms while "
+	                                   "the core was busy").arg(spent)));
 }
 
 void TestSettings::formWritesWhatTheCoreReads()

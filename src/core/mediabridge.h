@@ -5,9 +5,13 @@
 #ifndef HAVE_QUICKDC_QUI_MEDIABRIDGE_H
 #define HAVE_QUICKDC_QUI_MEDIABRIDGE_H
 
+#include "relay.h"
+
 #include <QHash>
 #include <QObject>
 #include <QString>
+
+#include <memory>
 
 namespace Qdc {
 
@@ -83,7 +87,20 @@ private:
 	CoreThread* m_thread = nullptr;
 
 	/** The core side half, built and destroyed inside jobs on the core thread. */
-	Attacher* m_attacher = nullptr;
+	/**
+	 * The listener, in a box that outlives this object.
+	 *
+	 * Owned by the core thread, including the job that deletes it - which runs after
+	 * this bridge is gone, so it cannot be reached through it.
+	 */
+	struct AttacherBox {
+		Attacher* attacher = nullptr;
+	};
+
+	std::shared_ptr<AttacherBox> m_attachers;
+
+	/** Where an event from the core lands; see Qdc::Relay. */
+	std::shared_ptr<Relay> m_relay;
 
 	/** What this client offered, by hash, so a click on one's own file finds it. */
 	QHash<QString, QString> m_offered;

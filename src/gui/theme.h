@@ -90,6 +90,16 @@ struct Theme {
 	/** A user who is present. */
 	QColor presence;
 
+	/**
+	 * A user who is a hub operator.
+	 *
+	 * A hue away from 'presence' rather than a brighter version of it, because the
+	 * two say different things and sit next to each other in the same list: one is
+	 * about whether somebody is at the keyboard, the other about what they can do to
+	 * the people who are.
+	 */
+	QColor presenceOperator;
+
 	/** An unread count, on the rail and in the sidebar. */
 	QColor notification;
 
@@ -119,6 +129,17 @@ struct Theme {
 	 */
 	QColor notice;
 	QColor noticeText;
+
+	/**
+	 * Behind a conversation that cannot be used yet, and the ink on it.
+	 *
+	 * Its own pair rather than danger's: nothing is broken and nothing is being
+	 * destroyed, the hub is simply not there for the moment. Loud enough to be read
+	 * as a state the conversation is in rather than as another notice in it, which
+	 * is why it is not the notice band either.
+	 */
+	QColor warning;
+	QColor warningText;
 
 	/** Selection, links, the filled part of a progress bar. */
 	QColor accent;

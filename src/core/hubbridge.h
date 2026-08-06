@@ -6,12 +6,15 @@
 #define HAVE_QUICKDC_QUI_HUBBRIDGE_H
 
 #include "coretypes.h"
+#include "relay.h"
 
 #include <QObject>
 #include <QString>
 #include <QTimer>
+#include <QVector>
 
 #include <atomic>
+#include <memory>
 
 namespace Qdc {
 
@@ -56,6 +59,23 @@ public:
 	 * "dchub://example.org:411" are the same hub, and only this knows that.
 	 */
 	static QString normalisedUrl(const QString& url);
+
+	/**
+	 * The address with everything after the authority taken off:
+	 * "{scheme}://{host}:{port}" and nothing else.
+	 *
+	 * This is what names a hub's settings, and it has to be this rather than the
+	 * address as given, because the same hub is reachable by more than one address.
+	 * "adcs://host:1511/?kp=..." and "adcs://host:1511" are one hub with one
+	 * nickname and one password; keyed on what was typed they would have a set of
+	 * settings each, and pasting a keyprint into the address once would be enough to
+	 * lose the identity already set up for that hub.
+	 *
+	 * The same form the core files a hub under - Hub::getUrl(), which is built the
+	 * same way. Computed here rather than asked of the core, because the settings for
+	 * a hub are wanted before there is a session to ask.
+	 */
+	static QString settingsUrl(const QString& url);
 
 	/**
 	 * A message as it has to go on the wire so that no hub reads it as a command.
@@ -161,6 +181,15 @@ signals:
 	void netStatusChanged(Qdc::NetStatus status);
 
 	/**
+	 * The core will try this hub again in @a seconds, or not at all if it is -1.
+	 *
+	 * Emitted after the status that ended the session, so a view following both has
+	 * the reason before it is told what happens next. Nothing is emitted when the
+	 * disconnection was asked for; there is nothing to wait for then.
+	 */
+	void reconnectScheduled(int seconds);
+
+	/**
 	 * The hub agreed to carry markdown, or the session that had agreed has ended.
 	 *
 	 * Emitted only on a change, and false again on disconnection: the next connection
@@ -196,20 +225,68 @@ signals:
 	/** The hub wants a password; answer with sendPassword(). */
 	void authenticationRequired();
 
+	/**
+	 * Somebody on this hub answered a search.
+	 *
+	 * Batched, and deliberately: replies arrive one at a time from the core and a
+	 * wide search across several busy hubs delivers thousands of them in a burst.
+	 * Handed on one by one, each cost the results view a model transaction and the
+	 * window a relayout, which is what a search froze the interface doing. They are
+	 * collected for a moment instead and handed over together.
+	 *
+	 * They arrive for as long as peers keep answering - there is no event that says
+	 * a search is over, because on either protocol there is no such message. A
+	 * search is finished when the replies stop.
+	 *
+	 * Which search each answers is SearchHit::token, and on NMDC that is empty; see
+	 * the note on the field.
+	 */
+	void searchResultsReceived(const QVector<Qdc::SearchHit>& hits);
+
 	/** @param followed what followRedirects() decided, at the time it was asked. */
 	void redirectRequested(const QString& address, quint16 port, bool followed);
 
 private:
 	friend class HubSession;
 
+	/**
+	 * Holds the session so that a job can reach it once the bridge has gone.
+	 *
+	 * The two policy flags live here rather than on the bridge for the same reason.
+	 * The core asks after them from inside a callback, on its own thread, wanting an
+	 * answer on the spot - and it can ask in the moment between this object being
+	 * destroyed and the job that takes the session down being reached.
+	 */
+	struct SessionBox {
+		HubSession* session = nullptr;
+
+		std::atomic<bool> followRedirects{false};
+		std::atomic<bool> allowPeerConnections{true};
+	};
+
 	/** Build the login watchdog and the signals that call it off. */
 	void startLoginWatch();
+
+	/** Hold a reply back for a moment, so that the ones behind it travel with it. */
+	void collect(const Qdc::SearchHit& hit);
+
+	void deliverSearchResults();
 
 	CoreThread* m_thread;
 	QString m_url;
 
-	/** Owned by the core thread; only ever read or written from a job there. */
-	HubSession* m_session = nullptr;
+	/**
+	 * The session, in a box that outlives this object.
+	 *
+	 * Owned by the core thread and only ever read or written from a job there,
+	 * including the job that takes it down - which runs after this bridge is gone,
+	 * so it cannot be reached through it. Every job holds a reference, so the box
+	 * lasts exactly as long as something still has use for what is in it.
+	 */
+	std::shared_ptr<SessionBox> m_holder;
+
+	/** Where an event from the core lands; see Qdc::Relay. */
+	std::shared_ptr<Relay> m_relay;
 
 	/** What the hub answered about RTF0; see supportsRichText(). */
 	bool m_richText = false;
@@ -228,9 +305,10 @@ private:
 	 */
 	QTimer* m_loginTimer = nullptr;
 
-	/** Read by the session on the core thread, written by whoever calls the setter. */
-	std::atomic<bool> m_followRedirects{false};
-	std::atomic<bool> m_allowPeerConnections{true};
+	/** Replies waiting to go out together; see searchResultsReceived(). */
+	QVector<Qdc::SearchHit> m_pendingHits;
+	QTimer* m_hitTimer = nullptr;
+
 };
 
 }

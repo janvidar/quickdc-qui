@@ -179,10 +179,25 @@ Qdc::HubBrowser::HubBrowser(HubDirectory* directory, Favourites* favourites,
 	m_forget->setObjectName(QStringLiteral("forgetRecentHub"));
 	m_clearRecent->setObjectName(QStringLiteral("clearRecentHubs"));
 
+	/*
+	 * Visited first, because Home shows this strip and wants the hubs somebody has
+	 * been on next to its welcome rather than three screens of strangers' hubs.
+	 * Which tab is current is set below rather than left to the order.
+	 */
 	m_tabs->setDocumentMode(true);
-	m_tabs->addTab(buildPublic(), tr("Public hubs"));
-	m_tabs->addTab(buildFavourites(), tr("Favourites"));
-	m_tabs->addTab(buildRecent(), tr("Recent"));
+	m_visitedPage = buildRecent();
+	m_publicPage = buildPublic();
+	m_favouritesPage = buildFavourites();
+
+	m_tabs->addTab(m_visitedPage, tr("Visited"));
+	m_tabs->addTab(m_publicPage, tr("Public hubs"));
+	m_tabs->addTab(m_favouritesPage, tr("Favourites"));
+
+	/*
+	 * The public list is where this opens on its own, whatever order the tabs were
+	 * added in. Home moves it off that as soon as it has added its welcome.
+	 */
+	showTab(PublicTab);
 
 	QVBoxLayout* layout = new QVBoxLayout(this);
 	layout->setContentsMargins(0, 0, 0, 0);
@@ -399,12 +414,29 @@ QWidget* Qdc::HubBrowser::buildRecent()
 
 void Qdc::HubBrowser::showTab(Tab tab)
 {
-	m_tabs->setCurrentIndex(static_cast<int>(tab));
+	QWidget* page = m_publicPage;
+
+	if (tab == FavouritesTab) page = m_favouritesPage;
+	else if (tab == VisitedTab) page = m_visitedPage;
+
+	const int index = m_tabs->indexOf(page);
+	if (index >= 0) m_tabs->setCurrentIndex(index);
 }
 
 Qdc::HubBrowser::Tab Qdc::HubBrowser::currentTab() const
 {
-	return static_cast<Tab>(m_tabs->currentIndex());
+	QWidget* page = m_tabs->currentWidget();
+
+	if (page == m_favouritesPage) return FavouritesTab;
+	if (page == m_visitedPage) return VisitedTab;
+
+	/* Including a page that is not one of ours; see the note on the declaration. */
+	return PublicTab;
+}
+
+QTabWidget* Qdc::HubBrowser::tabs() const
+{
+	return m_tabs;
 }
 
 void Qdc::HubBrowser::refreshPublicLists(bool force)

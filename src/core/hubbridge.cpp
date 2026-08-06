@@ -9,11 +9,16 @@
 #include <api/core.h>
 #include <api/hub.h>
 #include <samurai/io/net/url.h>
+#include <share/searchresult.h>
 
 #include <QMetaObject>
 #include <QUrl>
 
 namespace {
+
+/** How many replies travel together, and how long the first of them waits. */
+constexpr int HIT_BATCH = 64;
+constexpr int HIT_BATCH_MS = 50;
 
 /**
  * Whether a network status means the session is over.
@@ -129,6 +134,7 @@ Qdc::UserInfo convert(const QuickDC::User* user)
 	info.sharedFiles  = user->getSharedFiles();
 	info.slotCount    = user->getNumSlots();
 	info.op           = user->isOp();
+	info.away         = user->isAway();
 
 	return info;
 }
@@ -143,6 +149,28 @@ Qdc::UserInfo convert(const QuickDC::User* user)
  * changed survives untouched. An ADCS keyprint lives in the query, and anything
  * that reassembled the address from its parsed parts would drop it.
  */
+/**
+ * Where the authority ends: at the path, the query or the fragment, or at the end of
+ * the string when there is none of them.
+ *
+ * @param from the first character after the "://".
+ */
+qsizetype authority_end(const QString& url, qsizetype from)
+{
+	for (qsizetype n = from; n < url.size(); ++n)
+	{
+		const QChar at = url.at(n);
+
+		if (at == QLatin1Char('/') || at == QLatin1Char('?')
+		    || at == QLatin1Char('#'))
+		{
+			return n;
+		}
+	}
+
+	return url.size();
+}
+
 QString normalise_url(const QString& url)
 {
 	QString normalised = url.trimmed();
@@ -156,18 +184,7 @@ QString normalise_url(const QString& url)
 	}
 	authority += 3;
 
-	/* The authority runs to the path, the query or the fragment. */
-	qsizetype end = normalised.size();
-	for (qsizetype n = authority; n < normalised.size(); ++n)
-	{
-		const QChar at = normalised.at(n);
-		if (at == QLatin1Char('/') || at == QLatin1Char('?')
-		    || at == QLatin1Char('#'))
-		{
-			end = n;
-			break;
-		}
-	}
+	const qsizetype end = authority_end(normalised, authority);
 
 	const QString host = normalised.mid(authority, end - authority);
 
@@ -206,9 +223,13 @@ namespace Qdc {
 class HubSession final : public QuickDC::Hub, public QuickDC::HubListener {
 
 public:
-	HubSession(HubBridge* bridge, Samurai::IO::Net::URL* url)
+	HubSession(HubBridge* bridge, std::shared_ptr<Relay> relay,
+	           std::shared_ptr<HubBridge::SessionBox> holder,
+	           Samurai::IO::Net::URL* url)
 		: QuickDC::Hub(this, url)
 		, m_bridge(bridge)
+		, m_relay(std::move(relay))
+		, m_holder(std::move(holder))
 	{
 	}
 
@@ -247,6 +268,13 @@ public:
 			}
 
 			emit bridge->netStatusChanged(status);
+		});
+	}
+
+	void EventReconnectScheduled(int seconds) override
+	{
+		report([seconds](HubBridge* bridge) {
+			emit bridge->reconnectScheduled(seconds);
 		});
 	}
 
@@ -377,14 +405,36 @@ public:
 		});
 	}
 
-	void EventSearchResult(void*) override
+	/**
+	 * A search reply, as an untyped pointer, which is all the listener interface
+	 * offers - see the note in TODO.md about the signature.
+	 *
+	 * Copied and not deleted. The session deletes the result on the line after it
+	 * calls this, exactly as it does with the User* handed to the other events, so
+	 * taking ownership here would be a second delete of the same object.
+	 */
+	void EventSearchResult(void* pointer) override
 	{
-		/*
-		 * Deliberately dropped. The core hands over an untyped pointer to a
-		 * Share::SearchResult it expects someone to take ownership of, and there
-		 * is no search API above this layer yet to give it to. Wiring it up
-		 * belongs with the search view.
-		 */
+		const QuickDC::Share::SearchResult* result =
+			static_cast<const QuickDC::Share::SearchResult*>(pointer);
+
+		if (!result) return;
+
+		SearchHit hit;
+		hit.hubUrl    = from_utf8(getUrl());
+		hit.token     = from_utf8(result->getToken());
+		hit.name      = from_utf8(result->getFile());
+		hit.tth       = from_utf8(result->getTTH());
+		hit.size      = result->getSize();
+		hit.freeSlots = static_cast<quint32>(result->getFreeSlots());
+		hit.user      = convert(result->getUser());
+
+		/* The separator on the end is the whole of what says this is a folder. */
+		hit.directory = hit.name.endsWith(QLatin1Char('/'));
+
+		report([hit](HubBridge* bridge) {
+			bridge->collect(hit);
+		});
 	}
 
 	void EventHubName(const char* hubname) override
@@ -398,7 +448,7 @@ public:
 
 	bool EventHubRedirect(const char* address, uint16_t port) override
 	{
-		const bool follow = m_bridge->m_followRedirects.load(std::memory_order_relaxed);
+		const bool follow = m_holder->followRedirects.load(std::memory_order_relaxed);
 		const QString target = from_utf8(address);
 
 		report([target, port, follow](HubBridge* bridge) {
@@ -417,12 +467,12 @@ public:
 
 	bool EventClientConnect(const char*, uint16_t, const QuickDC::User*) override
 	{
-		return m_bridge->m_allowPeerConnections.load(std::memory_order_relaxed);
+		return m_holder->allowPeerConnections.load(std::memory_order_relaxed);
 	}
 
 	bool EventClientConnect(const QuickDC::User*) override
 	{
-		return m_bridge->m_allowPeerConnections.load(std::memory_order_relaxed);
+		return m_holder->allowPeerConnections.load(std::memory_order_relaxed);
 	}
 
 	/**
@@ -449,9 +499,12 @@ public:
 
 private:
 	/**
-	 * Run 'work' on the bridge's thread, with the bridge as the context object
-	 * so that a bridge destroyed in the meantime takes its pending events with
-	 * it rather than being called after the fact.
+	 * Run 'work' on the bridge's thread.
+	 *
+	 * Addressed to the relay rather than to the bridge, and the relay is held by
+	 * the closure: an event may be in flight when the bridge is destroyed, and
+	 * there is no way to test a bridge pointer for that from this thread. The
+	 * relay is detached instead, which is what turns 'work' into nothing.
 	 *
 	 * Queued explicitly: a same-thread invokeMethod would run 'work' inline, and
 	 * this is only ever called from the core thread, where inline would mean
@@ -461,11 +514,19 @@ private:
 	void report(Work work)
 	{
 		HubBridge* bridge = m_bridge;
-		QMetaObject::invokeMethod(bridge, [bridge, work] { work(bridge); },
-		                          Qt::QueuedConnection);
+		std::shared_ptr<Relay> relay = m_relay;
+		Relay* target = relay.get();
+
+		QMetaObject::invokeMethod(target, [relay = std::move(relay), bridge, work] {
+			if (!relay->detached()) work(bridge);
+		}, Qt::QueuedConnection);
 	}
 
 	HubBridge* m_bridge;
+	std::shared_ptr<Relay> m_relay;
+
+	/** Where the policy flags live, and what keeps them alive; see SessionBox. */
+	std::shared_ptr<HubBridge::SessionBox> m_holder;
 };
 
 }
@@ -474,6 +535,8 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 	: QObject(parent)
 	, m_thread(thread)
 	, m_url(normalise_url(url))
+	, m_holder(std::make_shared<SessionBox>())
+	, m_relay(Relay::create())
 {
 	startLoginWatch();
 
@@ -498,54 +561,85 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 		return;
 	}
 
-	m_thread->invoke([this, address] {
+	/*
+	 * Posted rather than waited on. Building the session registers it with the hub
+	 * manager, which happens between turns of the reactor, and a window that waited
+	 * for that stopped drawing for as long as the core's current turn took - opening
+	 * a hub while a transfer was moving used to hang the whole interface.
+	 *
+	 * Everything the bridge can be asked to do afterwards is posted too, and each
+	 * job finds the session through the same box, so an order given before it exists
+	 * simply queues up behind it.
+	 */
+	/*
+	 * Every one of these is a copy, including the bridge pointer and the relay.
+	 * Nothing here may reach through 'this' to a member: the job runs on the core
+	 * thread at a time of the reactor's choosing, and by then this object may be
+	 * gone. The pointer itself is only ever handed on to the session, which uses it
+	 * through the relay and so not at all once the relay is detached.
+	 */
+	m_thread->call(m_relay, [holder = m_holder, relay = m_relay, address,
+	                         bridge = this] {
 		/*
 		 * Hub copies the URL it is given, so this one is ours to destroy - and
 		 * it has to be, since Hub keeps no reference to it.
 		 */
 		Samurai::IO::Net::URL parsed(address.toStdString());
-		if (!parsed.isValid()) return;
+		if (!parsed.isValid()) return false;
 
-		m_session = new HubSession(this, &parsed);
-	});
-
-	if (!m_session)
-	{
-		QMetaObject::invokeMethod(this, [this, address] {
+		holder->session = new HubSession(bridge, relay, holder, &parsed);
+		return true;
+	}, [this, address](bool built) {
+		if (!built)
 			emit systemError(tr("'%1' is not an address I can use.").arg(address));
-		}, Qt::QueuedConnection);
-	}
+	});
 }
 
 Qdc::HubBridge::~HubBridge()
 {
-	if (!m_session || !m_thread) return;
+	/* Nothing in flight has anywhere to report to from here on. */
+	m_relay->detach();
+
+	if (!m_thread) return;
 
 	/*
-	 * Blocking, and it has to be. The session is still registered with the hub
-	 * manager and may have an event in flight; letting this object go while a
-	 * job on the core thread can still reach it is exactly the crash this whole
-	 * layer exists to avoid.
+	 * Posted, and it no longer has to block. The session is still registered with
+	 * the hub manager and may have an event in flight, but the event is addressed
+	 * to the relay rather than to this object, and the relay is detached above - so
+	 * letting this go while a job can still run costs nothing.
 	 *
 	 * disconnect() before delete because ~Hub does not do it - it unregisters
 	 * from the hub manager and frees the URL, and leaves an open session alone.
 	 *
-	 * If the core has already stopped, invoke() returns false and the session is
-	 * leaked rather than deleted here. That is the lesser evil: ~Hub asks
+	 * The box rather than a member, because by the time this job runs there is no
+	 * bridge left to read one from. A core that has already stopped drops the job
+	 * and leaks the session, which remains the lesser evil: ~Hub asks
 	 * Core::getInstance() to unregister it, and getInstance() builds a new Core
 	 * when there is none - so deleting it from this thread would resurrect the
 	 * whole reactor in order to tear one hub out of it.
 	 */
-	m_thread->invoke([this] {
-		m_session->disconnect();
-		delete m_session;
-		m_session = nullptr;
+	m_thread->post([holder = m_holder] {
+		if (!holder->session) return;
+
+		holder->session->disconnect();
+		delete holder->session;
+		holder->session = nullptr;
 	});
 }
 
 QString Qdc::HubBridge::normalisedUrl(const QString& url)
 {
 	return normalise_url(url);
+}
+
+QString Qdc::HubBridge::settingsUrl(const QString& url)
+{
+	const QString normalised = normalise_url(url);
+
+	const qsizetype scheme = normalised.indexOf(QStringLiteral("://"));
+	if (scheme < 0) return normalised;
+
+	return normalised.left(authority_end(normalised, scheme + 3));
 }
 
 QString Qdc::HubBridge::url() const
@@ -580,22 +674,22 @@ bool Qdc::HubBridge::supportsRichText() const
 
 void Qdc::HubBridge::setFollowRedirects(bool follow)
 {
-	m_followRedirects.store(follow, std::memory_order_relaxed);
+	m_holder->followRedirects.store(follow, std::memory_order_relaxed);
 }
 
 bool Qdc::HubBridge::followRedirects() const
 {
-	return m_followRedirects.load(std::memory_order_relaxed);
+	return m_holder->followRedirects.load(std::memory_order_relaxed);
 }
 
 void Qdc::HubBridge::setAllowPeerConnections(bool allow)
 {
-	m_allowPeerConnections.store(allow, std::memory_order_relaxed);
+	m_holder->allowPeerConnections.store(allow, std::memory_order_relaxed);
 }
 
 bool Qdc::HubBridge::allowPeerConnections() const
 {
-	return m_allowPeerConnections.load(std::memory_order_relaxed);
+	return m_holder->allowPeerConnections.load(std::memory_order_relaxed);
 }
 
 void Qdc::HubBridge::startLoginWatch()
@@ -636,18 +730,22 @@ void Qdc::HubBridge::startLoginWatch()
 
 void Qdc::HubBridge::connectToHub()
 {
-	if (!m_session || !m_thread) return;
+	if (!m_thread) return;
 
 	m_loginTimer->start();
-	m_thread->post([this] { m_session->connect(); });
+	m_thread->post([holder = m_holder] {
+		if (holder->session) holder->session->connect();
+	});
 }
 
 void Qdc::HubBridge::disconnectFromHub()
 {
-	if (!m_session || !m_thread) return;
+	if (!m_thread) return;
 
 	m_loginTimer->stop();
-	m_thread->post([this] { m_session->disconnect(); });
+	m_thread->post([holder = m_holder] {
+		if (holder->session) holder->session->disconnect();
+	});
 }
 
 QString Qdc::HubBridge::textForHub(const QString& message, bool richText)
@@ -665,32 +763,78 @@ QString Qdc::HubBridge::textForHub(const QString& message, bool richText)
 
 void Qdc::HubBridge::sendChat(const QString& message, bool richText)
 {
-	if (!m_session || !m_thread) return;
+	if (!m_thread) return;
 
 	const QByteArray utf8 = textForHub(message, richText).toUtf8();
 
-	m_thread->post([this, utf8, richText] {
-		m_session->sendChatMessage(utf8.constData(), richText);
+	m_thread->post([holder = m_holder, utf8, richText] {
+		if (holder->session) holder->session->sendChatMessage(utf8.constData(), richText);
 	});
 }
 
 void Qdc::HubBridge::sendPrivateChat(const QString& userId, const QString& message,
                                     bool richText)
 {
-	if (!m_session || !m_thread) return;
+	if (!m_thread) return;
 
 	const QByteArray id = userId.toUtf8();
 	const QByteArray utf8 = textForHub(message, richText).toUtf8();
 
-	m_thread->post([this, id, utf8, richText] {
-		m_session->sendPrivateChat(id.constData(), utf8.constData(), richText);
+	m_thread->post([holder = m_holder, id, utf8, richText] {
+		if (holder->session)
+			holder->session->sendPrivateChat(id.constData(), utf8.constData(), richText);
 	});
 }
 
 void Qdc::HubBridge::sendPassword(const QString& password)
 {
-	if (!m_session || !m_thread) return;
+	if (!m_thread) return;
 
 	const QByteArray utf8 = password.toUtf8();
-	m_thread->post([this, utf8] { m_session->sendPassword(utf8.constData()); });
+	m_thread->post([holder = m_holder, utf8] {
+		if (holder->session) holder->session->sendPassword(utf8.constData());
+	});
+}
+
+void Qdc::HubBridge::collect(const SearchHit& hit)
+{
+	m_pendingHits.append(hit);
+
+	/*
+	 * Enough of them to be worth handing over now. The rest of a burst follows in
+	 * the next batch; what matters is that the view is not asked to lay itself out
+	 * once per reply, not that every batch is exactly full.
+	 */
+	if (m_pendingHits.size() >= HIT_BATCH)
+	{
+		deliverSearchResults();
+		return;
+	}
+
+	if (!m_hitTimer)
+	{
+		m_hitTimer = new QTimer(this);
+		m_hitTimer->setSingleShot(true);
+		m_hitTimer->setInterval(HIT_BATCH_MS);
+
+		connect(m_hitTimer, &QTimer::timeout, this, &HubBridge::deliverSearchResults);
+	}
+
+	/*
+	 * Started rather than restarted, so that a steady stream of replies is still
+	 * handed over regularly instead of being held back for as long as it keeps
+	 * coming.
+	 */
+	if (!m_hitTimer->isActive()) m_hitTimer->start();
+}
+
+void Qdc::HubBridge::deliverSearchResults()
+{
+	if (m_hitTimer) m_hitTimer->stop();
+	if (m_pendingHits.isEmpty()) return;
+
+	QVector<SearchHit> going;
+	going.swap(m_pendingHits);
+
+	emit searchResultsReceived(going);
 }

@@ -114,6 +114,27 @@ public slots:
 	/** Ask for an address and open it. */
 	void promptForHub();
 
+signals:
+	/**
+	 * Somebody on one of these hubs answered a search.
+	 *
+	 * Forwarded rather than the hub bridges being handed out. A search is run from
+	 * somewhere else entirely, but replies arrive on the hub they came in on, and
+	 * this owns the hubs - so this is where they can be collected without a
+	 * HubBridge escaping into a view that has no business holding one.
+	 */
+	void searchResultsReceived(const QVector<Qdc::SearchHit>& hits);
+
+protected:
+	/**
+	 * Redraw the tree's glyphs when the colours change.
+	 *
+	 * A row's icon is a pixmap painted in the theme's ink, and unlike everything
+	 * painted from a paintEvent it is not asked for again when the palette moves -
+	 * so it would keep the colours of the theme before.
+	 */
+	void changeEvent(QEvent* event) override;
+
 private:
 	/**
 	 * One hub and everything hanging off it.
@@ -147,6 +168,14 @@ private:
 	void route(Entry& entry, const ChatMessage& message);
 
 	DmPane* openDm(Entry& entry, const UserInfo& user);
+
+	/**
+	 * A conversation already open with this person, whatever id it is filed under.
+	 *
+	 * For somebody who left and came back: their session id is new, so the map says
+	 * nothing, but the conversation is the same one. Null when there is none.
+	 */
+	DmPane* dmFor(Entry& entry, const UserInfo& user) const;
 
 	/** Ask for this hub's password and send it, or say why login will fail. */
 	void promptForPassword(Entry& entry);

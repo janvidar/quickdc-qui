@@ -6,10 +6,13 @@
 #define HAVE_QUICKDC_QUI_TRANSFERBRIDGE_H
 
 #include "coretypes.h"
+#include "relay.h"
 
 #include <QElapsedTimer>
 #include <QObject>
 #include <QVector>
+
+#include <memory>
 
 namespace Qdc {
 
@@ -178,6 +181,19 @@ public slots:
 	 */
 	void enqueue(const QString& filename, const QString& tth, quint64 size);
 
+	/**
+	 * Queue what a search turned up, with the peer that answered it as a source.
+	 *
+	 * The difference from the above is the source, and it is the whole point: a
+	 * search reply says who has the file, so there is no need to go looking for
+	 * somewhere to get it from. It is also the only way to download a reply that
+	 * carried no TTH, since without a hash there is nothing for the queue's own
+	 * searching to match on.
+	 *
+	 * @param filename the local file to download to, path and all.
+	 */
+	void enqueue(const QString& filename, const Qdc::SearchHit& hit);
+
 signals:
 	void transferStarted(const Qdc::TransferInfo& transfer);
 
@@ -221,8 +237,22 @@ private:
 	CoreThread* m_thread;
 
 	/** Owned by the core thread; only touched from a job there. */
-	TransferReporter* m_reporter = nullptr;
-	QueueReporter* m_queueReporter = nullptr;
+	/**
+	 * The listeners, in a box that outlives this object.
+	 *
+	 * Owned by the core thread, including the job that unregisters and deletes
+	 * them - which runs after this bridge is gone, so it cannot be reached through
+	 * it. Every job holds a reference, so the box lasts as long as it is wanted.
+	 */
+	struct ReporterBox {
+		TransferReporter* transfers = nullptr;
+		QueueReporter* queue = nullptr;
+	};
+
+	std::shared_ptr<ReporterBox> m_reporters;
+
+	/** Where an event from the core lands; see Qdc::Relay. */
+	std::shared_ptr<Relay> m_relay;
 
 	/** The last figures the core thread handed over; see activeTransfers(). */
 	QVector<TransferInfo> m_active;

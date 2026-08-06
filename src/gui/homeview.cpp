@@ -12,7 +12,7 @@
 
 #include <QFileInfo>
 #include <QFontMetrics>
-#include <QGroupBox>
+#include <QTabWidget>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -81,28 +81,23 @@ Qdc::HomeView::HomeView(ConfigBridge* config, Favourites* favourites,
 	, m_recentEmpty(new QLabel(this))
 	, m_poll(new QTimer(this))
 {
-	QWidget* page = new QWidget(this);
-
 	/*
-	 * The hub browser takes the slack rather than a stretch at the foot doing it: a
-	 * list of hubs is what the height of this page is worth spending on, where the
-	 * greeting and the activity summary are each a few lines whatever happens.
+	 * One row of tabs for the whole page, which is why the hub browser's own strip is
+	 * borrowed rather than nested inside a tab of its own: its three lists and the two
+	 * pages here are five answers to "what now", and a row of tabs under a row of tabs
+	 * is two things to read before either can be used.
+	 *
+	 * Welcome first, then the hubs somebody has been on, then the rest.
 	 */
-	QVBoxLayout* stacked = new QVBoxLayout(page);
-	stacked->setContentsMargins(16, 16, 16, 16);
-	stacked->setSpacing(14);
-	stacked->addWidget(buildGreeting());
-	stacked->addWidget(buildHubs(), 1);
-	stacked->addWidget(buildActivity());
+	QTabWidget* tabs = m_hubs->tabs();
 
-	QScrollArea* scroll = new QScrollArea(this);
-	scroll->setWidget(page);
-	scroll->setWidgetResizable(true);
-	scroll->setFrameShape(QFrame::NoFrame);
+	tabs->insertTab(0, makePage(buildGreeting()), tr("Welcome"));
+	tabs->addTab(makePage(buildActivity()), tr("Activity"));
+	tabs->setCurrentIndex(0);
 
 	QVBoxLayout* layout = new QVBoxLayout(this);
 	layout->setContentsMargins(0, 0, 0, 0);
-	layout->addWidget(scroll);
+	layout->addWidget(m_hubs);
 
 	m_poll->setInterval(POLL_INTERVAL_MS);
 
@@ -153,9 +148,22 @@ Qdc::Glyph Qdc::HomeView::glyph() const
 	return Glyph::Home;
 }
 
+QWidget* Qdc::HomeView::makePage(QWidget* page)
+{
+	if (QLayout* content = page->layout())
+		content->setContentsMargins(16, 16, 16, 16);
+
+	QScrollArea* scroll = new QScrollArea(this);
+	scroll->setWidget(page);
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+
+	return scroll;
+}
+
 QWidget* Qdc::HomeView::buildGreeting()
 {
-	QGroupBox* group = new QGroupBox(tr("QuickDC"), this);
+	QWidget* page = new QWidget(this);
 
 	QFont large = m_greeting->font();
 	large.setPointSize(large.pointSize() + 5);
@@ -179,29 +187,20 @@ QWidget* Qdc::HomeView::buildGreeting()
 	addressRow->addWidget(m_address, 1);
 	addressRow->addWidget(m_connect);
 
-	QVBoxLayout* layout = new QVBoxLayout(group);
+	QVBoxLayout* layout = new QVBoxLayout(page);
 	layout->addWidget(m_greeting);
 	layout->addWidget(m_identity);
 	layout->addSpacing(6);
-	layout->addWidget(new QLabel(tr("Connect to a hub by address:"), this));
+	layout->addWidget(new QLabel(tr("Connect to a hub by address:"), page));
 	layout->addLayout(addressRow);
+	layout->addStretch(1);
 
-	return group;
-}
-
-QWidget* Qdc::HomeView::buildHubs()
-{
-	QGroupBox* group = new QGroupBox(tr("Hubs"), this);
-
-	QVBoxLayout* layout = new QVBoxLayout(group);
-	layout->addWidget(m_hubs);
-
-	return group;
+	return page;
 }
 
 QWidget* Qdc::HomeView::buildActivity()
 {
-	QGroupBox* group = new QGroupBox(tr("Recent activity"), this);
+	QWidget* page = new QWidget(this);
 
 	m_recentList->setSelectionMode(QAbstractItemView::NoSelection);
 
@@ -209,13 +208,20 @@ QWidget* Qdc::HomeView::buildActivity()
 	m_recentEmpty->setWordWrap(true);
 	m_recentEmpty->setText(tr("Nothing has finished downloading yet."));
 
-	QVBoxLayout* layout = new QVBoxLayout(group);
+	QVBoxLayout* layout = new QVBoxLayout(page);
 	layout->addWidget(m_transferSummary);
 	layout->addSpacing(4);
 	layout->addWidget(m_recentEmpty);
 	layout->addWidget(m_recentList);
 
-	return group;
+	/*
+	 * The slack at the foot rather than on the list, which fit_list() gives a fixed
+	 * height so that a list of two things is two rows tall. Given the stretch it took
+	 * the page's whole height while hidden and left the two lines floating apart.
+	 */
+	layout->addStretch(1);
+
+	return page;
 }
 
 void Qdc::HomeView::refresh()

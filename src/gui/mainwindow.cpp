@@ -9,6 +9,7 @@
 #include "hubsview.h"
 #include "nativewindow.h"
 #include "navigationrail.h"
+#include "searchview.h"
 #include "settingsview.h"
 #include "transfersview.h"
 
@@ -19,6 +20,7 @@
 #include <core/filelistbridge.h>
 #include <core/hubdirectory.h>
 #include <core/recenthubs.h>
+#include <core/searchbridge.h>
 #include <core/shares.h>
 #include <core/transferbridge.h>
 
@@ -27,19 +29,21 @@
 #include <QLabel>
 #include <QShowEvent>
 #include <QStackedWidget>
-#include <QStatusBar>
 #include <QVBoxLayout>
 
 namespace {
 
 /**
- * How far the content is held off the right-hand edge of the window.
+ * How far the content is held off the right-hand and bottom edges of the window.
  *
- * The frame closes on all four sides: the top bar above, the rail to the left and
- * the status bar below already do it, and this is the fourth. Matched to the large
- * corner radius, so the gap and the curve are the same size.
+ * The frame closes on all four sides: the top bar does it above and the rail to the
+ * left, and these two are the others. Matched to the large corner radius, so the gap
+ * and the curve are the same size.
+ *
+ * The bottom used to be a status bar, which said "Ready." and nothing else for the
+ * life of the window. A plain gap says the same amount and takes less room.
  */
-constexpr int RIGHT_INSET = 8;
+constexpr int CONTENT_INSET = 8;
 
 constexpr int TOP_BAR_HEIGHT = 42;
 constexpr int TOP_BAR_MARGIN = 16;
@@ -52,6 +56,7 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	, m_config(new ConfigBridge(thread, this))
 	, m_transfers(new TransferBridge(thread, this))
 	, m_filelists(new FilelistBridge(thread, this))
+	, m_searches(new SearchBridge(thread, this))
 	, m_favourites(new Favourites(m_config, this))
 	, m_completed(new Completed(m_config, this))
 	, m_shares(new Shares(m_config, this))
@@ -61,6 +66,7 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	                      m_completed, m_recent))
 	, m_home(new HomeView(m_config, m_favourites, m_recent, m_directory,
 	                      m_completed, m_transfers))
+	, m_search(new SearchView(m_searches, m_transfers, m_filelists, m_config))
 	, m_rail(new NavigationRail)
 	, m_stack(new QStackedWidget)
 {
@@ -77,7 +83,7 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	central->setAutoFillBackground(true);
 
 	QHBoxLayout* body = new QHBoxLayout;
-	body->setContentsMargins(0, 0, RIGHT_INSET, 0);
+	body->setContentsMargins(0, 0, CONTENT_INSET, CONTENT_INSET);
 	body->setSpacing(0);
 	body->addWidget(m_rail);
 	body->addWidget(m_stack, 1);
@@ -107,8 +113,17 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 		if (m_hubs->openHub(url)) showView(m_views.indexOf(m_hubs));
 	});
 
+	/*
+	 * A search goes out to every hub at once, but a reply arrives on the hub it came
+	 * in on - so the view that shows them cannot collect them itself. This is the
+	 * only place that can see both, which is why the routing is one line here.
+	 */
+	connect(m_hubs, &HubsView::searchResultsReceived,
+	        m_search, &SearchView::addHits);
+
 	addView(m_home);
 	addView(m_hubs);
+	addView(m_search);
 	addView(new TransfersView(m_transfers, m_completed));
 
 	/* Settings sits apart from the destinations, at the foot of the rail. */
@@ -117,10 +132,6 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 
 	connect(m_rail, &NavigationRail::currentIndexChanged,
 	        this, &MainWindow::showView);
-
-	statusBar()->showMessage(m_thread && m_thread->isCoreRunning()
-		? tr("Ready.")
-		: tr("The QuickDC core is not running."));
 
 	showView(m_rail->currentIndex());
 	resize(1100, 720);
@@ -152,6 +163,13 @@ Qdc::MainWindow::~MainWindow()
 	 */
 	delete m_home;
 	m_home = nullptr;
+
+	/* Holds the search, transfer, filelist and config bridges; all are below. */
+	delete m_search;
+	m_search = nullptr;
+
+	delete m_searches;
+	m_searches = nullptr;
 
 	/* Fetches over the core thread, so it goes while the core is still up. */
 	delete m_directory;

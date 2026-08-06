@@ -6,13 +6,20 @@
 #define HAVE_QUICKDC_QUI_CONFIGBRIDGE_H
 
 #include "coretypes.h"
+#include "relay.h"
 
+#include <QHash>
 #include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QVariantHash>
 #include <QPair>
 #include <QString>
 #include <QStringList>
+
+#include <memory>
+
+class QTimer;
 
 namespace Qdc {
 
@@ -21,12 +28,17 @@ class CoreThread;
 /**
  * The configuration, as a settings form sees it.
  *
- * Every call below is one blocking job on the core thread, and that granularity
- * is the point rather than an accident. QuickDC::Preferences has a mutable
- * current group: reading a key means selecting a group and then reading, and if
- * those are two jobs something in between can select a third group and the read
- * comes back from the wrong section. Selecting and reading in the same job is
- * what makes a group argument on every call safe.
+ * A copy of both preference files, held on the thread that draws. Reading a
+ * setting is a lookup in that copy and costs nothing, which is the whole point:
+ * every read used to be a blocking job on the core thread, and the core thread is
+ * busy for as long as its current turn takes - writing transfer chunks to disk,
+ * rewriting the download queue, compressing the share's file list, answering
+ * other people's searches out of the whole share index. A page of fourteen
+ * settings opened while that was going on waited out fourteen of those turns.
+ *
+ * Writing goes both ways at once: the copy is changed here, so the interface
+ * shows the new value immediately, and the same change is posted to the core,
+ * which applies it in its own time. Nothing waits for that either.
  *
  * The settings the core actually acts on are listed in
  * quickdc/core/api/config.h. A key outside that list will be stored and read
@@ -37,6 +49,7 @@ class ConfigBridge final : public QObject {
 
 public:
 	explicit ConfigBridge(CoreThread* thread, QObject* parent = nullptr);
+	~ConfigBridge() override;
 
 	/** @param store which of the Core's two preference files to read. */
 	QString getString(ConfigStore store, const QString& group, const QString& key,
@@ -58,34 +71,25 @@ public:
 	void remove(ConfigStore store, const QString& group, const QString& key);
 
 	/**
-	 * Rewrite a group in one job: 'removeKeys' cleared, then 'values' written.
+	 * Rewrite a group: 'removeKeys' cleared, then 'values' written.
 	 *
-	 * Every call above is one blocking round trip to the core thread, which is
-	 * fine for a settings form and useless for a numbered list - rewriting a few
-	 * hundred entries key by key means hundreds of round trips per change, and
-	 * hundreds of thousands over the life of the list.
-	 *
-	 * The keys to remove have to be named because QuickDC::Preferences cannot
-	 * enumerate a group; a caller writing a numbered list knows how long the
-	 * previous one was.
+	 * The keys to remove have to be named because the store cannot be asked which
+	 * keys a caller wrote last time; a caller keeping a numbered list knows how
+	 * long the previous one was.
 	 */
 	void replaceGroup(ConfigStore store, const QString& group,
 	                  const QStringList& removeKeys,
 	                  const QList<QPair<QString, QString>>& values);
 
 	/**
-	 * Read several of a group's settings in one job.
+	 * Read several of a group's settings at once.
 	 *
-	 * For a form. Reading a page key by key is one blocking round trip each, and a
-	 * settings page opened while the core is busy waits a whole core turn for every
-	 * one of them.
+	 * A convenience rather than an optimisation now that a read costs nothing -
+	 * kept because a form that names its keys and their defaults in one table is
+	 * easier to read than fourteen separate calls.
 	 *
-	 * The keys have to be named, and their defaults given, because
-	 * QuickDC::Preferences can neither enumerate a group nor say what type a value
-	 * is. The type of each default decides how it is read: a string default reads a
-	 * string, a number a number, a bool a bool - which also means the core's habit
-	 * of writing an absent default back into the store is preserved exactly as the
-	 * single-key accessors leave it.
+	 * The type of each default decides how the value is read: a string default
+	 * reads a string, a number a number, a bool a bool.
 	 *
 	 * @param wanted the keys to read, each with the default to use when absent.
 	 * @return the values, under the same keys.
@@ -94,15 +98,14 @@ public:
 	                       const QVariantHash& wanted) const;
 
 	/**
-	 * Write the store out.
+	 * Write the store out, before long.
 	 *
-	 * Nothing above this layer is told when the core writes of its own accord,
-	 * so a form that has just changed something should call this rather than
-	 * assume it will be picked up.
-	 *
-	 * @return false if the file could not be written, or the core is not running.
+	 * Returns at once, and the file is written a moment later - which also folds a
+	 * burst of saves into one. Somebody who has just changed a setting should call
+	 * this rather than assume the core will pick it up, and watch saveFailed() if
+	 * they want to be told when it could not be done.
 	 */
-	bool save(ConfigStore store);
+	void save(ConfigStore store);
 
 	/**
 	 * Tell the core that the configuration changed.
@@ -114,18 +117,55 @@ public:
 	void notifyChanged();
 
 signals:
-	/**
-	 * A store was written.
-	 *
-	 * For anything that keeps a setting in hand rather than asking for it again. Every
-	 * read here is a blocking trip to the core thread, so a setting consulted on a busy
-	 * path - as each arriving message consults whether pictures are fetched - has to be
-	 * held in memory and refreshed when this says it changed.
-	 */
+	/** A store was written. */
 	void saved(Qdc::ConfigStore store);
 
+	/** A store could not be written, and the settings on disk are the old ones. */
+	void saveFailed(Qdc::ConfigStore store);
+
+	/**
+	 * A setting changed.
+	 *
+	 * Every write reports itself, so anything holding a setting in hand can keep
+	 * it current without asking again and without waiting for a save.
+	 */
+	void changed(Qdc::ConfigStore store, const QString& group, const QString& key);
+
 private:
-	CoreThread* m_thread;
+	typedef QHash<QString, QString> Section;
+	typedef QHash<QString, Section> Store;
+
+	/** Fill the copy from the core. The one thing here that waits, and only once. */
+	void seed();
+
+	void flush();
+
+	Store& mirror(ConfigStore store);
+	const Store& mirror(ConfigStore store) const;
+
+	/** The stored text, or null where there is no such group or key. */
+	const QString* find(ConfigStore store, const QString& group,
+	                    const QString& key) const;
+
+	/** Change the copy, post the same change to the core, and report it. */
+	void write(ConfigStore store, const QString& group, const QString& key,
+	           const QString& value);
+
+	/**
+	 * Guarded, because the core thread is not this object's to outlive: both are
+	 * often children of the same parent, and Qt destroys them in the order they
+	 * were made, which puts the thread first.
+	 */
+	QPointer<CoreThread> m_thread;
+
+	std::shared_ptr<Relay> m_relay;
+
+	Store m_application;
+	Store m_session;
+
+	QTimer* m_saveTimer;
+	bool m_saveApplication = false;
+	bool m_saveSession = false;
 };
 
 }

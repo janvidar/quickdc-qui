@@ -31,8 +31,9 @@ namespace Qdc {
 class Attacher final : public QuickDC::Share::AttachmentListener {
 
 public:
-	explicit Attacher(MediaBridge* bridge)
+	Attacher(MediaBridge* bridge, std::shared_ptr<Relay> relay)
 		: m_bridge(bridge)
+		, m_relay(std::move(relay))
 	{
 	}
 
@@ -63,11 +64,17 @@ private:
 	void report(Work work)
 	{
 		MediaBridge* bridge = m_bridge;
-		QMetaObject::invokeMethod(bridge, [bridge, work] { work(bridge); },
-		                          Qt::QueuedConnection);
+
+		std::shared_ptr<Relay> relay = m_relay;
+		Relay* target = relay.get();
+
+		QMetaObject::invokeMethod(target, [relay = std::move(relay), bridge, work] {
+			if (!relay->detached()) work(bridge);
+		}, Qt::QueuedConnection);
 	}
 
 	MediaBridge* m_bridge;
+	std::shared_ptr<Relay> m_relay;
 };
 
 }
@@ -75,12 +82,17 @@ private:
 Qdc::MediaBridge::MediaBridge(CoreThread* thread, ConfigBridge* config, QObject* parent)
 	: QObject(parent)
 	, m_thread(thread)
+	, m_attachers(std::make_shared<AttacherBox>())
+	, m_relay(Relay::create())
 {
 	loadOffered(config);
 
 	if (!m_thread) return;
 
-	m_thread->invoke([this] { m_attacher = new Attacher(this); });
+	/* Posted rather than waited on; nothing is offered before the window is up. */
+	m_thread->post([holder = m_attachers, relay = m_relay, bridge = this] {
+		holder->attacher = new Attacher(bridge, relay);
+	});
 
 	/* Remembered as they are offered, which is the only place both halves are known. */
 	connect(this, &MediaBridge::attached, this,
@@ -91,15 +103,20 @@ Qdc::MediaBridge::MediaBridge(CoreThread* thread, ConfigBridge* config, QObject*
 
 Qdc::MediaBridge::~MediaBridge()
 {
-	if (!m_thread || !m_attacher) return;
+	/* Nothing in flight has anywhere to report to from here on. */
+	m_relay->detach();
+
+	if (!m_thread) return;
 
 	/*
 	 * Torn down on the core thread, and only after the core has stopped calling it: the
-	 * share manager holds this pointer for as long as a hash job is outstanding.
+	 * share manager holds this pointer for as long as a hash job is outstanding. Posted
+	 * rather than waited on, because an event arriving in the meantime is addressed to
+	 * the relay and the relay is detached above.
 	 */
-	m_thread->invoke([this] {
-		delete m_attacher;
-		m_attacher = nullptr;
+	m_thread->post([holder = m_attachers] {
+		delete holder->attacher;
+		holder->attacher = nullptr;
 	});
 }
 
@@ -140,7 +157,7 @@ void Qdc::MediaBridge::attach(const QString& path)
 {
 	if (path.isEmpty()) return;
 
-	if (!m_thread || !m_attacher)
+	if (!m_thread)
 	{
 		emit attachFailed(path, tr("The core is not running."));
 		return;
@@ -148,25 +165,23 @@ void Qdc::MediaBridge::attach(const QString& path)
 
 	const QByteArray local = path.toUtf8();
 
-	m_thread->post([this, local, path] {
-		QuickDC::Core* core = m_thread->core();
+	/*
+	 * Whether there is a listener yet is decided on the core thread rather than
+	 * here: it is built by a job of its own, and one posted before that job has run
+	 * simply queues behind it.
+	 */
+	m_thread->call(m_relay, [thread = m_thread, holder = m_attachers, local, path] {
+		QuickDC::Core* core = thread->core();
 
-		if (!core || !core->shares)
-		{
-			const QString message = tr("There is nothing to offer files from.");
-			QMetaObject::invokeMethod(this, [this, path, message] {
-				emit attachFailed(path, message);
-			}, Qt::QueuedConnection);
-			return;
-		}
+		if (!core || !core->shares || !holder->attacher)
+			return MediaBridge::tr("There is nothing to offer files from.");
 
-		if (core->shares->attach(local.constData(), m_attacher)) return;
+		if (core->shares->attach(local.constData(), holder->attacher))
+			return QString();
 
-		const QString message = tr("'%1' cannot be offered: it is not a file that can "
-		                           "be read.").arg(path);
-
-		QMetaObject::invokeMethod(this, [this, path, message] {
-			emit attachFailed(path, message);
-		}, Qt::QueuedConnection);
+		return MediaBridge::tr("'%1' cannot be offered: it is not a file that can "
+		                       "be read.").arg(path);
+	}, [this, path](const QString& message) {
+		if (!message.isEmpty()) emit attachFailed(path, message);
 	});
 }

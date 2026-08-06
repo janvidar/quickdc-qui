@@ -80,6 +80,7 @@ const ColourField COLOURS[] = {
 	{ "selection"_L1,          &Qdc::Theme::selection },
 	{ "selectionText"_L1,      &Qdc::Theme::selectionText },
 	{ "presence"_L1,           &Qdc::Theme::presence },
+	{ "presenceOperator"_L1,   &Qdc::Theme::presenceOperator },
 	{ "notification"_L1,       &Qdc::Theme::notification },
 	{ "notificationText"_L1,   &Qdc::Theme::notificationText },
 	{ "content"_L1,            &Qdc::Theme::content },
@@ -89,6 +90,8 @@ const ColourField COLOURS[] = {
 	{ "border"_L1,             &Qdc::Theme::border },
 	{ "notice"_L1,             &Qdc::Theme::notice },
 	{ "noticeText"_L1,         &Qdc::Theme::noticeText },
+	{ "warning"_L1,            &Qdc::Theme::warning },
+	{ "warningText"_L1,        &Qdc::Theme::warningText },
 	{ "accent"_L1,             &Qdc::Theme::accent },
 	{ "accentText"_L1,         &Qdc::Theme::accentText },
 	{ "danger"_L1,             &Qdc::Theme::danger },
@@ -364,6 +367,13 @@ Qdc::Theme Qdc::defaultTheme()
 
 	theme.presence          = QColor(0xfc, 0xc8, 0x94);
 
+	/*
+	 * Deep cyan: as far round from the warm presence colour as anything here goes,
+	 * and dark enough to hold its own against a white user list. Not the accent,
+	 * which is this scheme's indigo and is spoken for by everything selected.
+	 */
+	theme.presenceOperator  = QColor(0x0b, 0x82, 0x9b);
+
 	theme.notification      = QColor(0xa0, 0xb3, 0xf3);
 	theme.notificationText  = theme.frame;
 
@@ -382,6 +392,13 @@ Qdc::Theme Qdc::defaultTheme()
 	 */
 	theme.notice            = QColor(0xe8, 0xec, 0xf9);
 	theme.noticeText        = QColor(0x3d, 0x4a, 0x85);
+
+	/*
+	 * Amber rather than a shade of the indigo everything else here is made of: this
+	 * band is the one surface that has to be noticed without being looked for.
+	 */
+	theme.warning           = QColor(0xfb, 0xe9, 0xd0);
+	theme.warningText       = QColor(0x8a, 0x4b, 0x0f);
 
 	theme.accent            = theme.frame;
 	theme.accentText        = QColor(0xff, 0xff, 0xff);

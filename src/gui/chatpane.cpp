@@ -7,6 +7,7 @@
 #include "chatfeed.h"
 #include "chatmodel.h"
 #include "composer.h"
+#include "connectionbar.h"
 #include "hubheader.h"
 
 #include <core/hubbridge.h>
@@ -22,6 +23,7 @@ Qdc::ChatPane::ChatPane(HubBridge* hub, QWidget* parent)
 	, m_hub(hub)
 	, m_header(new HubHeader(this))
 	, m_tabs(new QTabWidget(this))
+	, m_connection(new ConnectionBar(this))
 	, m_model(new ChatModel(this))
 	, m_feed(new ChatFeed(this))
 	, m_composer(new Composer(this))
@@ -53,6 +55,12 @@ Qdc::ChatPane::ChatPane(HubBridge* hub, QWidget* parent)
 
 	m_tabs->setDocumentMode(true);
 	m_tabs->addTab(m_messages, tr("Messages"));
+
+	/*
+	 * After the first page exists, so that there is a tab bar to measure and sit
+	 * under. A subclass adding its own tabs later does not move the bar.
+	 */
+	m_connection->attachTo(m_tabs);
 
 	QVBoxLayout* layout = new QVBoxLayout(this);
 	layout->setContentsMargins(0, 0, 0, 0);
@@ -90,6 +98,11 @@ Qdc::HubBridge* Qdc::ChatPane::hub() const
 Qdc::HubHeader* Qdc::ChatPane::header() const
 {
 	return m_header;
+}
+
+Qdc::ConnectionBar* Qdc::ChatPane::connectionBar() const
+{
+	return m_connection;
 }
 
 void Qdc::ChatPane::setMediaResolver(
