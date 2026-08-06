@@ -90,12 +90,16 @@ QToolButton* tab_close_button(QWidget* parent)
  * Sized rather than fitted to their contents, because the contents arrive over the
  * following minute and a column that resizes itself as replies land moves the names
  * sideways under the pointer while somebody is reading them.
+ *
+ * Named for the column rather than ending in _WIDTH, because glibc defines
+ * SIZE_WIDTH as a macro - and a macro replaces the name wherever it is written,
+ * so the declaration itself stops parsing.
  */
-constexpr int SIZE_WIDTH = 90;
-constexpr int USERS_WIDTH = 60;
-constexpr int SLOTS_WIDTH = 60;
-constexpr int TYPE_WIDTH = 90;
-constexpr int HUB_WIDTH = 200;
+constexpr int COLUMN_SIZE = 90;
+constexpr int COLUMN_USERS = 60;
+constexpr int COLUMN_SLOTS = 60;
+constexpr int COLUMN_TYPE = 90;
+constexpr int COLUMN_HUB = 200;
 
 }
 
@@ -299,11 +303,11 @@ void Qdc::SearchView::startSearch()
 	header->setSectionResizeMode(SearchModel::TypeColumn, QHeaderView::Interactive);
 	header->setSectionResizeMode(SearchModel::HubColumn, QHeaderView::Interactive);
 
-	search->tree->setColumnWidth(SearchModel::SizeColumn, SIZE_WIDTH);
-	search->tree->setColumnWidth(SearchModel::UsersColumn, USERS_WIDTH);
-	search->tree->setColumnWidth(SearchModel::SlotsColumn, SLOTS_WIDTH);
-	search->tree->setColumnWidth(SearchModel::TypeColumn, TYPE_WIDTH);
-	search->tree->setColumnWidth(SearchModel::HubColumn, HUB_WIDTH);
+	search->tree->setColumnWidth(SearchModel::SizeColumn, COLUMN_SIZE);
+	search->tree->setColumnWidth(SearchModel::UsersColumn, COLUMN_USERS);
+	search->tree->setColumnWidth(SearchModel::SlotsColumn, COLUMN_SLOTS);
+	search->tree->setColumnWidth(SearchModel::TypeColumn, COLUMN_TYPE);
+	search->tree->setColumnWidth(SearchModel::HubColumn, COLUMN_HUB);
 
 	connect(search->tree, &QTreeView::customContextMenuRequested,
 	        this, &SearchView::showResultMenu);
