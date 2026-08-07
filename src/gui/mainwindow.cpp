@@ -46,9 +46,6 @@ namespace {
  */
 constexpr int CONTENT_INSET = 8;
 
-constexpr int TOP_BAR_HEIGHT = 42;
-constexpr int TOP_BAR_MARGIN = 16;
-
 }
 
 Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
@@ -92,7 +89,6 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	QVBoxLayout* layout = new QVBoxLayout(central);
 	layout->setContentsMargins(0, 0, 0, 0);
 	layout->setSpacing(0);
-	layout->addWidget(buildTopBar());
 	layout->addLayout(body, 1);
 
 	/*
@@ -267,33 +263,6 @@ bool Qdc::MainWindow::event(QEvent* event)
 	return handled;
 }
 
-QWidget* Qdc::MainWindow::buildTopBar()
-{
-	QWidget* bar = new QWidget(this);
-	bar->setObjectName(QStringLiteral("topBar"));
-	bar->setAutoFillBackground(true);
-	bar->setFixedHeight(TOP_BAR_HEIGHT);
-
-	QLabel* product = new QLabel(QStringLiteral("QuickDC"), bar);
-	product->setObjectName(QStringLiteral("topBarTitle"));
-
-	QFont large = product->font();
-	large.setPointSize(large.pointSize() + 1);
-	product->setFont(large);
-
-	m_topBarTitle = new QLabel(bar);
-	m_topBarTitle->setObjectName(QStringLiteral("topBarSubtitle"));
-
-	QHBoxLayout* layout = new QHBoxLayout(bar);
-	layout->setContentsMargins(TOP_BAR_MARGIN, 0, TOP_BAR_MARGIN, 0);
-	layout->setSpacing(10);
-	layout->addWidget(product);
-	layout->addWidget(m_topBarTitle);
-	layout->addStretch(1);
-
-	return bar;
-}
-
 void Qdc::MainWindow::addView(View* view)
 {
 	const int index = m_rail->addDestination(view->glyph(), view->title());
@@ -318,8 +287,11 @@ void Qdc::MainWindow::showView(int index)
 
 	const QString title = m_views.at(index)->title();
 
-	if (m_topBarTitle) m_topBarTitle->setText(QStringLiteral("· ") + title);
-
+	/*
+	 * The title bar is where this is read now. It says the same thing the strip
+	 * across the top used to, in the row the window already spends on a frame -
+	 * which is a row of screen back on a display with far more width than height.
+	 */
 	setWindowTitle(tr("%1 — QuickDC").arg(title));
 }
 

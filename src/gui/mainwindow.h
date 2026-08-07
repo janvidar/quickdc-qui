@@ -75,16 +75,8 @@ private:
 	 */
 	void addView(View* view);
 
-	/** Follow the current view: rail selection, stack, top bar, window title. */
+	/** Follow the current view: rail selection, stack, window title. */
 	void showView(int index);
-
-	/**
-	 * The strip across the top of the window, in the frame colour.
-	 *
-	 * Drawn inside the window, below whatever title bar the platform gives us. The
-	 * two are meant to read as one strip, which is what styleTitleBar() is for.
-	 */
-	QWidget* buildTopBar();
 
 	CoreThread* m_thread;
 
@@ -127,8 +119,6 @@ private:
 	/** Rounds the corners of the content, from above. Never laid out. */
 	CornerMask* m_mask = nullptr;
 
-	/** Names the view on screen, in the top bar. Built in the constructor body. */
-	QLabel* m_topBarTitle = nullptr;
 };
 
 }

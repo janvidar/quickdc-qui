@@ -26,9 +26,9 @@ QWidget {
     color: %(contentText);
 }
 
-/* ---- the frame: window and top bar ---- */
+/* ---- the frame ---- */
 
-QWidget#appFrame, QWidget#topBar {
+QWidget#appFrame {
     background: %(frame);
     border: none;
 }
@@ -40,15 +40,6 @@ QWidget#appFrame, QWidget#topBar {
 QWidget#navigationRail {
     background: %(rail);
     border: none;
-}
-
-QLabel#topBarTitle {
-    color: %(frameText);
-    font-weight: bold;
-}
-
-QLabel#topBarSubtitle {
-    color: %(railText);
 }
 
 /* ---- the secondary navigation: hubs and conversations ---- */

@@ -45,7 +45,7 @@ void Qdc::styleTitleBar(QWidget* widget)
 	 * that Qt resets is what decides whether to bother.
 	 */
 	if (window.titlebarAppearsTransparent
-		&& window.titleVisibility == NSWindowTitleHidden)
+		&& window.titleVisibility == NSWindowTitleVisible)
 	{
 		return;
 	}
@@ -96,9 +96,17 @@ void Qdc::styleTitleBar(QWidget* widget)
 	window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
 
 	/*
-	 * The title itself is hidden because the top bar sits directly below and already
-	 * names the view: drawn as well, it is the same thing said twice, in the same
-	 * colour, one line apart.
+	 * And the title is drawn, because it is now the only thing naming the view:
+	 * the strip that used to sit below and say it has gone, which is a row of
+	 * screen back on a display with far more width than height.
+	 *
+	 * Drawn by AppKit in the row the window already spends on a frame, rather
+	 * than by growing the content up into that row. Full size content view was
+	 * tried: Qt and AppKit then disagree about how a content rect maps to a frame
+	 * rect, and every layout adds a title bar's height to the window until the
+	 * backing store cannot be allocated - a window 8584624 pixels tall, and the
+	 * process with it. This way the title bar stays the platform's, which also
+	 * keeps dragging and zooming working without any help from us.
 	 */
-	window.titleVisibility = NSWindowTitleHidden;
+	window.titleVisibility = NSWindowTitleVisible;
 }
