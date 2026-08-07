@@ -120,7 +120,24 @@ public:
 
 		if (message.fromHub.isEmpty())
 		{
-			const QColor ink = nick_colour(message.from.nick, darkBackground);
+			/*
+			 * An operator speaks in the operator colour rather than in one of
+			 * their own, which is the ink the user list gives them as well.
+			 *
+			 * Colour means who is speaking everywhere else in the feed, and this
+			 * is the one place it means what they are instead: somebody who can
+			 * kick, ban and redirect is worth recognising as one the moment they
+			 * say something, and two operators being the same colour costs
+			 * little when their names are written out beside it.
+			 *
+			 * Taken from the line rather than looked up, so a message keeps the
+			 * standing its sender had when they sent it - the user list is what
+			 * says who holds it now.
+			 */
+			const QColor ink = message.from.op
+				? theme().presenceOperator
+				: nick_colour(message.from.nick, darkBackground);
+
 			const QString nick = message.from.nick.toHtmlEscaped();
 
 			/*
