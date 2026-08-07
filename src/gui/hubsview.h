@@ -93,6 +93,29 @@ public:
 	QStringList openHubs() const;
 
 	/**
+	 * Open again what was open when this last exited, hubs and conversations
+	 * both, and connect to each hub.
+	 *
+	 * The transcripts come back with them, so a conversation carries on rather
+	 * than starting over. Does nothing without a ConfigBridge to have recorded it.
+	 */
+	void restoreSession();
+
+	/**
+	 * Write down what is open, for restoreSession() to put back.
+	 *
+	 * Called as conversations open and close rather than only on the way out, so
+	 * that a session which ends in a crash still comes back.
+	 */
+	void saveSession();
+
+	/**
+	 * The conversations open on a hub, by the id their transcripts are filed
+	 * under. In the order they were opened.
+	 */
+	QStringList openConversations(const QString& hubUrl) const;
+
+	/**
 	 * How a hub password is asked for: given the hub's address, return the
 	 * password, or nothing if the user declines.
 	 *
@@ -168,6 +191,15 @@ private:
 	void route(Entry& entry, const ChatMessage& message);
 
 	DmPane* openDm(Entry& entry, const UserInfo& user);
+
+	/**
+	 * Open again the conversations recorded against this hub, each with what was
+	 * said in it, and each marked as being with somebody not here yet.
+	 */
+	void restoreConversations(Entry& entry);
+
+	/** The conversations open on a hub, in the order their rows are listed. */
+	QList<DmPane*> conversationsOf(const Entry& entry) const;
 
 	/**
 	 * A conversation already open with this person, whatever id it is filed under.
@@ -313,6 +345,14 @@ private:
 	ConfigBridge* m_config;
 	Completed* m_completed;
 	RecentHubs* m_recent;
+
+	/**
+	 * True while restoreSession() is opening what it read.
+	 *
+	 * Opening a hub records what is open, and doing that halfway through a
+	 * restore would write a list shorter than the one still being read from.
+	 */
+	bool m_restoring = false;
 
 	/** Hashes and offers a file somebody attached to a message. Made here, because
 	    attaching is not a per hub thing even though it is asked for in a conversation. */

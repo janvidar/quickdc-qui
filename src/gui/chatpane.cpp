@@ -184,6 +184,11 @@ void Qdc::ChatPane::post(const ChatMessage& message)
 	emit unreadChanged(m_unread);
 }
 
+void Qdc::ChatPane::restore(const QList<ChatMessage>& messages)
+{
+	for (const ChatMessage& message : messages) m_model->append(message);
+}
+
 void Qdc::ChatPane::postNotice(const QString& text)
 {
 	/*

@@ -30,6 +30,7 @@
 #include <QShowEvent>
 #include <QStackedWidget>
 #include <QVBoxLayout>
+#include <QTimer>
 
 namespace {
 
@@ -135,6 +136,13 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 
 	showView(m_rail->currentIndex());
 	resize(1100, 720);
+
+	/*
+	 * Last, and queued rather than called: opening a hub connects to it, and the
+	 * window should be on screen before that starts rather than after however
+	 * long the first connection takes.
+	 */
+	QTimer::singleShot(0, m_hubs, [this] { m_hubs->restoreSession(); });
 }
 
 Qdc::MainWindow::~MainWindow()
@@ -153,6 +161,14 @@ Qdc::MainWindow::~MainWindow()
 	 * The hub view before the bridges: it owns hub bridges of its own and panes
 	 * connected to them, and its destructor unwinds that in the right order.
 	 */
+	/*
+	 * What is open, before any of it is closed. It is written as conversations
+	 * come and go as well, so this is only the tidy exit - but a hub closed by
+	 * the teardown below would otherwise be recorded as having been closed by
+	 * somebody, and would not come back.
+	 */
+	if (m_hubs) m_hubs->saveSession();
+
 	delete m_hubs;
 	m_hubs = nullptr;
 

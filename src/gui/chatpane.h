@@ -64,6 +64,15 @@ public:
 	/** A note from the client rather than from the hub: an error, a status. */
 	void postNotice(const QString& text);
 
+	/**
+	 * Put back what was said before this session, oldest first.
+	 *
+	 * Not post(): nothing here is new, so none of it is unread. Somebody
+	 * returning to a conversation they have already read should not be told
+	 * there are four thousand things waiting for them in it.
+	 */
+	void restore(const QList<ChatMessage>& messages);
+
 	/** Put a chosen file into the message being written; see Composer. */
 	void insertAttachment(const RichText::Attachment& file);
 

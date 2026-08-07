@@ -723,6 +723,24 @@ QString Qdc::DmPane::context() const
 	return m_user.id;
 }
 
+QString Qdc::DmPane::peerId() const
+{
+	return m_user.sourceId.isEmpty() ? m_user.id : m_user.sourceId;
+}
+
+void Qdc::DmPane::restoreOffline()
+{
+	/*
+	 * The field rather than setPresent(), which writes the change into the
+	 * conversation - and there is no change here, only a conversation being put
+	 * back the way it was left.
+	 */
+	m_present = false;
+
+	applySendable();
+	applyBand();
+}
+
 void Qdc::DmPane::showFiles()
 {
 	/* By widget rather than by index: the base class owns the tabs before this one. */

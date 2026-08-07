@@ -61,6 +61,29 @@ const QString MEDIA_KEEP = QStringLiteral("Keep pasted for days");
 /** Where the folder a fetched picture lands in is named. */
 const QString DOWNLOADS_GROUP = QStringLiteral("Downloads");
 
+/**
+ * What was open last time, so that it can be opened again.
+ *
+ * The hubs go in the application's own settings as a numbered list, which is the
+ * shape [Favourites] and [Shares] already use so a hand-edited file stays
+ * predictable. The conversations on a hub go in the session store under that
+ * hub's address, beside the other things remembered per hub.
+ */
+const QString WINDOWS_GROUP = QStringLiteral("Windows");
+const QString WINDOWS_TOTAL = QStringLiteral("Total");
+const QString WINDOWS_HUB = QStringLiteral("Hub ");
+const QString DMS_TOTAL = QStringLiteral("Conversations");
+const QString DMS_ENTRY = QStringLiteral("Conversation ");
+
+/**
+ * How much of a transcript is put back on screen.
+ *
+ * The file keeps everything; this is what a pane is filled with, and it matches
+ * ChatModel's own capacity - the model would drop anything past it the moment it
+ * was appended, so reading more would be work thrown away.
+ */
+constexpr int RESTORED_LINES = 4000;
+
 /** Two megabytes: enough for a photograph, small enough to arrive unnoticed. */
 constexpr int MEDIA_LIMIT_DEFAULT = 2 * 1024 * 1024;
 
@@ -422,6 +445,31 @@ bool Qdc::HubsView::openHub(const QString& url)
 
 	loadHubMediaPolicy(bridge->url());
 
+	/*
+	 * What was said here before, put back before the hub has a chance to say
+	 * anything new. The answer arrives later and out of order with everything
+	 * else, which is why each pane is found again by the conversation it names
+	 * rather than captured here.
+	 */
+	connect(bridge, &HubBridge::historyRestored, this,
+	        [this, bridge](const QString& conversation, const QVector<ChatMessage>& lines) {
+		Entry* found = entryFor(bridge);
+		if (!found || lines.isEmpty()) return;
+
+		if (conversation.isEmpty())
+		{
+			found->pane->restore(lines.toList());
+			return;
+		}
+
+		for (DmPane* dm : conversationsOf(*found))
+		{
+			if (dm->peerId() == conversation) { dm->restore(lines.toList()); return; }
+		}
+	});
+
+	bridge->requestHistory(QString(), RESTORED_LINES);
+
 	if (m_favourites) entry->pane->setFavourite(m_favourites->contains(bridge->url()));
 
 	connect(entry->pane, &HubPane::favouriteToggled, this,
@@ -513,7 +561,157 @@ bool Qdc::HubsView::openHub(const QString& url)
 	showPane(entry->pane);
 	bridge->connectToHub();
 
+	saveSession();
+
 	return true;
+}
+
+QList<Qdc::DmPane*> Qdc::HubsView::conversationsOf(const Entry& entry) const
+{
+	QList<DmPane*> found;
+	if (!entry.item) return found;
+
+	/*
+	 * Taken from the tree rather than from the map they are filed in: a QHash has
+	 * no order, and the order they are listed in is the order to put them back.
+	 */
+	for (int n = 0; n < entry.item->childCount(); ++n)
+	{
+		ChatPane* pane = m_panes.value(entry.item->child(n), nullptr);
+		if (DmPane* dm = qobject_cast<DmPane*>(pane)) found.append(dm);
+	}
+
+	return found;
+}
+
+QStringList Qdc::HubsView::openConversations(const QString& hubUrl) const
+{
+	QStringList ids;
+
+	for (const Entry* entry : m_entries)
+	{
+		if (!entry->bridge || entry->bridge->url() != hubUrl) continue;
+
+		for (const DmPane* dm : conversationsOf(*entry))
+		{
+			const QString id = dm->peerId();
+			if (!id.isEmpty() && !ids.contains(id)) ids.append(id);
+		}
+
+		break;
+	}
+
+	return ids;
+}
+
+void Qdc::HubsView::saveSession()
+{
+	if (!m_config || m_restoring) return;
+
+	const QStringList hubs = openHubs();
+
+	/*
+	 * The old entries go first. A list that has grown shorter would otherwise
+	 * leave the tail of the longer one behind it, and those hubs would be opened
+	 * again every time for ever.
+	 */
+	const int had = m_config->getNumber(ConfigStore::Application, WINDOWS_GROUP,
+	                                    WINDOWS_TOTAL, 0);
+
+	for (int n = 0; n < had; ++n)
+	{
+		m_config->remove(ConfigStore::Application, WINDOWS_GROUP,
+		                 WINDOWS_HUB + QString::number(n));
+	}
+
+	m_config->setNumber(ConfigStore::Application, WINDOWS_GROUP, WINDOWS_TOTAL,
+	                    static_cast<int>(hubs.size()));
+
+	for (int n = 0; n < hubs.size(); ++n)
+	{
+		m_config->setString(ConfigStore::Application, WINDOWS_GROUP,
+		                    WINDOWS_HUB + QString::number(n), hubs.at(n));
+	}
+
+	m_config->save(ConfigStore::Application);
+
+	for (const QString& hubUrl : hubs)
+	{
+		const QStringList dms = openConversations(hubUrl);
+
+		const int before = m_config->getNumber(ConfigStore::Session, hubUrl,
+		                                       DMS_TOTAL, 0);
+
+		for (int n = 0; n < before; ++n)
+			m_config->remove(ConfigStore::Session, hubUrl, DMS_ENTRY + QString::number(n));
+
+		m_config->setNumber(ConfigStore::Session, hubUrl, DMS_TOTAL,
+		                    static_cast<int>(dms.size()));
+
+		for (int n = 0; n < dms.size(); ++n)
+		{
+			m_config->setString(ConfigStore::Session, hubUrl,
+			                    DMS_ENTRY + QString::number(n), dms.at(n));
+		}
+	}
+
+	m_config->save(ConfigStore::Session);
+}
+
+void Qdc::HubsView::restoreConversations(Entry& entry)
+{
+	if (!m_config || !entry.bridge) return;
+
+	const QString hubUrl = entry.bridge->url();
+	const int total = m_config->getNumber(ConfigStore::Session, hubUrl, DMS_TOTAL, 0);
+
+	for (int n = 0; n < total; ++n)
+	{
+		const QString peer = m_config->getString(ConfigStore::Session, hubUrl,
+			DMS_ENTRY + QString::number(n), QString());
+
+		if (peer.isEmpty()) continue;
+
+		/*
+		 * All that was kept is who it was with. The session id they will next
+		 * appear under cannot be known until they appear, so the lasting id
+		 * stands in for it - and openDm() moves the conversation onto the real
+		 * one the moment the hub announces them, which is what isWith() is for.
+		 */
+		UserInfo user;
+		user.id = peer;
+		user.sourceId = peer;
+		user.nick = peer;
+
+		if (DmPane* pane = openDm(entry, user)) pane->restoreOffline();
+	}
+}
+
+void Qdc::HubsView::restoreSession()
+{
+	if (!m_config) return;
+
+	const int total = m_config->getNumber(ConfigStore::Application, WINDOWS_GROUP,
+	                                      WINDOWS_TOTAL, 0);
+	if (total <= 0) return;
+
+	m_restoring = true;
+
+	for (int n = 0; n < total; ++n)
+	{
+		const QString url = m_config->getString(ConfigStore::Application,
+			WINDOWS_GROUP, WINDOWS_HUB + QString::number(n), QString());
+
+		if (url.isEmpty() || !openHub(url)) continue;
+
+		if (Entry* entry = entryFor(HubBridge::normalisedUrl(url)))
+			restoreConversations(*entry);
+	}
+
+	m_restoring = false;
+
+	/* Once, now that everything is open, rather than partly on the way through. */
+	saveSession();
 }
 
 void Qdc::HubsView::closeHub(const QString& url)
@@ -547,6 +745,13 @@ void Qdc::HubsView::closeHub(const QString& url)
 	if (m_stack->count() <= 1) m_stack->setCurrentWidget(m_empty);
 
 	refreshBadge();
+
+	/*
+	 * The transcripts are left where they are. Closing a hub says it is not
+	 * wanted open, not that what was said on it never happened - and opening it
+	 * again is expected to pick the conversation up.
+	 */
+	saveSession();
 }
 
 QStringList Qdc::HubsView::openHubs() const
@@ -625,6 +830,8 @@ void Qdc::HubsView::route(Entry& entry, const ChatMessage& message)
 
 		pane = openDm(entry, user);
 	}
+
+	if (!pane) return;
 
 	pane->post(message);
 }
@@ -712,6 +919,15 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 	adopt(pane, item);
 
 	/*
+	 * What was said to this person before, whether the conversation is being put
+	 * back or opened afresh - somebody picked out of the user list today may well
+	 * have been talked to last week, and starting blank would hide it.
+	 */
+	if (entry.bridge) entry.bridge->requestHistory(pane->peerId(), RESTORED_LINES);
+
+	saveSession();
+
+	/*
 	 * The pane keeps its own name for the conversation and tells us when it changes;
 	 * the key it is filed under here has to move with it or the next message from
 	 * them would open a second conversation.
@@ -738,6 +954,8 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 		m_stack->removeWidget(closing);
 		m_panes.remove(row);
 		delete row;
+
+		saveSession();
 		delete closing;
 
 		showPane(entry.pane);

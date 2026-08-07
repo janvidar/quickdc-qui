@@ -100,6 +100,20 @@ public:
 	 */
 	QString url() const;
 
+	/**
+	 * Ask for what was said on this hub before now.
+	 *
+	 * The core keeps the transcripts and writes them as the chat arrives; this
+	 * only reads the recent end of one back. The answer arrives as
+	 * historyRestored(), because reading a file is the core's work and nothing
+	 * drawn on screen may wait for the reactor to get to it.
+	 *
+	 * @param conversation empty for this hub's public chat, and otherwise the
+	 *        other party's lasting id - the client id on ADC, the nickname on
+	 *        NMDC.
+	 */
+	void requestHistory(const QString& conversation, int limit);
+
 	/** The last state reported, so a view built later can catch up. */
 	NetStatus netStatus() const;
 	HubStatus hubStatus() const;
@@ -204,6 +218,17 @@ signals:
 	void systemError(const QString& message);
 
 	void chatReceived(const Qdc::ChatMessage& message);
+
+	/**
+	 * What requestHistory() went to fetch, oldest first.
+	 *
+	 * The conversation is echoed back because several may be asked for at once
+	 * and the answers arrive in whatever order the core gets to them. Empty when
+	 * there is no transcript, which is the ordinary case for a hub being opened
+	 * for the first time.
+	 */
+	void historyRestored(const QString& conversation,
+	                     const QVector<Qdc::ChatMessage>& lines);
 
 	/**
 	 * Only a nickname is known at this point. The rest follows in userUpdated()

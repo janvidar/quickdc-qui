@@ -8,6 +8,7 @@
 
 #include <api/core.h>
 #include <api/hub.h>
+#include <chat/archive.h>
 #include <samurai/io/net/url.h>
 #include <share/searchresult.h>
 
@@ -104,6 +105,20 @@ Qdc::HubStatus convert(QuickDC::HubListener::StatusHub status)
 	}
 
 	return Qdc::HubStatus::None;
+}
+
+/**
+ * When a message was said, as a QDateTime.
+ *
+ * The core hands down seconds since the epoch and always sets it: the hub's own
+ * TS where it sent one, and the moment of arrival otherwise. A zero is treated
+ * as nothing having been said about it rather than as 1970, which is what a
+ * front end would otherwise draw against a replayed line.
+ */
+QDateTime stamped(uint64_t timestamp)
+{
+	return timestamp ? QDateTime::fromSecsSinceEpoch(static_cast<qint64>(timestamp))
+	                 : QDateTime::currentDateTime();
 }
 
 Qdc::UserInfo convert(const QuickDC::User* user)
@@ -313,13 +328,13 @@ public:
 	}
 
 	void EventChat(const QuickDC::User* user, const char* message, bool action,
-	               bool richText) override
+	               bool richText, uint64_t timestamp) override
 	{
 		ChatMessage chat;
 		chat.hubUrl   = from_utf8(getUrl());
 		chat.from     = convert(user);
 		chat.text     = from_utf8(message);
-		chat.received = QDateTime::currentDateTime();
+		chat.received = stamped(timestamp);
 		chat.action   = action;
 		chat.richText = richText;
 
@@ -335,14 +350,14 @@ public:
 	 */
 	void EventPrivateChat(const QuickDC::User* from, const QuickDC::User*,
 	                      const char* message, const char* userContextID,
-	                      bool action, bool richText) override
+	                      bool action, bool richText, uint64_t timestamp) override
 	{
 		ChatMessage chat;
 		chat.hubUrl         = from_utf8(getUrl());
 		chat.from           = convert(from);
 		chat.text           = from_utf8(message);
 		chat.context        = from_utf8(userContextID);
-		chat.received       = QDateTime::currentDateTime();
+		chat.received       = stamped(timestamp);
 		chat.action         = action;
 		chat.richText       = richText;
 		chat.privateMessage = true;
@@ -356,13 +371,13 @@ public:
 	}
 
 	void EventHubMessage(const char* fakeuser, const char* message, bool action,
-	                     bool richText) override
+	                     bool richText, uint64_t timestamp) override
 	{
 		ChatMessage chat;
 		chat.hubUrl   = from_utf8(getUrl());
 		chat.fromHub  = from_utf8(fakeuser);
 		chat.text     = from_utf8(message);
-		chat.received = QDateTime::currentDateTime();
+		chat.received = stamped(timestamp);
 		chat.action   = action;
 		chat.richText = richText;
 
@@ -645,6 +660,56 @@ QString Qdc::HubBridge::settingsUrl(const QString& url)
 QString Qdc::HubBridge::url() const
 {
 	return m_url;
+}
+
+void Qdc::HubBridge::requestHistory(const QString& conversation, int limit)
+{
+	if (limit <= 0) return;
+
+	/*
+	 * Converted to bytes before the closure takes them: a QString shares its
+	 * buffer with its copies, and this one is read on the core's thread.
+	 */
+	const QByteArray hub = m_url.toUtf8();
+	const QByteArray with = conversation.toUtf8();
+
+	m_thread->call(m_relay,
+		[thread = m_thread, hub, with, limit] {
+			QVector<ChatMessage> lines;
+
+			QuickDC::Core* core = thread->core();
+			if (!core || !core->chat) return lines;
+
+			const std::vector<QuickDC::ChatArchive::Line> found =
+				core->chat->tail(hub.constData(), with.constData(),
+				                 static_cast<size_t>(limit));
+
+			lines.reserve(static_cast<qsizetype>(found.size()));
+
+			for (const QuickDC::ChatArchive::Line& line : found)
+			{
+				ChatMessage message;
+
+				message.hubUrl = QString::fromUtf8(hub);
+				message.text = QString::fromUtf8(line.text.c_str());
+				message.fromHub = QString::fromUtf8(line.hub.c_str());
+				message.from.nick = QString::fromUtf8(line.nick.c_str());
+				message.from.sourceId = QString::fromUtf8(line.source.c_str());
+				message.from.op = line.op;
+				message.action = line.action;
+				message.richText = line.richText;
+				message.privateMessage = line.privateMessage;
+				message.received =
+					QDateTime::fromSecsSinceEpoch(static_cast<qint64>(line.time));
+
+				lines.append(message);
+			}
+
+			return lines;
+		},
+		[this, conversation](QVector<ChatMessage> lines) {
+			emit historyRestored(conversation, lines);
+		});
 }
 
 Qdc::NetStatus Qdc::HubBridge::netStatus() const

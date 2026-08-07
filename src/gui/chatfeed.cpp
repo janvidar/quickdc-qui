@@ -94,7 +94,15 @@ public:
 		document.setDefaultTextOption(wrapping);
 
 		const QColor stamp = palette.color(QPalette::PlaceholderText);
-		const QString time = message.received.toString(QStringLiteral("HH:mm"));
+
+		/*
+		 * The date as well, for anything not from today. A conversation put back
+		 * from disk can reach weeks into the past, and an hour and a minute on
+		 * their own would file last Tuesday's line among this morning's.
+		 */
+		const QString time = message.received.date() == QDate::currentDate()
+			? message.received.toString(QStringLiteral("HH:mm"))
+			: message.received.toString(QStringLiteral("d MMM HH:mm"));
 
 		/*
 		 * Where the message text starts, measured rather than guessed: the

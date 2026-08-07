@@ -158,6 +158,25 @@ public:
 	/** The id this conversation is keyed by; ChatMessage::context matches it. */
 	QString context() const;
 
+	/**
+	 * Who this is with, in the form that outlasts a session.
+	 *
+	 * The client id on ADC and the nickname on NMDC - what context() gives is a
+	 * session id on ADC and names somebody else entirely next time they connect,
+	 * so this is what a transcript is filed under. Falls back to the context when
+	 * the hub has published nothing better.
+	 */
+	QString peerId() const;
+
+	/**
+	 * Opened from a transcript rather than by somebody speaking.
+	 *
+	 * They are not on the hub as far as anything here knows, and saying so
+	 * quietly is the point: nobody left, the client was not running, so writing a
+	 * departure into the record would be inventing an event that never happened.
+	 */
+	void restoreOffline();
+
 	/** The details, once the hub has sent more than a nickname. */
 	void setUser(const UserInfo& user);
 
