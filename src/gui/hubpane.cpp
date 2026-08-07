@@ -7,16 +7,20 @@
 #include "composer.h"
 #include "connectionbar.h"
 #include "filelistview.h"
+#include "glyphs.h"
 #include "hubheader.h"
+#include "theme.h"
+#include "usermenu.h"
 #include "usermodel.h"
+#include "widgets.h"
 
 #include <core/configbridge.h>
 #include <core/hubbridge.h>
 
 #include <QClipboard>
 #include <QFormLayout>
-#include <QGroupBox>
 #include <QGuiApplication>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -26,6 +30,10 @@
 #include <QLocale>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QShortcut>
+#include <QSortFilterProxyModel>
+#include <QTabWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace {
@@ -33,6 +41,9 @@ namespace {
 /** How wide the user list starts, and the least it can be dragged to. */
 constexpr int USER_LIST_WIDTH = 190;
 constexpr int USER_LIST_MINIMUM = 120;
+
+/** The search glyph in the user list's heading. */
+constexpr int FILTER_GLYPH = 14;
 
 /*
  * The identity keys, spelled as the core spells them.
@@ -94,24 +105,31 @@ Qdc::HubPane::HubPane(HubBridge* hub, ConfigBridge* config, QWidget* parent)
 	: ChatPane(hub, parent)
 	, m_config(config)
 	, m_users(new UserModel(this))
+	, m_visibleUsers(new QSortFilterProxyModel(this))
 	, m_userList(new QListView(this))
 	, m_info(new QLabel(this))
 {
-	header()->setTitle(hub ? hub->url() : tr("No hub"));
 	header()->setUserListVisible(true);
 	header()->setFavouriteVisible(true);
 
+	/*
+	 * Never sorted, only filtered. The model keeps itself in order - operators
+	 * first, then by name - and a proxy asked to sort would take that over and
+	 * lose the first half of it.
+	 */
+	m_visibleUsers->setSourceModel(m_users);
+	m_visibleUsers->setFilterCaseSensitivity(Qt::CaseInsensitive);
+
 	m_userList->setObjectName(QStringLiteral("userList"));
-	m_userList->setModel(m_users);
+	m_userList->setModel(m_visibleUsers);
 	m_userList->setUniformItemSizes(true);
 	m_userList->setFrameShape(QFrame::NoFrame);
 	m_userList->setSelectionMode(QAbstractItemView::SingleSelection);
 	m_userList->setAccessibleName(tr("Users"));
-	m_userList->setMinimumWidth(USER_LIST_MINIMUM);
 	m_userList->setContextMenuPolicy(Qt::CustomContextMenu);
 
 	connect(m_userList, &QListView::customContextMenuRequested,
-	        this, &HubPane::showUserMenu);
+	        this, &HubPane::showUserListMenu);
 
 	if (m_config)
 	{
@@ -126,7 +144,7 @@ Qdc::HubPane::HubPane(HubBridge* hub, ConfigBridge* config, QWidget* parent)
 	 * rather than to the window, because it is the only view that has one and its
 	 * contents are hub specific.
 	 */
-	addSidebar(m_userList, USER_LIST_WIDTH);
+	addSidebar(buildUserSidebar(), USER_LIST_WIDTH);
 
 	m_info->setWordWrap(true);
 	m_info->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -135,17 +153,13 @@ Qdc::HubPane::HubPane(HubBridge* hub, ConfigBridge* config, QWidget* parent)
 	/* Inset by the page below rather than by itself, so the form lines up with it. */
 	m_info->setMargin(0);
 
-	/*
-	 * What the hub is, and then who we are on it. One page rather than two tabs:
-	 * both are about this hub and neither is long enough to be looked for.
-	 */
+	/* What the hub is. What we are on it is behind the gears; see below. */
 	QWidget* info = new QWidget(this);
 
 	QVBoxLayout* stacked = new QVBoxLayout(info);
 	stacked->setContentsMargins(12, 12, 12, 12);
 	stacked->setSpacing(12);
 	stacked->addWidget(m_info);
-	stacked->addWidget(buildSessionForm());
 	stacked->addStretch(1);
 
 	QScrollArea* infoPage = new QScrollArea(this);
@@ -155,7 +169,28 @@ Qdc::HubPane::HubPane(HubBridge* hub, ConfigBridge* config, QWidget* parent)
 
 	tabs()->addTab(infoPage, tr("Info"));
 
-	connect(header(), &HubHeader::userListToggled, m_userList, &QWidget::setVisible);
+	/*
+	 * Built now rather than when it is first asked for, and kept whether it is on
+	 * the tab strip or not: loadSession() fills it during construction, and anything
+	 * typed into it has to survive the tab coming and going.
+	 */
+	m_sessionPage = buildSessionPage();
+	m_sessionPage->setParent(this);
+	m_sessionPage->hide();
+
+	/*
+	 * In the header beside the padlock and the user count rather than in the tab
+	 * strip: it is one of the things that can be done to this hub, which is what
+	 * that row of buttons is, and a corner widget sat outside the run of them.
+	 */
+	header()->setSettingsVisible(true);
+	connect(header(), &HubHeader::settingsToggled, this, &HubPane::showSessionPage);
+
+	refreshSessionGears();
+
+	/* The whole panel, or the heading and its filter would stay behind. */
+	connect(header(), &HubHeader::userListToggled,
+	        m_userSidebar, &QWidget::setVisible);
 	header()->setUserListShown(true);
 
 	connect(header(), &HubHeader::favouriteToggled, this, [this](bool favourite) {
@@ -166,19 +201,21 @@ Qdc::HubPane::HubPane(HubBridge* hub, ConfigBridge* config, QWidget* parent)
 	connect(m_users, &UserModel::countChanged, this, [this](int count) {
 		header()->setUserCount(count);
 
-		/* The mention list follows whoever is actually here. */
+		/* The mention list follows whoever is actually here, filter or no. */
 		composer()->setNicknames(m_users->nicknames());
+		refreshUserHeading();
 		refreshInfo();
 	});
 
 	connect(m_userList, &QListView::activated, this, [this](const QModelIndex& index) {
-		const UserInfo user = m_users->at(index.row());
+		const UserInfo user = userAt(index);
 		if (!user.id.isEmpty()) emit directMessageRequested(user);
 	});
 
 	if (!hub)
 	{
 		composer()->setSendable(false, tr("There is no hub."));
+		refreshHeaderIdentity();
 		refreshInfo();
 		return;
 	}
@@ -196,8 +233,13 @@ Qdc::HubPane::HubPane(HubBridge* hub, ConfigBridge* config, QWidget* parent)
 		m_users->remove(user.id);
 	});
 
-	connect(hub, &HubBridge::hubNameChanged, this, [this](const QString& name) {
-		header()->setSubtitle(name);
+	connect(hub, &HubBridge::hubNameChanged, this, [this] {
+		refreshHeaderIdentity();
+		refreshInfo();
+	});
+
+	connect(hub, &HubBridge::hubDescriptionChanged, this, [this] {
+		refreshHeaderIdentity();
 		refreshInfo();
 	});
 
@@ -231,8 +273,139 @@ Qdc::HubPane::HubPane(HubBridge* hub, ConfigBridge* config, QWidget* parent)
 	header()->setSecure(hub->isSecure());
 	m_hubStatus = hub->hubStatus();
 	applyNetStatus(hub->netStatus());
+	refreshHeaderIdentity();
 	refreshInfo();
 	loadSession();
+}
+
+QWidget* Qdc::HubPane::buildUserSidebar()
+{
+	m_userSidebar = new QWidget(this);
+	m_userSidebar->setObjectName(QStringLiteral("userSidebar"));
+
+	/*
+	 * The rule down the left belongs to the panel now that the list is not the whole
+	 * of it, and a plain QWidget draws neither a stylesheet background nor a border
+	 * without being told to; ConnectionBar says the same two things for the same
+	 * reason.
+	 */
+	m_userSidebar->setAttribute(Qt::WA_StyledBackground, true);
+	m_userSidebar->setAutoFillBackground(true);
+	m_userSidebar->setMinimumWidth(USER_LIST_MINIMUM);
+
+	m_userHeading = new QLabel(m_userSidebar);
+	m_userHeading->setObjectName(QStringLiteral("mutedText"));
+
+	m_userFilterButton = new QToolButton(m_userSidebar);
+	m_userFilterButton->setObjectName(QStringLiteral("userFilterButton"));
+	m_userFilterButton->setCheckable(true);
+	m_userFilterButton->setAutoRaise(true);
+	m_userFilterButton->setCursor(Qt::PointingHandCursor);
+	m_userFilterButton->setToolTip(tr("Find somebody in this list"));
+	m_userFilterButton->setAccessibleName(m_userFilterButton->toolTip());
+
+	m_userFilterButton->setIcon(glyph_icon(Glyph::Search, theme().contentMuted,
+	                                       devicePixelRatioF(), FILTER_GLYPH));
+
+	m_userFilter = new QLineEdit(m_userSidebar);
+	m_userFilter->setObjectName(QStringLiteral("userFilter"));
+	m_userFilter->setPlaceholderText(tr("Filter by name"));
+	m_userFilter->setClearButtonEnabled(true);
+	m_userFilter->hide();
+
+	/* Not an event filter: one object, and it cannot fire while the field is away. */
+	QShortcut* escape = new QShortcut(QKeySequence(Qt::Key_Escape), m_userFilter);
+	escape->setContext(Qt::WidgetShortcut);
+
+	connect(escape, &QShortcut::activated, this, [this] {
+		m_userFilterButton->setChecked(false);
+	});
+
+	connect(m_userFilterButton, &QToolButton::toggled,
+	        this, &HubPane::setUserFilterShown);
+
+	connect(m_userFilter, &QLineEdit::textChanged, this, &HubPane::applyUserFilter);
+
+	QHBoxLayout* heading = new QHBoxLayout;
+	heading->setContentsMargins(10, 6, 4, 2);
+	heading->setSpacing(4);
+	heading->addWidget(m_userHeading, 1);
+	heading->addWidget(m_userFilterButton);
+
+	QVBoxLayout* stacked = new QVBoxLayout(m_userSidebar);
+	stacked->setContentsMargins(0, 0, 0, 0);
+	stacked->setSpacing(0);
+	stacked->addLayout(heading);
+	stacked->addWidget(m_userFilter);
+	stacked->addWidget(m_userList, 1);
+
+	refreshUserHeading();
+
+	return m_userSidebar;
+}
+
+void Qdc::HubPane::setUserFilterShown(bool shown)
+{
+	m_userFilter->setVisible(shown);
+
+	if (shown)
+	{
+		m_userFilter->setFocus(Qt::ShortcutFocusReason);
+		return;
+	}
+
+	/*
+	 * Cleared on the way out rather than remembered. A filter still narrowing a list
+	 * nobody can see is the version of this that reads as everybody having left, and
+	 * a hub reconnecting would repopulate the list into it with nothing to say why.
+	 */
+	m_userFilter->clear();
+	m_userList->setFocus(Qt::ShortcutFocusReason);
+}
+
+void Qdc::HubPane::applyUserFilter(const QString& text)
+{
+	m_visibleUsers->setFilterFixedString(text.trimmed());
+	refreshUserHeading();
+}
+
+void Qdc::HubPane::refreshUserHeading()
+{
+	if (!m_userHeading) return;
+
+	const int total = m_users->count();
+
+	/*
+	 * The heading is where a filter says what it did. The count beside the header's
+	 * people button keeps meaning how many are on the hub, which is a different
+	 * question and not one a filter should be able to change the answer to.
+	 */
+	if (m_userFilter && !m_userFilter->text().trimmed().isEmpty())
+	{
+		m_userHeading->setText(tr("%1 of %2")
+			.arg(m_visibleUsers->rowCount()).arg(total));
+		return;
+	}
+
+	m_userHeading->setText(tr("Users"));
+}
+
+Qdc::UserInfo Qdc::HubPane::userAt(const QModelIndex& index) const
+{
+	return index.data(UserModel::UserRole).value<UserInfo>();
+}
+
+void Qdc::HubPane::refreshHeaderIdentity()
+{
+	if (!hub())
+	{
+		header()->setTitle(tr("No hub"));
+		header()->setSubtitle(QString());
+		return;
+	}
+
+	header()->setHubIdentity(hub()->hubName(), hub()->hubDescription(),
+	                         hub()->url());
 }
 
 QString Qdc::HubPane::paneTitle() const
@@ -280,42 +453,41 @@ void Qdc::HubPane::applySendable()
 	composer()->setSendable(reason.isEmpty(), reason);
 }
 
-QWidget* Qdc::HubPane::buildSessionForm()
+QWidget* Qdc::HubPane::buildSessionPage()
 {
-	QGroupBox* group = new QGroupBox(tr("Who you are on this hub"), this);
+	QWidget* page = new QWidget(this);
+
+	QLabel* heading = new QLabel(tr("Who you are on this hub"), page);
+
+	QFont bolder = heading->font();
+	bolder.setBold(true);
+	heading->setFont(bolder);
 
 	/*
 	 * Named, so that the field for a key can be found without relying on the order
 	 * they were built in - which is how a test reaches them, the members being this
 	 * pane's own business.
 	 */
-	m_nickname = new QLineEdit(group);
+	m_nickname = new QLineEdit(page);
 	m_nickname->setObjectName(QStringLiteral("sessionNickname"));
 	m_nickname->setMaxLength(63);
 
-	m_description = new QLineEdit(group);
+	m_description = new QLineEdit(page);
 	m_description->setObjectName(QStringLiteral("sessionDescription"));
 	m_description->setMaxLength(255);
 
-	m_email = new QLineEdit(group);
+	m_email = new QLineEdit(page);
 	m_email->setObjectName(QStringLiteral("sessionEmail"));
 	m_email->setMaxLength(127);
 
-	m_password = new QLineEdit(group);
+	m_password = new QLineEdit(page);
 	m_password->setObjectName(QStringLiteral("sessionPassword"));
 	m_password->setEchoMode(QLineEdit::Password);
 	m_password->setMaxLength(127);
 
-	/* The object name is the stylesheet's, so a test finds this by its text. */
-	m_saveSession = new QPushButton(tr("Save"), group);
-	m_saveSession->setObjectName(QStringLiteral("primaryButton"));
-	m_saveSession->setEnabled(false);
-
-	m_sessionStatus = new QLabel(group);
-	m_sessionStatus->setObjectName(QStringLiteral("mutedText"));
-	m_sessionStatus->setWordWrap(true);
-
-	QFormLayout* form = new QFormLayout(group);
+	QFormLayout* form = new QFormLayout;
+	form->setContentsMargins(0, 0, 0, 0);
+	form->addRow(heading);
 	form->addRow(tr("Nickname"), m_nickname);
 	form->addRow(tr("Description"), m_description);
 	form->addRow(tr("E-mail"), m_email);
@@ -326,39 +498,95 @@ QWidget* Qdc::HubPane::buildSessionForm()
 	 * something: the hub gets whatever Settings says, and clearing one is how a hub
 	 * is handed back to the general identity rather than given an empty name.
 	 */
-	QLabel* note = new QLabel(tr(
+	form->addRow(makeNote(tr(
 		"Left empty, a field falls back to the identity in Settings — which is what "
 		"the greyed text in each one shows. A password is kept in the clear in "
-		"session.conf, as the rest of this is."), group);
+		"session.conf, as the rest of this is."), page));
 
-	note->setWordWrap(true);
-	note->setObjectName(QStringLiteral("mutedText"));
+	m_sessionForm = new QWidget(page);
+	m_sessionForm->setLayout(form);
 
-	QFont smaller = note->font();
-	smaller.setPointSize(qMax(1, smaller.pointSize() - 1));
-	note->setFont(smaller);
+	/* The object name is the stylesheet's, so a test finds this by its text. */
+	m_saveSession = new QPushButton(tr("Save"), page);
+	m_saveSession->setObjectName(QStringLiteral("primaryButton"));
+	m_saveSession->setEnabled(false);
 
-	form->addRow(note);
+	/*
+	 * The explicit discard, so that leaving the page with something typed in it does
+	 * not have to be interrupted by a question. Nothing is lost by walking away: the
+	 * page is never loaded again on its own, so what was typed is still here.
+	 */
+	m_revertSession = new QPushButton(tr("Revert"), page);
+	m_revertSession->setEnabled(false);
+
+	m_sessionStatus = new QLabel(page);
+	m_sessionStatus->setObjectName(QStringLiteral("mutedText"));
+	m_sessionStatus->setWordWrap(true);
 
 	QHBoxLayout* buttons = new QHBoxLayout;
 	buttons->setContentsMargins(0, 0, 0, 0);
 	buttons->addWidget(m_sessionStatus, 1);
+	buttons->addWidget(m_revertSession);
 	buttons->addWidget(m_saveSession);
 
-	form->addRow(buttons);
+	QVBoxLayout* stacked = new QVBoxLayout(page);
+	stacked->setContentsMargins(16, 16, 16, 16);
+	stacked->setSpacing(12);
+	stacked->addWidget(m_sessionForm);
+	stacked->addStretch(1);
+	stacked->addLayout(buttons);
 
 	for (QLineEdit* field : {m_nickname, m_description, m_email, m_password})
 		connect(field, &QLineEdit::textEdited, this, &HubPane::markSessionEdited);
 
 	connect(m_saveSession, &QPushButton::clicked, this, &HubPane::saveSession);
+	connect(m_revertSession, &QPushButton::clicked, this, &HubPane::loadSession);
 
 	if (!m_config || !hub())
 	{
-		group->setEnabled(false);
+		/*
+		 * The form rather than the page, so that the status label below it stays
+		 * readable and says why there is nothing to fill in.
+		 */
+		m_sessionForm->setEnabled(false);
+		m_saveSession->setEnabled(false);
 		m_sessionStatus->setText(tr("The configuration is not available."));
 	}
 
-	return group;
+	QScrollArea* scroll = new QScrollArea(this);
+	scroll->setWidget(page);
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+
+	return scroll;
+}
+
+void Qdc::HubPane::showSessionPage(bool shown)
+{
+	if (!m_sessionPage) return;
+
+	if (shown)
+	{
+		tabs()->setCurrentIndex(tabs()->addTab(m_sessionPage, tr("Settings")));
+		return;
+	}
+
+	const int index = tabs()->indexOf(m_sessionPage);
+	if (index < 0) return;
+
+	/*
+	 * Said rather than left to the tab widget, which lands on whichever tab happens
+	 * to be beside the one that went. The page keeps its parent when the tab is
+	 * removed, so nothing typed into it is lost - which is what makes leaving it
+	 * safe without a question first.
+	 */
+	tabs()->setCurrentIndex(0);
+	tabs()->removeTab(index);
+}
+
+void Qdc::HubPane::refreshSessionGears()
+{
+	header()->setSettingsUnsaved(m_saveSession && m_saveSession->isEnabled());
 }
 
 void Qdc::HubPane::loadSession()
@@ -402,7 +630,9 @@ void Qdc::HubPane::loadSession()
 	m_loadingSession = false;
 
 	m_saveSession->setEnabled(false);
+	m_revertSession->setEnabled(false);
 	m_sessionStatus->clear();
+	refreshSessionGears();
 }
 
 void Qdc::HubPane::markSessionEdited()
@@ -410,7 +640,9 @@ void Qdc::HubPane::markSessionEdited()
 	if (m_loadingSession || !m_saveSession) return;
 
 	m_saveSession->setEnabled(true);
+	m_revertSession->setEnabled(true);
 	m_sessionStatus->setText(tr("Unsaved changes."));
+	refreshSessionGears();
 }
 
 void Qdc::HubPane::saveSession()
@@ -452,7 +684,9 @@ void Qdc::HubPane::saveSession()
 	m_config->save(ConfigStore::Session);
 
 	m_saveSession->setEnabled(false);
+	m_revertSession->setEnabled(false);
 	m_sessionStatus->setText(tr("Saved."));
+	refreshSessionGears();
 
 	/*
 	 * A session reads its identity when it is built and never again, so this changes
@@ -476,53 +710,42 @@ void Qdc::HubPane::saveSession()
 	hub()->connectToHub();
 }
 
-void Qdc::HubPane::showUserMenu(const QPoint& where)
+void Qdc::HubPane::showUserListMenu(const QPoint& where)
 {
 	const QModelIndex index = m_userList->indexAt(where);
 	if (!index.isValid()) return;
 
-	const UserInfo user = m_users->at(index.row());
+	const UserInfo user = userAt(index);
 	if (user.nick.isEmpty() && user.id.isEmpty()) return;
 
-	QMenu menu(this);
+	showUserMenu(user, m_userList->viewport()->mapToGlobal(where));
+}
 
+void Qdc::HubPane::showUserMenu(const UserInfo& user, const QPoint& globalPos)
+{
 	/*
-	 * The nickname across the top, disabled. Which user a menu is about is otherwise
-	 * only implied by where it opened, and a menu that opened over the wrong row is
-	 * exactly the mistake worth making impossible to miss.
+	 * A name in the feed is who they were when they said it, so it is looked up
+	 * again: on ADC the id in it lasts only as long as they stay on the hub. A row
+	 * of the list resolves to itself, which is why both callers come through here.
 	 */
-	QAction* who = menu.addAction(user.nick.isEmpty() ? tr("This user") : user.nick);
-	who->setEnabled(false);
-	menu.addSeparator();
+	const UserInfo here = m_users->resolve(user);
 
-	QAction* talk = menu.addAction(tr("Send a private message"));
-	QAction* files = menu.addAction(tr("Browse files"));
-	menu.addSeparator();
-	QAction* copy = menu.addAction(tr("Copy nickname"));
+	UserMenuOptions options;
 
-	/* A private message is routed by the session id, and a browse by the source id. */
-	talk->setEnabled(!user.id.isEmpty());
-	files->setEnabled(!user.id.isEmpty() && !user.sourceId.isEmpty());
-
-	if (user.sourceId.isEmpty())
-		files->setToolTip(tr("The hub has not said enough about them to ask yet."));
-
-	copy->setEnabled(!user.nick.isEmpty());
-
-	QAction* picked = menu.exec(m_userList->viewport()->mapToGlobal(where));
-
-	if (picked == talk)
+	if (here.id.isEmpty())
 	{
-		emit directMessageRequested(user);
+		options.unavailable = user.nick.isEmpty()
+			? tr("They are no longer on this hub")
+			: tr("%1 is no longer on this hub").arg(user.nick);
 	}
-	else if (picked == files)
+
+	const UserInfo& about = here.id.isEmpty() ? user : here;
+
+	switch (Qdc::showUserMenu(this, about, globalPos, options))
 	{
-		emit filesRequested(user);
-	}
-	else if (picked == copy)
-	{
-		if (QClipboard* board = QGuiApplication::clipboard())
-			board->setText(user.nick);
+		case UserChoice::Talk:   emit directMessageRequested(about); break;
+		case UserChoice::Browse: emit filesRequested(about); break;
+		case UserChoice::None:   break;
 	}
 }
 
@@ -543,6 +766,12 @@ void Qdc::HubPane::refreshInfo()
 
 	if (!hub()->hubName().isEmpty())
 		rows << tr("<b>Name</b><br>%1").arg(hub()->hubName().toHtmlEscaped());
+
+	if (!hub()->hubDescription().isEmpty())
+	{
+		rows << tr("<b>Description</b><br>%1")
+			.arg(hub()->hubDescription().toHtmlEscaped());
+	}
 
 	rows << tr("<b>Users</b><br>%1").arg(m_users->count());
 
@@ -581,6 +810,14 @@ Qdc::DmPane::DmPane(HubBridge* hub, const UserInfo& user,
 	/* No star and no user list: a conversation with one person has neither. */
 	header()->setFavouriteVisible(false);
 	header()->setUserListVisible(false);
+	header()->setSettingsVisible(false);
+
+	/*
+	 * The figure takes the star's place, so a conversation is not missing the one
+	 * thing every hub has at the start of its strip - and it says the same about
+	 * this person as their row in the user list does.
+	 */
+	header()->setPresenceVisible(true);
 
 	tabs()->addTab(m_files, tr("Files"));
 
@@ -595,11 +832,18 @@ Qdc::DmPane::DmPane(HubBridge* hub, const UserInfo& user,
 		return;
 	}
 
+	/*
+	 * The padlock says the same thing here as on the hub itself: a private message
+	 * travels through the hub and is exactly as encrypted as the hub is.
+	 */
 	connect(hub, &HubBridge::netStatusChanged, this, [this](NetStatus status) {
 		m_netStatus = status;
+		header()->setNetStatus(status);
 		applySendable();
 		applyBand();
 	});
+
+	connect(hub, &HubBridge::secureChanged, header(), &HubHeader::setSecure);
 
 	connect(hub, &HubBridge::hubStatusChanged, this, [this](HubStatus status) {
 		m_hubStatus = status;
@@ -662,6 +906,8 @@ Qdc::DmPane::DmPane(HubBridge* hub, const UserInfo& user,
 
 	m_netStatus = hub->netStatus();
 	m_hubStatus = hub->hubStatus();
+	header()->setSecure(hub->isSecure());
+	header()->setNetStatus(m_netStatus);
 	applySendable();
 	applyBand();
 
@@ -703,6 +949,17 @@ bool Qdc::DmPane::isWith(const UserInfo& user) const
 	return !m_user.id.isEmpty() && user.id == m_user.id;
 }
 
+void Qdc::DmPane::applyPresence()
+{
+	/*
+	 * The user list's own reading of somebody, and the same figure it draws. Off the
+	 * hub counts as away here: the shape says "not reading this", which is true
+	 * either way, and the band above the conversation is what says which of the two
+	 * it is.
+	 */
+	header()->setPresence(m_user.away || !m_present, m_user.op);
+}
+
 void Qdc::DmPane::setPresent(bool present, const QString& nickname)
 {
 	const bool changed = m_present != present;
@@ -710,6 +967,7 @@ void Qdc::DmPane::setPresent(bool present, const QString& nickname)
 
 	applySendable();
 	applyBand();
+	applyPresence();
 
 	if (!changed) return;
 
@@ -766,6 +1024,37 @@ void Qdc::DmPane::showFiles()
 	if (index >= 0) tabs()->setCurrentIndex(index);
 }
 
+const Qdc::UserInfo& Qdc::DmPane::peer() const
+{
+	return m_user;
+}
+
+void Qdc::DmPane::showUserMenu(const UserInfo& user, const QPoint& globalPos)
+{
+	/*
+	 * No offer to open a conversation: this is the conversation. Browsing lands on
+	 * the tab beside this one, which is where it would have landed anyway.
+	 */
+	UserMenuOptions options;
+	options.offerTalk = false;
+
+	if (!m_present)
+	{
+		options.unavailable = m_user.nick.isEmpty()
+			? tr("They are no longer on this hub")
+			: tr("%1 is no longer on this hub").arg(m_user.nick);
+	}
+
+	/*
+	 * A line of our own shows our own name, and that is not the other party - so
+	 * what the message carried is used as it stands rather than taken for them.
+	 */
+	const UserInfo& about = isWith(user) ? m_user : user;
+
+	if (Qdc::showUserMenu(this, about, globalPos, options) == UserChoice::Browse)
+		showFiles();
+}
+
 void Qdc::DmPane::setUser(const UserInfo& user)
 {
 	/*
@@ -781,6 +1070,7 @@ void Qdc::DmPane::setUser(const UserInfo& user)
 
 	header()->setTitle(paneTitle());
 	header()->setSubtitle(user.description);
+	applyPresence();
 
 	m_files->setSource(hub() ? hub()->url() : QString(), user.sourceId);
 	composer()->setNicknames({m_user.nick});

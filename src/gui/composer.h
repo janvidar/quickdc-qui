@@ -35,6 +35,15 @@ public:
 	/** Who can be mentioned. Replaces the previous set. */
 	void setNicknames(const QStringList& nicknames);
 
+	/**
+	 * Whether formatting may come in at all; see Composer::setRichTextEnabled().
+	 *
+	 * Held here as well as on the composer because this is where a paste lands, and
+	 * a paste that keeps bold on a hub that cannot carry it puts formatting in the
+	 * box that no message will ever have.
+	 */
+	void setRichTextEnabled(bool enabled);
+
 	QSize sizeHint() const override;
 
 	/**
@@ -100,6 +109,8 @@ private:
 
 	QCompleter* m_completer;
 	QStringListModel* m_nicknames;
+
+	bool m_richTextEnabled = true;
 };
 
 /**

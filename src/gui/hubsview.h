@@ -296,6 +296,15 @@ private:
 	 */
 	void showHubMenu(const QPoint& at);
 
+	/**
+	 * The same choices a conversation's other party offers anywhere else.
+	 *
+	 * A conversation in this list names a person, so right-clicking it asks about
+	 * them rather than about the hub they are on - which is what the row above is
+	 * for.
+	 */
+	void showDmMenu(QTreeWidgetItem* item, const QPoint& globalPos);
+
 	/** The largest picture that may be fetched without asking, in bytes. */
 	quint64 mediaSizeLimit() const;
 

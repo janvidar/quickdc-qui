@@ -74,6 +74,16 @@ public:
 	 */
 	UserInfo byId(const QString& id) const;
 
+	/**
+	 * Who @a remembered is now, or an empty record if they are no longer here.
+	 *
+	 * A message keeps the record its sender had when they sent it, and on ADC the
+	 * id in it is a session id - theirs only until they leave, and somebody else's
+	 * afterwards. So the client ID is tried first, then the id, then the nickname,
+	 * for the reason DmPane::isWith() gives at greater length.
+	 */
+	UserInfo resolve(const UserInfo& remembered) const;
+
 	/** For the composer's mention completion, in displayed order. */
 	QStringList nicknames() const;
 

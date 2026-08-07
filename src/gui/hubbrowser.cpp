@@ -4,13 +4,16 @@
 
 #include "hubbrowser.h"
 
+#include "favouritedelegate.h"
 #include "hublistmodel.h"
 
 #include <core/favourites.h>
 #include <core/hubdirectory.h>
 #include <core/recenthubs.h>
 
+#include <QClipboard>
 #include <QDateTime>
+#include <QGuiApplication>
 #include <QHash>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -19,6 +22,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QLocale>
+#include <QMenu>
 #include <QPushButton>
 #include <QSortFilterProxyModel>
 #include <QTabWidget>
@@ -29,6 +33,9 @@ namespace {
 
 /** Which role a list row keeps its hub's address in. */
 constexpr int AddressRole = Qt::UserRole + 1;
+
+/** Whether the hub on this row is kept; see FavouriteDelegate. */
+constexpr int FavouriteRole = Qt::UserRole + 2;
 
 /**
  * How tall the browser is before the layout gives it anything else.
@@ -112,6 +119,13 @@ void prepare(QTableView* table)
 	QHeaderView* header = table->horizontalHeader();
 	header->setHighlightSections(false);
 
+	/* Fixed, which is also what stops it being dragged wider. */
+	header->setSectionResizeMode(Qdc::HubListModel::FavouriteColumn,
+	                             QHeaderView::Fixed);
+
+	table->setColumnWidth(Qdc::HubListModel::FavouriteColumn,
+	                      Qdc::FavouriteDelegate::columnWidth());
+
 	/* The description takes the slack: it is the one column whose value is a
 	   sentence, and the only one worth giving a window's width to. */
 	header->setSectionResizeMode(Qdc::HubListModel::DescriptionColumn,
@@ -144,7 +158,7 @@ Qdc::HubBrowser::HubBrowser(HubDirectory* directory, Favourites* favourites,
 	, m_search(new QLineEdit(this))
 	, m_refresh(new QPushButton(tr("Refresh"), this))
 	, m_table(new QTableView(this))
-	, m_model(new HubListModel(this))
+	, m_model(new HubListModel(favourites, this))
 	, m_filtered(new QSortFilterProxyModel(this))
 	, m_status(new QLabel(this))
 	, m_openPublic(new QPushButton(tr("Connect"), this))
@@ -153,11 +167,17 @@ Qdc::HubBrowser::HubBrowser(HubDirectory* directory, Favourites* favourites,
 	/* Busiest first, which is the order somebody looking for a hub to join wants and
 	   the one nothing else would put them in. */
 	, m_sortColumn(HubListModel::UsersColumn)
+	, m_columnStar(new FavouriteDelegate(FavouriteDelegate::OwnColumn,
+	                                    HubListModel::FavouriteRole,
+	                                    HubListModel::AddressRole, this))
+	, m_listStar(new FavouriteDelegate(FavouriteDelegate::BeforeTheText,
+	                                  FavouriteRole, AddressRole, this))
 	, m_favouriteList(new QListWidget(this))
 	, m_openFavourite(new QPushButton(tr("Connect"), this))
 	, m_unbookmark(new QPushButton(tr("Unbookmark"), this))
 	, m_recentList(new QListWidget(this))
 	, m_openRecent(new QPushButton(tr("Connect"), this))
+	, m_bookmarkRecent(new QPushButton(tr("Bookmark"), this))
 	, m_forget(new QPushButton(tr("Remove"), this))
 	, m_clearRecent(new QPushButton(tr("Clear list"), this))
 {
@@ -176,6 +196,7 @@ Qdc::HubBrowser::HubBrowser(HubDirectory* directory, Favourites* favourites,
 	m_unbookmark->setObjectName(QStringLiteral("unbookmarkHub"));
 	m_recentList->setObjectName(QStringLiteral("recentHubs"));
 	m_openRecent->setObjectName(QStringLiteral("connectRecentHub"));
+	m_bookmarkRecent->setObjectName(QStringLiteral("bookmarkRecentHub"));
 	m_forget->setObjectName(QStringLiteral("forgetRecentHub"));
 	m_clearRecent->setObjectName(QStringLiteral("clearRecentHubs"));
 
@@ -221,12 +242,23 @@ Qdc::HubBrowser::HubBrowser(HubDirectory* directory, Favourites* favourites,
 		});
 	}
 
+	for (FavouriteDelegate* star : {m_columnStar, m_listStar})
+	{
+		connect(star, &FavouriteDelegate::toggled,
+		        this, &HubBrowser::toggleFavourite);
+	}
+
 	if (m_favourites)
 	{
 		connect(m_favourites, &Favourites::changed, this, [this] {
 			refreshFavourites();
 
-			/* The public tab's button says which way it would go. */
+			/* The visited list shows the same stars and is not rebuilt for them. */
+			refreshRecentStars();
+			followRecentSelection();
+
+			/* The public tab's button says which way it would go. The table looks
+			   after its own stars; see HubListModel. */
 			followPublicSelection();
 		});
 	}
@@ -266,6 +298,12 @@ QWidget* Qdc::HubBrowser::buildPublic()
 
 	m_table->setModel(m_filtered);
 	prepare(m_table);
+
+	m_table->setItemDelegateForColumn(HubListModel::FavouriteColumn, m_columnStar);
+	m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+
+	connect(m_table, &QTableView::customContextMenuRequested,
+	        this, &HubBrowser::showPublicMenu);
 	m_table->setSortingEnabled(true);
 	m_table->sortByColumn(m_sortColumn, m_sortOrder);
 
@@ -274,6 +312,19 @@ QWidget* Qdc::HubBrowser::buildPublic()
 	connect(m_table->horizontalHeader(), &QHeaderView::sortIndicatorChanged,
 	        this, [this](int column, Qt::SortOrder order) {
 		if (m_replacingRows || column < 0) return;
+
+		/*
+		 * The star's column is not a value to order a list of hubs by, and it holds
+		 * no text to sort on either - so the indicator is put back where it was
+		 * rather than allowed to land there. Quietly, or putting it back would
+		 * arrive here again.
+		 */
+		if (column == HubListModel::FavouriteColumn)
+		{
+			const QSignalBlocker quiet(m_table->horizontalHeader());
+			m_table->sortByColumn(m_sortColumn, m_sortOrder);
+			return;
+		}
 
 		m_sortColumn = column;
 		m_sortOrder = order;
@@ -328,6 +379,13 @@ QWidget* Qdc::HubBrowser::buildFavourites()
 	QWidget* page = new QWidget(this);
 
 	m_favouriteList->setSelectionMode(QAbstractItemView::SingleSelection);
+	m_favouriteList->setItemDelegate(m_listStar);
+	m_favouriteList->setContextMenuPolicy(Qt::CustomContextMenu);
+
+	connect(m_favouriteList, &QListWidget::customContextMenuRequested,
+	        this, [this](const QPoint& where) {
+		showListMenu(m_favouriteList, where);
+	});
 
 	/* So that the row explaining an empty list is readable rather than elided. */
 	m_favouriteList->setWordWrap(true);
@@ -372,7 +430,12 @@ QWidget* Qdc::HubBrowser::buildRecent()
 	QWidget* page = new QWidget(this);
 
 	m_recentList->setSelectionMode(QAbstractItemView::SingleSelection);
+	m_recentList->setItemDelegate(m_listStar);
 	m_recentList->setWordWrap(true);
+	m_recentList->setContextMenuPolicy(Qt::CustomContextMenu);
+
+	connect(m_recentList, &QListWidget::customContextMenuRequested,
+	        this, [this](const QPoint& where) { showListMenu(m_recentList, where); });
 
 	connect(m_recentList, &QListWidget::activated, this, [this] {
 		const QString address = selectedAddress(m_recentList);
@@ -382,6 +445,10 @@ QWidget* Qdc::HubBrowser::buildRecent()
 	connect(m_openRecent, &QPushButton::clicked, this, [this] {
 		const QString address = selectedAddress(m_recentList);
 		if (!address.isEmpty()) emit hubRequested(address);
+	});
+
+	connect(m_bookmarkRecent, &QPushButton::clicked, this, [this] {
+		toggleFavourite(selectedAddress(m_recentList));
 	});
 
 	connect(m_forget, &QPushButton::clicked, this, [this] {
@@ -402,6 +469,7 @@ QWidget* Qdc::HubBrowser::buildRecent()
 	buttons->setContentsMargins(0, 0, 0, 0);
 	buttons->addWidget(m_clearRecent);
 	buttons->addStretch(1);
+	buttons->addWidget(m_bookmarkRecent);
 	buttons->addWidget(m_forget);
 	buttons->addWidget(m_openRecent);
 
@@ -645,6 +713,9 @@ void Qdc::HubBrowser::refreshFavourites()
 			name.isEmpty() ? url : tr("%1  —  %2").arg(name, url), m_favouriteList);
 
 		item->setData(AddressRole, url);
+
+		/* Everything on this tab is one, so the star is the way off it. */
+		item->setData(FavouriteRole, true);
 		item->setToolTip(url);
 
 		if (url == selected) m_favouriteList->setCurrentItem(item);
@@ -683,12 +754,36 @@ void Qdc::HubBrowser::refreshRecent()
 		if (entry.url == selected) m_recentList->setCurrentItem(item);
 	}
 
+	refreshRecentStars();
+
 	if (entries.isEmpty())
 		explain(m_recentList, tr("No hubs have been visited yet."));
 
 	m_clearRecent->setEnabled(!entries.isEmpty() && m_recent);
 
 	followRecentSelection();
+}
+
+void Qdc::HubBrowser::refreshRecentStars()
+{
+	for (int n = 0; n < m_recentList->count(); ++n)
+	{
+		QListWidgetItem* item = m_recentList->item(n);
+
+		const QString address = row_address(item);
+		if (address.isEmpty()) continue;
+
+		const bool kept = m_favourites && m_favourites->contains(address);
+
+		item->setData(FavouriteRole, kept);
+
+		/*
+		 * Said on the row rather than only drawn on it, so that the star is not the
+		 * one thing about a hub a screen reader cannot report.
+		 */
+		item->setData(Qt::AccessibleTextRole, kept
+			? tr("%1, favourite").arg(item->text()) : item->text());
+	}
 }
 
 void Qdc::HubBrowser::explain(QListWidget* list, const QString& why)
@@ -727,10 +822,110 @@ QString Qdc::HubBrowser::selectedAddress(const QListWidget* list)
 
 void Qdc::HubBrowser::toggleBookmark()
 {
-	const QString address = selectedPublicAddress();
+	toggleFavourite(selectedPublicAddress());
+}
+
+void Qdc::HubBrowser::toggleFavourite(const QString& address)
+{
 	if (!m_favourites || address.isEmpty()) return;
 
+	/* The store's own signal is what brings the lists back up to date. */
 	m_favourites->toggle(address);
+}
+
+void Qdc::HubBrowser::showPublicMenu(const QPoint& where)
+{
+	const QModelIndex under = m_table->indexAt(where);
+	const QModelIndex row = under.isValid() ? under : m_table->currentIndex();
+	if (!row.isValid()) return;
+
+	/*
+	 * A menu raised from the keyboard arrives with a position that is over no row at
+	 * all, so the current one is what it must be about - and its middle is where it
+	 * has to open.
+	 */
+	const QPoint at = under.isValid()
+		? where : m_table->visualRect(row).center();
+
+	const QString address =
+		row.siblingAtColumn(HubListModel::AddressColumn)
+			.data(HubListModel::AddressRole).toString();
+
+	if (address.isEmpty()) return;
+
+	const QString name =
+		row.siblingAtColumn(HubListModel::NameColumn).data().toString();
+
+	hubMenu(m_table->viewport()->mapToGlobal(at), name, address, false);
+}
+
+void Qdc::HubBrowser::showListMenu(QListWidget* list, const QPoint& where)
+{
+	QListWidgetItem* item = list->itemAt(where);
+	if (!item) item = list->currentItem();
+	if (!item) return;
+
+	const QString address = row_address(item);
+	if (address.isEmpty()) return;
+
+	const QPoint at = list->itemAt(where)
+		? where : list->visualItemRect(item).center();
+
+	hubMenu(list->viewport()->mapToGlobal(at), item->text(), address,
+	        list == m_recentList);
+}
+
+void Qdc::HubBrowser::hubMenu(const QPoint& globalPos, const QString& name,
+                              const QString& address, bool visited)
+{
+	QMenu menu(this);
+
+	/*
+	 * The hub across the top, disabled, as the user menu does it: which row a menu is
+	 * about is otherwise only implied by where it opened.
+	 */
+	QAction* which = menu.addAction(name.isEmpty() ? address : name);
+	which->setEnabled(false);
+	menu.addSeparator();
+
+	QAction* connectTo = menu.addAction(tr("Connect"));
+	menu.addSeparator();
+
+	const bool kept = m_favourites && m_favourites->contains(address);
+
+	/*
+	 * Nothing on the favourites tab is not a favourite, so there is only ever one way
+	 * for its entry to read.
+	 */
+	QAction* keep = menu.addAction(kept ? tr("Remove from favourites")
+	                                    : tr("Add to favourites"));
+	keep->setEnabled(m_favourites != nullptr);
+
+	QAction* copy = menu.addAction(tr("Copy address"));
+
+	QAction* forget = visited ? menu.addAction(tr("Remove from this list")) : nullptr;
+	if (forget) forget->setEnabled(m_recent != nullptr);
+
+	QAction* picked = menu.exec(globalPos);
+	if (!picked) return;
+
+	if (picked == connectTo)
+	{
+		emit hubRequested(address);
+	}
+	else if (picked == keep)
+	{
+		toggleFavourite(address);
+	}
+	else if (picked == copy)
+	{
+		if (QClipboard* board = QGuiApplication::clipboard())
+			board->setText(address);
+	}
+	else if (forget && picked == forget && m_recent)
+	{
+		m_recent->remove(address);
+	}
 }
 
 void Qdc::HubBrowser::followPublicSelection()
@@ -761,8 +956,14 @@ void Qdc::HubBrowser::followFavouriteSelection()
 
 void Qdc::HubBrowser::followRecentSelection()
 {
-	const bool chosen = !selectedAddress(m_recentList).isEmpty();
+	const QString address = selectedAddress(m_recentList);
+	const bool chosen = !address.isEmpty();
 
 	m_openRecent->setEnabled(chosen);
 	m_forget->setEnabled(chosen && m_recent);
+	m_bookmarkRecent->setEnabled(chosen && m_favourites);
+
+	/* As on the public tab: one button that says which way it would go. */
+	const bool kept = chosen && m_favourites && m_favourites->contains(address);
+	m_bookmarkRecent->setText(kept ? tr("Unbookmark") : tr("Bookmark"));
 }

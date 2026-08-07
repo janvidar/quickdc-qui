@@ -18,6 +18,8 @@ add_library(qdcgui STATIC
     connectionbar.h
     cornermask.cpp
     cornermask.h
+    favouritedelegate.cpp
+    favouritedelegate.h
     fileactions.cpp
     fileactions.h
     filelistview.cpp
@@ -64,8 +66,12 @@ add_library(qdcgui STATIC
     transfermodels.h
     transfersview.cpp
     transfersview.h
+    usermenu.cpp
+    usermenu.h
     view.cpp
-    view.h)
+    view.h
+    widgets.cpp
+    widgets.h)
 
 # The schemes and the stylesheet template are data, read at run time rather than
 # compiled in as string literals - which is what lets a colour or a corner radius be

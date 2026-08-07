@@ -36,6 +36,19 @@ constexpr int IDLE_CHECK_MS = 1000;
 constexpr int IDLE_AFTER_MS = 2000;
 
 /**
+ * What a speaker's name is linked to.
+ *
+ * The name is written as an anchor purely so that the laid-out document can be
+ * asked what is under the pointer - the row already carries the whole record, so
+ * nothing has to be read back out of the address. It is not a link and must not
+ * behave like one: RichText::isLinkable() refuses a URL with no host, which is
+ * what keeps a click on a name from reaching the desktop and what stops any
+ * message from producing one of these, since only a linkable address is ever
+ * rendered as an anchor in the first place.
+ */
+const QString USER_SCHEME = QStringLiteral("qdc-user:");
+
+/**
  * A stable colour for a nickname.
  *
  * Hashed rather than assigned, so the same person is the same colour in every
@@ -149,13 +162,26 @@ public:
 			const QString nick = message.from.nick.toHtmlEscaped();
 
 			/*
+			 * Linked so that the layout can be asked whether the pointer is on the
+			 * name; see USER_SCHEME. The colour and the absence of an underline are
+			 * said inline because an anchor is otherwise drawn as the palette's link,
+			 * and this must look exactly as it did.
+			 */
+			const QString href = QString::fromLatin1(
+				QUrl::toPercentEncoding(message.from.nick));
+
+			const QString named = QStringLiteral(
+				"<a href=\"%1%2\" style=\"color:%3; text-decoration:none\">%4</a>")
+				.arg(USER_SCHEME, href, ink.name(), nick);
+
+			/*
 			 * A "/me" line puts the name inside the sentence rather than before it, so
 			 * it is set in the same italic as the words that follow it.
 			 */
 			options.prefix += message.action
-				? QStringLiteral("<span style=\"color:%1; font-style:italic\">%2</span> ")
-					.arg(ink.name(), nick)
-				: QStringLiteral("<b style=\"color:%1\">%2</b> ").arg(ink.name(), nick);
+				? QStringLiteral("<span style=\"font-style:italic\">%1</span> ")
+					.arg(named)
+				: QStringLiteral("<b>%1</b> ").arg(named);
 
 			indent += QFontMetricsF(speakerFont)
 				.horizontalAdvance(message.from.nick + QLatin1Char(' '));
@@ -664,6 +690,33 @@ QString Qdc::ChatFeed::anchorAt(const QPoint& point) const
 	return m_delegate->anchorAt(index, option, point);
 }
 
+void Qdc::ChatFeed::contextMenuEvent(QContextMenuEvent* event)
+{
+	const QPoint where = event->pos();
+
+	if (!anchorAt(where).startsWith(USER_SCHEME))
+	{
+		QListView::contextMenuEvent(event);
+		return;
+	}
+
+	const QModelIndex index = indexAt(where);
+	if (!index.isValid()) return;
+
+	/*
+	 * Taken from the row rather than read back out of the address: a message carries
+	 * the whole record of whoever sent it, so nothing has to be looked up and a name
+	 * belonging to somebody who has since left still names them.
+	 */
+	const ChatMessage message =
+		index.data(ChatModel::MessageRole).value<ChatMessage>();
+
+	if (message.from.nick.isEmpty() && message.from.id.isEmpty()) return;
+
+	event->accept();
+	emit userMenuRequested(message.from, viewport()->mapToGlobal(where));
+}
+
 void Qdc::ChatFeed::mouseMoveEvent(QMouseEvent* event)
 {
 	QListView::mouseMoveEvent(event);
@@ -672,7 +725,12 @@ void Qdc::ChatFeed::mouseMoveEvent(QMouseEvent* event)
 	const QString anchor = event->buttons() == Qt::NoButton
 		? anchorAt(event->position().toPoint()) : QString();
 
-	if (anchor.isEmpty())
+	/*
+	 * Only over something a click will actually follow. A name is an anchor too, but
+	 * it is one so that it can be found rather than opened, and a hand over it would
+	 * promise something that does not happen.
+	 */
+	if (anchor.isEmpty() || anchor.startsWith(USER_SCHEME))
 		viewport()->unsetCursor();
 	else
 		viewport()->setCursor(Qt::PointingHandCursor);

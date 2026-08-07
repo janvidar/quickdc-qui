@@ -11,6 +11,7 @@
 #include "hubpane.h"
 #include "richtext.h"
 #include "theme.h"
+#include "usermenu.h"
 #include "usermodel.h"
 
 #include <core/completed.h>
@@ -1481,11 +1482,16 @@ void Qdc::HubsView::loadHubMediaPolicy(const QString& url)
 void Qdc::HubsView::showHubMenu(const QPoint& at)
 {
 	QTreeWidgetItem* item = m_tree->itemAt(at);
-	if (!item || !m_config) return;
-
-	/* Only a hub has settings of its own; a conversation belongs to the hub above it. */
-	if (!item->data(0, HubRole).toBool()) item = item->parent();
 	if (!item) return;
+
+	/* A conversation is about a person; only a hub row is about the hub. */
+	if (!item->data(0, HubRole).toBool())
+	{
+		showDmMenu(item, m_tree->viewport()->mapToGlobal(at));
+		return;
+	}
+
+	if (!m_config) return;
 
 	ChatPane* pane = m_panes.value(item, nullptr);
 	if (!pane || !pane->hub()) return;
@@ -1530,6 +1536,54 @@ void Qdc::HubsView::showHubMenu(const QPoint& at)
 
 	m_config->save(ConfigStore::Session);
 	loadHubMediaPolicy(hubUrl);
+}
+
+void Qdc::HubsView::showDmMenu(QTreeWidgetItem* item, const QPoint& globalPos)
+{
+	DmPane* dm = qobject_cast<DmPane*>(m_panes.value(item, nullptr));
+	if (!dm) return;
+
+	QTreeWidgetItem* above = item->parent();
+	HubPane* hub = above ? qobject_cast<HubPane*>(m_panes.value(above, nullptr))
+	                     : nullptr;
+
+	const UserInfo remembered = dm->peer();
+
+	/*
+	 * A conversation outlasts the person being on the hub, so who they are now is
+	 * asked of the hub's own list rather than taken from the pane.
+	 */
+	const UserInfo here = hub ? hub->users()->resolve(remembered) : UserInfo();
+
+	UserMenuOptions options;
+
+	if (here.id.isEmpty())
+	{
+		options.unavailable = remembered.nick.isEmpty()
+			? tr("They are no longer on this hub")
+			: tr("%1 is no longer on this hub").arg(remembered.nick);
+	}
+
+	const UserInfo& about = here.id.isEmpty() ? remembered : here;
+
+	/*
+	 * Talking is offered and means what it means everywhere else: opening a
+	 * conversation with somebody there is already one with brings it forward.
+	 */
+	switch (Qdc::showUserMenu(this, about, globalPos, options))
+	{
+		case UserChoice::Talk:
+			showPane(dm);
+			break;
+
+		case UserChoice::Browse:
+			showPane(dm);
+			dm->showFiles();
+			break;
+
+		case UserChoice::None:
+			break;
+	}
 }
 
 void Qdc::HubsView::fetchMediaIn(const ChatMessage& message)

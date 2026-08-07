@@ -118,17 +118,25 @@ public:
 	NetStatus netStatus() const;
 	HubStatus hubStatus() const;
 
-	/** The hub's name or topic; empty until the hub sends one. */
+	/** The hub's name; empty until the hub sends one. */
 	QString hubName() const;
+
+	/**
+	 * What the hub says about itself, under its name.
+	 *
+	 * Empty until the hub sends one, and empty for most of an NMDC session: NMDC
+	 * has one field for the two and this arrives only from the $HubTopic that some
+	 * hub software sends as well.
+	 */
+	QString hubDescription() const;
 
 	/**
 	 * Whether the connection is carrying TLS.
 	 *
-	 * Derived from the network status transitions rather than asked, because the
-	 * core offers nothing to ask: Hub keeps its session protected and has no
-	 * isSecure(), so NetTlsConnected arriving and any subsequent disconnection or
-	 * error is all there is to go on. That makes this a record of what was last
-	 * reported, not a live check of the socket.
+	 * Asked of the core on the core thread whenever the network status moves, and
+	 * remembered here. A record of what was last reported rather than a live check
+	 * of the socket - but not a guess: the status alone cannot answer, because an
+	 * ADC session reports being connected again after its TLS handshake.
 	 */
 	bool isSecure() const;
 
@@ -212,6 +220,7 @@ signals:
 	void richTextSupportChanged(bool supported);
 	void hubStatusChanged(Qdc::HubStatus status);
 	void hubNameChanged(const QString& name);
+	void hubDescriptionChanged(const QString& description);
 	void secureChanged(bool secure);
 
 	/** Something the core wants to complain about, already formatted. */
@@ -319,6 +328,18 @@ private:
 	NetStatus m_netStatus = NetStatus::Invalid;
 	HubStatus m_hubStatus = HubStatus::None;
 	QString m_hubName;
+
+	/**
+	 * Kept across a disconnection, unlike the negotiated capabilities above.
+	 *
+	 * A name and a description describe the hub rather than say what may be sent
+	 * to it, so a stale one costs nothing while clearing one costs twice: the
+	 * sidebar row would fall back to a raw address on every reconnect, and the
+	 * empty string would be written over the recorded name of a hub that had
+	 * merely dropped. A followed redirect keeps the old name until the new hub
+	 * introduces itself, which is the price.
+	 */
+	QString m_hubDescription;
 	bool m_secure = false;
 
 	/**

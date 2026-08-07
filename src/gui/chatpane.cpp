@@ -53,6 +53,13 @@ Qdc::ChatPane::ChatPane(HubBridge* hub, QWidget* parent)
 	m_messages->setStretchFactor(0, 1);
 	m_messages->setChildrenCollapsible(false);
 
+	/*
+	 * A name in the feed offers the same as the same person in the user list. What
+	 * that is differs between a hub and a conversation already open with one, so the
+	 * pane answers rather than the feed; see ChatPane::showUserMenu().
+	 */
+	connect(m_feed, &ChatFeed::userMenuRequested, this, &ChatPane::showUserMenu);
+
 	m_tabs->setDocumentMode(true);
 	m_tabs->addTab(m_messages, tr("Messages"));
 

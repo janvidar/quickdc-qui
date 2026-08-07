@@ -29,6 +29,12 @@ class ConfigBridge;
  *
  * Held in memory and written through, because the list is short and every caller
  * wants the whole thing.
+ *
+ * Addresses go in canonical, as RecentHubs stores them, and a list written before
+ * that was true is rewritten on the way in. It has to be: a public hub list names a
+ * hub however its publisher spelled it, and the header star names the same hub the
+ * way the connection did, so without this a hub kept from the list and the same hub
+ * kept from its own header are two favourites and neither knows about the other.
  */
 class Favourites final : public QObject {
 	Q_OBJECT
@@ -37,9 +43,10 @@ public:
 	/** Loads immediately; the list is a handful of strings. */
 	explicit Favourites(ConfigBridge* config, QObject* parent = nullptr);
 
-	/** In the order stored, which is the order they were added. */
+	/** In the order stored, which is the order they were added. Canonical. */
 	QStringList urls() const;
 
+	/** However @a url is spelled; see the note above the class. */
 	bool contains(const QString& url) const;
 
 	/**

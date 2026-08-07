@@ -119,6 +119,14 @@ protected:
 	 */
 	virtual void sendMessage(const QString& message, bool richText) = 0;
 
+	/**
+	 * Somebody's name in the feed was right-clicked; see ChatFeed.
+	 *
+	 * What can be done about a person differs between a hub and a conversation
+	 * already open with one, so the pane answers rather than the feed.
+	 */
+	virtual void showUserMenu(const UserInfo& user, const QPoint& globalPos) = 0;
+
 	QTabWidget* tabs() const;
 	ChatModel* chatModel() const;
 	ChatFeed* feed() const;

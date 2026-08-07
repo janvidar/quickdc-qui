@@ -150,6 +150,18 @@ void Qdc::ComposerEdit::setNicknames(const QStringList& nicknames)
 	m_nicknames->setStringList(nicknames);
 }
 
+void Qdc::ComposerEdit::setRichTextEnabled(bool enabled)
+{
+	m_richTextEnabled = enabled;
+
+	/*
+	 * Said to QTextEdit as well as remembered, because its own Ctrl+B, Ctrl+I and
+	 * Ctrl+U are bound whatever the formatting buttons are doing, and those are not
+	 * reached by disabling them.
+	 */
+	setAcceptRichText(enabled);
+}
+
 QSize Qdc::ComposerEdit::sizeHint() const
 {
 	const QFontMetrics metrics(font());
@@ -176,6 +188,33 @@ QSize Qdc::ComposerEdit::minimumSizeHint() const
 void Qdc::ComposerEdit::insertFromMimeData(const QMimeData* source)
 {
 	if (!source) return;
+
+	/*
+	 * A hub that cannot carry formatting cannot carry a picture or an attachment
+	 * either - both are sent as markdown - so on one of those a paste is only ever
+	 * its words. Refused here as well as in canInsertFromMimeData(), which governs
+	 * a drop but is not consulted for a paste.
+	 */
+	if (!m_richTextEnabled)
+	{
+		/*
+		 * A fragment copied out of a page usually offers its text as well as its
+		 * markup, but not always; the markup is read for its words rather than
+		 * dropped when it does not.
+		 */
+		if (source->hasText())
+		{
+			insertPlainText(source->text());
+		}
+		else if (source->hasHtml())
+		{
+			QTextDocument parsed;
+			parsed.setHtml(source->html());
+			insertPlainText(parsed.toPlainText());
+		}
+
+		return;
+	}
 
 	/*
 	 * A picture on the clipboard - a screenshot, or an image copied from a page - is
@@ -314,14 +353,20 @@ bool Qdc::ComposerEdit::canInsertFromMimeData(const QMimeData* source) const
 
 	/*
 	 * Said here as well, or a drag carrying only a file is refused before it lands:
-	 * QTextEdit judges a drop by whether it could insert text from it.
+	 * QTextEdit judges a drop by whether it could insert text from it. Only where
+	 * there is somewhere for the file to go - on a hub that cannot carry one the
+	 * drag is refused at the border, which is feedback where there would otherwise
+	 * be a drop that quietly did nothing.
 	 */
-	if (source->hasImage()) return true;
-
-	if (source->hasUrls())
+	if (m_richTextEnabled)
 	{
-		for (const QUrl& url : source->urls())
-			if (url.isLocalFile()) return true;
+		if (source->hasImage()) return true;
+
+		if (source->hasUrls())
+		{
+			for (const QUrl& url : source->urls())
+				if (url.isLocalFile()) return true;
+		}
 	}
 
 	return QTextEdit::canInsertFromMimeData(source);
@@ -612,6 +657,7 @@ void Qdc::Composer::setSendable(bool sendable, const QString& reason)
 void Qdc::Composer::setRichTextEnabled(bool enabled)
 {
 	m_richTextEnabled = enabled;
+	m_edit->setRichTextEnabled(enabled);
 
 	for (QToolButton* button : m_formatButtons)
 	{

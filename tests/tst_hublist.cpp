@@ -10,6 +10,7 @@
 #include <core/recenthubs.h>
 #include <gui/homeview.h>
 #include <gui/hubbrowser.h>
+#include <gui/favouritedelegate.h>
 #include <gui/hublistmodel.h>
 
 #include <QDir>
@@ -25,6 +26,7 @@
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableView>
+#include <QHeaderView>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -65,6 +67,11 @@ private slots:
 	void theBrowserStaysOnTheTabItIsShowing();
 	void theBrowserBookmarksAndUnbookmarks();
 	void theBrowserForgetsARecentHub();
+
+	void theStarColumnKeepsAPublicHub();
+	void theStarColumnIsFixedAndStaysOutOfTheSort();
+	void theVisitedListShowsAndTogglesTheStar();
+	void theExplanationRowHasNoStar();
 
 private:
 	/** Put a list where a source's cache goes, as if it had been fetched. */
@@ -750,6 +757,176 @@ void TestHubList::theBrowserForgetsARecentHub()
 
 	QCOMPARE(browser.recentCount(), 0);
 	QCOMPARE(recent.count(), 0);
+}
+
+void TestHubList::theStarColumnKeepsAPublicHub()
+{
+	const QString url = QStringLiteral("http://star.example.org/hublist.xml");
+	configureSources({url});
+
+	Qdc::HubListEntry hub;
+	hub.name = QStringLiteral("Starrable");
+
+	/* Spelled without a port, as a hublist may. Kept under the one address the
+	   store files a hub by, so the star on this row agrees with the one in a
+	   hub's own header. */
+	hub.address = QStringLiteral("adcs://starrable.example.org");
+	/* 411 whatever the scheme; see urlNormalisationFillsInSchemeAndPort. */
+	hub.users = 7;
+
+	Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
+	cache(seed, url, {hub});
+
+	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+	Qdc::Favourites favourites(nullptr);
+
+	Qdc::HubBrowser browser(&directory, &favourites, nullptr);
+	browser.showTab(Qdc::HubBrowser::PublicTab);
+	browser.resize(700, 300);
+	browser.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&browser));
+
+	QTableView* table = browser.findChild<QTableView*>(QStringLiteral("publicHubs"));
+	QVERIFY(table);
+	QCOMPARE(table->model()->rowCount(), 1);
+
+	const QModelIndex star =
+		table->model()->index(0, Qdc::HubListModel::FavouriteColumn);
+
+	QVERIFY(!star.data(Qdc::HubListModel::FavouriteRole).toBool());
+
+	/* Through the viewport, so the delegate is what handles it. */
+	QTest::mouseClick(table->viewport(), Qt::LeftButton, {},
+	                  table->visualRect(star).center());
+
+	QVERIFY(favourites.contains(hub.address));
+	QCOMPARE(favourites.urls().at(0),
+	         QStringLiteral("adcs://starrable.example.org:411"));
+
+	/* Lit without the list having been fetched again; see HubListModel. */
+	QVERIFY(star.data(Qdc::HubListModel::FavouriteRole).toBool());
+	QCOMPARE(browser.favouriteCount(), 1);
+
+	QTest::mouseClick(table->viewport(), Qt::LeftButton, {},
+	                  table->visualRect(star).center());
+
+	QVERIFY(!favourites.contains(hub.address));
+	QVERIFY(!star.data(Qdc::HubListModel::FavouriteRole).toBool());
+}
+
+void TestHubList::theStarColumnIsFixedAndStaysOutOfTheSort()
+{
+	const QString url = QStringLiteral("http://sorted.example.org/hublist.xml");
+	configureSources({url});
+
+	Qdc::HubListEntry small;
+	small.name = QStringLiteral("Small");
+	small.address = QStringLiteral("adc://small.example.org:412");
+	small.users = 3;
+
+	Qdc::HubListEntry large;
+	large.name = QStringLiteral("Large");
+	large.address = QStringLiteral("adc://large.example.org:412");
+	large.users = 300;
+
+	Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
+	cache(seed, url, {small, large});
+
+	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+	Qdc::HubBrowser browser(&directory, nullptr, nullptr);
+
+	QTableView* table = browser.findChild<QTableView*>(QStringLiteral("publicHubs"));
+	QVERIFY(table);
+
+	QHeaderView* header = table->horizontalHeader();
+
+	QCOMPARE(header->sectionResizeMode(Qdc::HubListModel::FavouriteColumn),
+	         QHeaderView::Fixed);
+
+	const int before = header->sortIndicatorSection();
+
+	/*
+	 * The star's column holds no value to order a list of hubs by, so asking for it
+	 * puts the indicator back where it was rather than emptying the table's order.
+	 */
+	table->sortByColumn(Qdc::HubListModel::FavouriteColumn, Qt::AscendingOrder);
+	QCOMPARE(header->sortIndicatorSection(), before);
+}
+
+void TestHubList::theVisitedListShowsAndTogglesTheStar()
+{
+	constexpr int FavouriteRole = Qt::UserRole + 2;
+
+	Qdc::RecentHubs recent(nullptr);
+	recent.note(QStringLiteral("dchub://visited.example.org:411"),
+	            QStringLiteral("Visited"));
+
+	Qdc::Favourites favourites(nullptr);
+
+	Qdc::HubBrowser browser(nullptr, &favourites, &recent);
+	browser.showTab(Qdc::HubBrowser::VisitedTab);
+	browser.resize(500, 300);
+	browser.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&browser));
+
+	QListWidget* list = browser.findChild<QListWidget*>(QStringLiteral("recentHubs"));
+	QVERIFY(list);
+	QCOMPARE(list->count(), 1);
+
+	list->setCurrentRow(0);
+	QVERIFY(!list->item(0)->data(FavouriteRole).toBool());
+
+	/*
+	 * Keeping it elsewhere lights the star here without the list being rebuilt - so
+	 * the row that was current still is, and nothing has been re-dated.
+	 */
+	QVERIFY(favourites.add(QStringLiteral("dchub://visited.example.org:411")));
+
+	QCOMPARE(list->count(), 1);
+	QCOMPARE(list->currentRow(), 0);
+	QVERIFY(list->item(0)->data(FavouriteRole).toBool());
+
+	/* And the star itself takes it off again. */
+	const QRect row = list->visualItemRect(list->item(0));
+	QTest::mouseClick(list->viewport(), Qt::LeftButton, {},
+	                  QPoint(row.left() + 10, row.center().y()));
+
+	QVERIFY(!favourites.contains(QStringLiteral("dchub://visited.example.org:411")));
+
+	/* A click on the words is a selection and nothing more. */
+	QVERIFY(favourites.add(QStringLiteral("dchub://visited.example.org:411")));
+	QTest::mouseClick(list->viewport(), Qt::LeftButton, {},
+	                  QPoint(row.right() - 4, row.center().y()));
+
+	QVERIFY(favourites.contains(QStringLiteral("dchub://visited.example.org:411")));
+}
+
+void TestHubList::theExplanationRowHasNoStar()
+{
+	Qdc::Favourites favourites(nullptr);
+
+	Qdc::HubBrowser browser(nullptr, &favourites, nullptr);
+	browser.showTab(Qdc::HubBrowser::FavouritesTab);
+	browser.resize(500, 300);
+	browser.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&browser));
+
+	QListWidget* list =
+		browser.findChild<QListWidget*>(QStringLiteral("favouriteHubs"));
+
+	QVERIFY(list);
+	QCOMPARE(list->count(), 1);
+	QCOMPARE(browser.favouriteCount(), 0);
+
+	QSignalSpy changed(&favourites, &Qdc::Favourites::changed);
+	QVERIFY(changed.isValid());
+
+	/* The note explaining an empty list is not a hub, so it has nothing to keep. */
+	const QRect row = list->visualItemRect(list->item(0));
+	QTest::mouseClick(list->viewport(), Qt::LeftButton, {},
+	                  QPoint(row.left() + 10, row.center().y()));
+
+	QCOMPARE(changed.count(), 0);
 }
 
 QTEST_MAIN(TestHubList)

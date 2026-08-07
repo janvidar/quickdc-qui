@@ -20,9 +20,12 @@
 #include <gui/hubsview.h>
 #include <gui/richtext.h>
 #include <gui/theme.h>
+#include <gui/glyphs.h>
 #include <gui/usermodel.h>
 
 #include <QApplication>
+#include <QHBoxLayout>
+#include <QContextMenuEvent>
 #include <QDir>
 #include <QStyleOptionViewItem>
 #include <QBuffer>
@@ -32,6 +35,7 @@
 #include <QImage>
 #include <QIcon>
 #include <QImageReader>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
 #include <QPushButton>
@@ -82,12 +86,15 @@ private slots:
 	void chatFeedGivesAMarkdownMessageRoomForItsBlocks();
 	void chatFeedForgetsItsLayoutsWhenRowsMove();
 	void chatFeedClicksALinkAndIgnoresADrag();
+	void aNicknameInTheFeedAsksForItsOwnMenu();
 	void chatFeedDrawsAPictureItHas();
 	void chatFeedKeepsAnAnimationMoving();
 	void chatFeedBandsAHubNotice();
 	void chatModelReadsARichMessageAsProse();
 
 	void favouritesRoundTripThroughTheStore();
+	void favouritesNormaliseWhatTheyAreGiven();
+	void favouritesMigrateWhatWasWrittenBefore();
 	void favouritesShrinkWithoutLeavingATail();
 	void anOpenHubIsRecordedAndFollowsTheFavouritesStore();
 
@@ -111,6 +118,7 @@ private slots:
 	void aDroppedFileIsOfferedRatherThanNamed();
 	void oldPastedPicturesAreSweptAway();
 	void composerFlattensFormattingWhereItCannotBeSent();
+	void aPastedPageArrivesAsPlainTextWhereFormattingCannotBeSent();
 
 	void filelistModelExposesTheTree();
 	void filelistModelFilterKeepsAncestors();
@@ -136,6 +144,15 @@ private slots:
 	void aScheduledReconnectReachesTheBand();
 	void theBandOffersToStopWaitingOnlyWhileThereIsAWait();
 	void pressingReconnectNowAsksTheHub();
+	void thePadlockSaysNothingUntilThereIsAConnection();
+	void theHeaderNamesTheHubAndKeepsTheAddress();
+	void aHubsOwnDescriptionReachesThePane();
+	void theUserListCanBeFilteredDownToAName();
+	void hidingTheFilterPutsEverybodyBack();
+	void aNameThatHasLeftStillResolvesToWhatItWas();
+	void theHubsOwnSettingsHideBehindTheGears();
+	void aConversationShowsThePersonWhereAHubShowsItsStar();
+	void whatWasTypedSurvivesLeavingTheSettings();
 
 private:
 	Qdc::UserInfo user(const QString& nick, bool op = false) const;
@@ -686,6 +703,85 @@ void TestHubs::chatFeedClicksALinkAndIgnoresADrag()
 	                    QPoint(row.right() - 1, row.center().y()));
 
 	QCOMPARE(followed.count(), 1);
+}
+
+void TestHubs::aNicknameInTheFeedAsksForItsOwnMenu()
+{
+	Qdc::ChatFeed feed;
+	Qdc::ChatModel model;
+
+	feed.setModel(&model);
+	feed.resize(600, 300);
+	feed.show();
+
+	Qdc::ChatMessage said;
+	said.from = user(QStringLiteral("alice"), true);
+	said.received = QDateTime::currentDateTime();
+	said.text = QStringLiteral("hello everybody");
+	model.append(said);
+
+	Qdc::ChatMessage notice;
+	notice.fromHub = QStringLiteral("The Example Hub");
+	notice.received = QDateTime::currentDateTime();
+	notice.text = QStringLiteral("the hub is going down");
+	model.append(notice);
+
+	QVERIFY(QTest::qWaitForWindowExposed(&feed));
+
+	/*
+	 * Swept across the row, as the link test does: where the name falls depends on
+	 * the width of the timestamp in whatever font this machine uses.
+	 */
+	const auto sweep = [&feed, &model](int row) {
+		const QRect box = feed.visualRect(model.index(row));
+		QPoint found;
+
+		for (int x = box.left(); x < box.right(); ++x)
+		{
+			const QPoint point(x, box.center().y());
+
+			if (feed.anchorAt(point).startsWith(QStringLiteral("qdc-user:")))
+			{
+				found = point;
+				break;
+			}
+		}
+
+		return found;
+	};
+
+	const QPoint onNick = sweep(0);
+	QVERIFY2(!onNick.isNull(), "the speaker's name is not an anchor");
+
+	/* A line the hub generated names nobody, so there is nothing to right-click. */
+	QVERIFY(sweep(1).isNull());
+
+	QSignalSpy asked(&feed, &Qdc::ChatFeed::userMenuRequested);
+	QVERIFY(asked.isValid());
+
+	QContextMenuEvent event(QContextMenuEvent::Mouse, onNick,
+	                        feed.viewport()->mapToGlobal(onNick));
+
+	QApplication::sendEvent(feed.viewport(), &event);
+
+	QCOMPARE(asked.count(), 1);
+
+	const Qdc::UserInfo who = asked.at(0).at(0).value<Qdc::UserInfo>();
+	QCOMPARE(who.nick, QStringLiteral("alice"));
+
+	/* The record the message carried, standing and all. */
+	QVERIFY(who.op);
+
+	/*
+	 * A name is an anchor so that it can be found, not so that it can be followed:
+	 * a left click on one must not reach the desktop.
+	 */
+	QSignalSpy followed(&feed, &Qdc::ChatFeed::linkActivated);
+
+	QTest::mousePress(feed.viewport(), Qt::LeftButton, Qt::NoModifier, onNick);
+	QTest::mouseRelease(feed.viewport(), Qt::LeftButton, Qt::NoModifier, onNick);
+
+	QCOMPARE(followed.count(), 0);
 }
 
 void TestHubs::chatFeedDrawsAPictureItHas()
@@ -2372,6 +2468,440 @@ void TestHubs::hubPasswordIsAskedForOnce()
 
 	/* And the view is still working afterwards. */
 	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+}
+
+void TestHubs::favouritesNormaliseWhatTheyAreGiven()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::Favourites favourites(&config);
+	for (const QString& url : favourites.urls()) favourites.remove(url);
+
+	/*
+	 * A public hub list names a hub however its publisher spelled it, and the header
+	 * star names it the way the connection did. One favourite either way, or a hub
+	 * kept from the list would read as unkept everywhere else.
+	 */
+	QVERIFY(favourites.add(QStringLiteral("example.org")));
+	QCOMPARE(favourites.urls().at(0),
+	         QStringLiteral("dchub://example.org:411"));
+
+	QVERIFY(favourites.contains(QStringLiteral("example.org")));
+	QVERIFY(favourites.contains(QStringLiteral("dchub://example.org:411")));
+
+	/* The same hub, so not a second one. */
+	QVERIFY(!favourites.add(QStringLiteral("dchub://example.org:411")));
+	QCOMPARE(favourites.urls().size(), 1);
+
+	/* And it comes off under either spelling. */
+	QVERIFY(favourites.remove(QStringLiteral("example.org")));
+	QVERIFY(favourites.urls().isEmpty());
+}
+
+void TestHubs::favouritesMigrateWhatWasWrittenBefore()
+{
+	using Qdc::ConfigStore;
+
+	Qdc::ConfigBridge config(m_thread);
+
+	/* A group as it would have been written before addresses were canonical. */
+	config.replaceGroup(ConfigStore::Application, QStringLiteral("Favourites"),
+		{QStringLiteral("Hub 0"), QStringLiteral("Hub 1"), QStringLiteral("Hub 2")},
+		{{QStringLiteral("Hub 0"), QStringLiteral("example.org")},
+		 {QStringLiteral("Hub 1"), QStringLiteral("dchub://example.org:411")},
+		 {QStringLiteral("Total"), QStringLiteral("2")}});
+
+	{
+		Qdc::Favourites favourites(&config);
+
+		/* Two spellings of one hub collapse into the one they both mean. */
+		QCOMPARE(favourites.urls().size(), 1);
+		QCOMPARE(favourites.urls().at(0),
+		         QStringLiteral("dchub://example.org:411"));
+	}
+
+	/*
+	 * Written back rather than only corrected in memory, or the same list would be
+	 * migrated again on every start and the file would keep disagreeing with it.
+	 */
+	QCOMPARE(config.getString(ConfigStore::Application,
+	                          QStringLiteral("Favourites"), QStringLiteral("Hub 0")),
+	         QStringLiteral("dchub://example.org:411"));
+
+	QCOMPARE(config.getNumber(ConfigStore::Application,
+	                          QStringLiteral("Favourites"), QStringLiteral("Total")),
+	         1);
+
+	Qdc::Favourites cleanup(&config);
+	for (const QString& url : cleanup.urls()) cleanup.remove(url);
+}
+
+void TestHubs::aPastedPageArrivesAsPlainTextWhereFormattingCannotBeSent()
+{
+	Qdc::Composer composer;
+
+	QTextEdit* edit = composer.findChild<QTextEdit*>();
+	QVERIFY(edit);
+
+	QMimeData* page = new QMimeData;
+	page->setHtml(QStringLiteral("<b>loud</b> and <i>slanted</i>"));
+	page->setText(QStringLiteral("loud and slanted"));
+
+	QGuiApplication::clipboard()->setMimeData(page);
+
+	edit->paste();
+	QVERIFY(Qdc::RichText::hasMarkup(*edit->document()));
+
+	edit->clear();
+	composer.setRichTextEnabled(false);
+	edit->paste();
+
+	/* The words, and nothing about how they were set. */
+	QCOMPARE(edit->toPlainText(), QStringLiteral("loud and slanted"));
+	QVERIFY(!Qdc::RichText::hasMarkup(*edit->document()));
+
+	/* A fragment that offers only its markup is read for its words rather than
+	   dropped. */
+	QMimeData* markup = new QMimeData;
+	markup->setHtml(QStringLiteral("<b>only</b> markup"));
+	QGuiApplication::clipboard()->setMimeData(markup);
+
+	edit->clear();
+	edit->paste();
+
+	QCOMPARE(edit->toPlainText(), QStringLiteral("only markup"));
+	QVERIFY(!Qdc::RichText::hasMarkup(*edit->document()));
+
+	QGuiApplication::clipboard()->clear();
+}
+
+void TestHubs::thePadlockSaysNothingUntilThereIsAConnection()
+{
+	Qdc::HubHeader header;
+
+	/*
+	 * Three states. Not connected is neither of the other two: an open padlock on a
+	 * hub nobody has spoken to would read as "this hub is insecure" when all it means
+	 * is that there is nothing to secure yet.
+	 */
+	header.setSecure(false);
+	header.setNetStatus(Qdc::NetStatus::Invalid);
+
+	QLabel* lock = header.findChild<QLabel*>(QStringLiteral("hubPadlock"));
+	QVERIFY(lock);
+
+	const auto lockTip = [lock] { return lock->toolTip(); };
+
+	QVERIFY(lockTip().contains(QStringLiteral("Not connected")));
+
+	header.setNetStatus(Qdc::NetStatus::Connected);
+	QVERIFY(lockTip().contains(QStringLiteral("not using TLS")));
+
+	header.setSecure(true);
+	QVERIFY(lockTip().contains(QStringLiteral("encrypted")));
+	QVERIFY(!lockTip().contains(QStringLiteral("not using TLS")));
+
+	/* And it goes quiet again when the connection does. */
+	header.setNetStatus(Qdc::NetStatus::Disconnected);
+	QVERIFY(!lockTip().contains(QStringLiteral("encrypted")));
+}
+
+void TestHubs::theHeaderNamesTheHubAndKeepsTheAddress()
+{
+	Qdc::HubHeader header;
+
+	const QString url = QStringLiteral("adcs://hub.example.org:412");
+
+	/* Nothing is known yet, so the address is all there is to call it. */
+	header.setHubIdentity(QString(), QString(), url);
+	QCOMPARE(header.title(), url);
+	QCOMPARE(header.subtitle(), QString());
+
+	/*
+	 * A name takes the title and the address drops to the line below. Not left
+	 * blank: the strip would then be one line tall, two once a description arrived
+	 * and one again on a hub that never sends one, and the conversation under it
+	 * would move each time.
+	 */
+	header.setHubIdentity(QStringLiteral("The Example Hub"), QString(), url);
+	QCOMPARE(header.title(), QStringLiteral("The Example Hub"));
+	QCOMPARE(header.subtitle(), url);
+
+	/* And a description displaces it, being the better thing to say. */
+	header.setHubIdentity(QStringLiteral("The Example Hub"),
+	                      QStringLiteral("films and arguments about them"), url);
+
+	QCOMPARE(header.title(), QStringLiteral("The Example Hub"));
+	QCOMPARE(header.subtitle(), QStringLiteral("films and arguments about them"));
+
+	/* The address is never unreachable, whatever is on the two lines. */
+	QLabel* title = header.findChildren<QLabel*>().value(0);
+	QVERIFY(title);
+	QCOMPARE(title->toolTip(), url);
+}
+
+void TestHubs::aHubsOwnDescriptionReachesThePane()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+
+	const QString url = QStringLiteral("adc://192.0.2.21:412");
+	QVERIFY(hubs.openHub(url));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	/* Until the hub has said anything, its address is all there is to call it. */
+	QCOMPARE(pane->header()->title(), url);
+
+	/*
+	 * The pane reads the name and the description back off the bridge rather than
+	 * off the signal, so a signal emitted by hand only pins that the two are wired
+	 * to rebuild the header. What they rebuild it into is theHeaderNamesTheHub...().
+	 */
+	QSignalSpy described(pane->hub(), &Qdc::HubBridge::hubDescriptionChanged);
+	QVERIFY(described.isValid());
+
+	emit pane->hub()->hubDescriptionChanged(QStringLiteral("a friendly place"));
+	QCOMPARE(described.count(), 1);
+	QCOMPARE(pane->header()->title(), url);
+}
+
+void TestHubs::theUserListCanBeFilteredDownToAName()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.22:412")));
+
+	Qdc::HubPane* pane = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(pane);
+
+	for (const QString& nick : {QStringLiteral("alice"), QStringLiteral("bob"),
+	                            QStringLiteral("carol")})
+	{
+		pane->users()->upsert(user(nick));
+	}
+
+	QToolButton* reveal =
+		pane->findChild<QToolButton*>(QStringLiteral("userFilterButton"));
+	QVERIFY(reveal);
+
+	QLineEdit* filter = pane->findChild<QLineEdit*>(QStringLiteral("userFilter"));
+	QVERIFY(filter);
+	QVERIFY(filter->isHidden());
+
+	reveal->click();
+	QVERIFY(!filter->isHidden());
+
+	QListView* list = pane->findChild<QListView*>(QStringLiteral("userList"));
+	QVERIFY(list);
+	QCOMPARE(list->model()->rowCount(), 3);
+
+	filter->setText(QStringLiteral("car"));
+	QCOMPARE(list->model()->rowCount(), 1);
+
+	/* The model itself is untouched: it is who is on the hub, not who is showing. */
+	QCOMPARE(pane->users()->count(), 3);
+	QCOMPARE(pane->users()->nicknames().size(), 3);
+	QCOMPARE(pane->header()->findChildren<QToolButton*>().isEmpty(), false);
+}
+
+void TestHubs::hidingTheFilterPutsEverybodyBack()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.23:412")));
+
+	Qdc::HubPane* pane = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(pane);
+
+	for (const QString& nick : {QStringLiteral("alice"), QStringLiteral("bob")})
+		pane->users()->upsert(user(nick));
+
+	QToolButton* reveal =
+		pane->findChild<QToolButton*>(QStringLiteral("userFilterButton"));
+	QLineEdit* filter = pane->findChild<QLineEdit*>(QStringLiteral("userFilter"));
+	QListView* list = pane->findChild<QListView*>(QStringLiteral("userList"));
+	QVERIFY(reveal && filter && list);
+
+	reveal->click();
+	filter->setText(QStringLiteral("ali"));
+	QCOMPARE(list->model()->rowCount(), 1);
+
+	/*
+	 * A filter still narrowing a list nobody can see reads as everybody having left,
+	 * so putting the field away lifts it rather than remembering it.
+	 */
+	reveal->click();
+	QVERIFY(filter->isHidden());
+	QVERIFY(filter->text().isEmpty());
+	QCOMPARE(list->model()->rowCount(), 2);
+}
+
+void TestHubs::aNameThatHasLeftStillResolvesToWhatItWas()
+{
+	Qdc::UserModel model;
+
+	Qdc::UserInfo alice;
+	alice.id = QStringLiteral("SID1");
+	alice.nick = QStringLiteral("alice");
+	alice.sourceId = QStringLiteral("CID-ALICE");
+
+	model.upsert(alice);
+	QCOMPARE(model.resolve(alice).id, QStringLiteral("SID1"));
+
+	model.remove(alice.id);
+	QVERIFY(model.resolve(alice).id.isEmpty());
+
+	/*
+	 * Back under a new session id. A message keeps the one they had when they sent
+	 * it, so the client id is what has to find them again.
+	 */
+	Qdc::UserInfo again = alice;
+	again.id = QStringLiteral("SID9");
+	model.upsert(again);
+
+	QCOMPARE(model.resolve(alice).id, QStringLiteral("SID9"));
+}
+
+void TestHubs::theHubsOwnSettingsHideBehindTheGears()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.24:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	QTabWidget* tabs = pane->findChild<QTabWidget*>();
+	QVERIFY(tabs);
+
+	const auto tabNamed = [tabs](const QString& name) {
+		for (int n = 0; n < tabs->count(); ++n)
+			if (tabs->tabText(n) == name) return n;
+
+		return -1;
+	};
+
+	QCOMPARE(tabNamed(QStringLiteral("Settings")), -1);
+
+	/* Off the strip, but built - which is what lets it keep what was typed. */
+	QVERIFY(pane->findChild<QLineEdit*>(QStringLiteral("sessionNickname")));
+
+	QToolButton* gears =
+		pane->findChild<QToolButton*>(QStringLiteral("hubSettingsButton"));
+	QVERIFY(gears);
+
+	gears->click();
+
+	const int settings = tabNamed(QStringLiteral("Settings"));
+	QVERIFY(settings >= 0);
+	QCOMPARE(tabs->currentIndex(), settings);
+
+	gears->click();
+	QCOMPARE(tabNamed(QStringLiteral("Settings")), -1);
+	QCOMPARE(tabs->tabText(tabs->currentIndex()), QStringLiteral("Messages"));
+}
+
+void TestHubs::aConversationShowsThePersonWhereAHubShowsItsStar()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.26:412")));
+
+	Qdc::HubPane* pane = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(pane);
+
+	Qdc::UserInfo alice = user(QStringLiteral("alice"), true);
+	pane->users()->upsert(alice);
+
+	emit pane->directMessageRequested(alice);
+
+	Qdc::ChatPane* dm = hubs.currentPane();
+	QVERIFY(dm);
+	QVERIFY(dm != pane);
+
+	QLabel* figure = dm->header()->findChild<QLabel*>(QStringLiteral("hubPresence"));
+	QVERIFY(figure);
+	QVERIFY(!figure->isHidden());
+	QVERIFY(!figure->pixmap().isNull());
+
+	/*
+	 * The same figure the user list draws for the same person, so the two cannot
+	 * come to say different things about them.
+	 */
+	QCOMPARE(figure->pixmap().toImage(),
+	         Qdc::presence_icon(alice.away, alice.op, figure->pixmap().width()
+	                            / int(figure->pixmap().devicePixelRatio()))
+	             .pixmap(figure->pixmap().size()
+	                     / figure->pixmap().devicePixelRatio(),
+	                     figure->pixmap().devicePixelRatio())
+	             .toImage());
+
+	/*
+	 * And the comparison above discriminates: the same figure for somebody away is
+	 * a different image, so matching it was not matching anything at all.
+	 */
+	QVERIFY(Qdc::presence_icon(true, alice.op).pixmap(QSize(13, 13)).toImage()
+	        != Qdc::presence_icon(false, alice.op).pixmap(QSize(13, 13)).toImage());
+
+	/* And it stands exactly where the hub's star does, or the two headers indent
+	   differently. */
+	QToolButton* star =
+		pane->header()->findChildren<QToolButton*>().value(0);
+
+	QVERIFY(star);
+	QCOMPARE(figure->size(), star->sizeHint());
+
+	/* Nothing about a conversation is favourited, listed, or has settings. */
+	QVERIFY(!dm->header()->findChild<QToolButton*>(
+		QStringLiteral("hubSettingsButton"))->isVisibleTo(dm->header()));
+
+	/* The hub's own settings button is in the header, beside the padlock. */
+	QToolButton* gears = pane->header()->findChild<QToolButton*>(
+		QStringLiteral("hubSettingsButton"));
+
+	QVERIFY(gears);
+	QVERIFY(gears->isVisibleTo(pane->header()));
+
+	QLabel* lock = pane->header()->findChild<QLabel*>(QStringLiteral("hubPadlock"));
+	QVERIFY(lock);
+
+	QHBoxLayout* row = pane->header()->findChild<QHBoxLayout*>();
+	QVERIFY(row);
+	QVERIFY(row->indexOf(lock) < row->indexOf(gears));
+}
+
+void TestHubs::whatWasTypedSurvivesLeavingTheSettings()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.25:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	QToolButton* gears =
+		pane->findChild<QToolButton*>(QStringLiteral("hubSettingsButton"));
+	QLineEdit* nickname =
+		pane->findChild<QLineEdit*>(QStringLiteral("sessionNickname"));
+	QVERIFY(gears && nickname);
+
+	gears->click();
+
+	nickname->setText(QStringLiteral("halfway-through"));
+	emit nickname->textEdited(QStringLiteral("halfway-through"));
+
+	QPushButton* save = session_save(pane);
+	QVERIFY(save);
+	QVERIFY(save->isEnabled());
+
+	/*
+	 * Putting the page away is not discarding it: the tab goes, the page keeps its
+	 * parent, and nothing loads the fields again.
+	 */
+	gears->click();
+	gears->click();
+
+	QCOMPARE(nickname->text(), QStringLiteral("halfway-through"));
+	QVERIFY(save->isEnabled());
 }
 
 QTEST_MAIN(TestHubs)

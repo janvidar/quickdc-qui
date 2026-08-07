@@ -4,11 +4,28 @@
 
 #include "hublistmodel.h"
 
+#include <core/favourites.h>
+
 #include <QLocale>
 
-Qdc::HubListModel::HubListModel(QObject* parent)
+Qdc::HubListModel::HubListModel(Favourites* favourites, QObject* parent)
 	: QAbstractTableModel(parent)
+	, m_favourites(favourites)
 {
+	if (m_favourites)
+	{
+		connect(m_favourites, &Favourites::changed,
+		        this, &HubListModel::refreshFavourites);
+	}
+}
+
+void Qdc::HubListModel::refreshFavourites()
+{
+	if (m_hubs.isEmpty()) return;
+
+	emit dataChanged(index(0, FavouriteColumn),
+	                 index(static_cast<int>(m_hubs.size()) - 1, FavouriteColumn),
+	                 {Qt::DecorationRole, FavouriteRole});
 }
 
 int Qdc::HubListModel::rowCount(const QModelIndex& parent) const
@@ -36,12 +53,21 @@ QVariant Qdc::HubListModel::data(const QModelIndex& index, int role) const
 		case AddressRole:
 			return hub.address;
 
+		case FavouriteRole:
+			return m_favourites && m_favourites->contains(hub.address);
+
 		case Qt::TextAlignmentRole:
 			return (index.column() == UsersColumn)
 				? QVariant(static_cast<int>(Qt::AlignRight | Qt::AlignVCenter))
 				: QVariant();
 
 		case Qt::ToolTipRole:
+			if (index.column() == FavouriteColumn)
+			{
+				return (m_favourites && m_favourites->contains(hub.address))
+					? tr("Remove from favourites") : tr("Add to favourites");
+			}
+
 			/*
 			 * The description in full and the address under it. A hublist
 			 * description is a sentence or two written to be read, and the column is
@@ -50,6 +76,12 @@ QVariant Qdc::HubListModel::data(const QModelIndex& index, int role) const
 			return hub.description.isEmpty()
 				? hub.address
 				: hub.description + QStringLiteral("\n") + hub.address;
+
+		case Qt::AccessibleTextRole:
+			if (index.column() != FavouriteColumn) break;
+
+			return (m_favourites && m_favourites->contains(hub.address))
+				? tr("Favourite") : tr("Not a favourite");
 
 		case Qt::EditRole:
 			/* What a proxy sorts on; see the class comment. */
@@ -65,6 +97,10 @@ QVariant Qdc::HubListModel::data(const QModelIndex& index, int role) const
 
 	switch (index.column())
 	{
+		case FavouriteColumn:
+			/* Nothing but the star, which the delegate draws. */
+			return QVariant();
+
 		case NameColumn:
 			/* A list may name no name, and then the address is what identifies it. */
 			return hub.name.isEmpty() ? hub.address : hub.name;
@@ -89,7 +125,19 @@ QVariant Qdc::HubListModel::data(const QModelIndex& index, int role) const
 QVariant Qdc::HubListModel::headerData(int section, Qt::Orientation orientation,
                                        int role) const
 {
-	if (role != Qt::DisplayRole || orientation != Qt::Horizontal) return QVariant();
+	if (orientation != Qt::Horizontal) return QVariant();
+
+	/*
+	 * The star's column is named to a pointer and to a screen reader but not on
+	 * screen: the word is several times wider than the column.
+	 */
+	if (section == FavouriteColumn)
+	{
+		return (role == Qt::ToolTipRole || role == Qt::AccessibleTextRole)
+			? tr("Favourite") : QVariant();
+	}
+
+	if (role != Qt::DisplayRole) return QVariant();
 
 	switch (section)
 	{

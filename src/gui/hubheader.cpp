@@ -7,8 +7,10 @@
 #include "glyphs.h"
 #include "theme.h"
 
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QStringList>
 #include <QPainter>
 #include <QPixmap>
 #include <QToolButton>
@@ -17,27 +19,6 @@
 namespace {
 
 constexpr int GLYPH = 16;
-
-/**
- * A glyph as an icon, at the device pixel ratio of the widget that will show it.
- *
- * QIcon rather than a painted button, because these are ordinary tool buttons and
- * the style should keep drawing their pressed and hovered states. The ratio has
- * to be applied by hand: a pixmap made at the logical size is blurred on a retina
- * display.
- */
-QIcon glyph_icon(Qdc::Glyph glyph, const QColor& colour, qreal ratio)
-{
-	QPixmap pixmap(QSize(GLYPH, GLYPH) * ratio);
-	pixmap.setDevicePixelRatio(ratio);
-	pixmap.fill(Qt::transparent);
-
-	QPainter painter(&pixmap);
-	Qdc::paint_glyph(painter, glyph, QRectF(0, 0, GLYPH, GLYPH), colour);
-	painter.end();
-
-	return QIcon(pixmap);
-}
 
 QString net_status_text(Qdc::NetStatus status)
 {
@@ -69,7 +50,9 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	, m_title(new QLabel(this))
 	, m_subtitle(new QLabel(this))
 	, m_star(new QToolButton(this))
+	, m_presence(new QLabel(this))
 	, m_lock(new QLabel(this))
+	, m_settings(new QToolButton(this))
 	, m_users(new QToolButton(this))
 	, m_close(new QToolButton(this))
 {
@@ -93,6 +76,21 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	m_star->setAutoRaise(true);
 	m_star->setCursor(Qt::PointingHandCursor);
 
+	/*
+	 * The star's place in a conversation. A label rather than a button, because it
+	 * reports what somebody else is doing and there is nothing to press.
+	 */
+	m_presence->setObjectName(QStringLiteral("hubPresence"));
+	m_presence->setAlignment(Qt::AlignCenter);
+	m_presence->hide();
+
+	m_lock->setObjectName(QStringLiteral("hubPadlock"));
+
+	m_settings->setObjectName(QStringLiteral("hubSettingsButton"));
+	m_settings->setCheckable(true);
+	m_settings->setAutoRaise(true);
+	m_settings->setCursor(Qt::PointingHandCursor);
+
 	m_users->setAutoRaise(true);
 	m_users->setCheckable(true);
 	m_users->setCursor(Qt::PointingHandCursor);
@@ -106,8 +104,8 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	const qreal ratio = devicePixelRatioF();
 	const QColor ink = theme().contentMuted;
 
-	m_users->setIcon(glyph_icon(Glyph::People, ink, ratio));
-	m_close->setIcon(glyph_icon(Glyph::Close, ink, ratio));
+	m_users->setIcon(glyph_icon(Glyph::People, ink, ratio, GLYPH));
+	m_close->setIcon(glyph_icon(Glyph::Close, ink, ratio, GLYPH));
 
 	QVBoxLayout* text = new QVBoxLayout;
 	text->setContentsMargins(0, 0, 0, 0);
@@ -115,12 +113,24 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	text->addWidget(m_title);
 	text->addWidget(m_subtitle);
 
+	/*
+	 * The star leads, because it acts on the hub and the hub is what the two lines
+	 * name. Outside the text block rather than in the title's own row: sharing a row
+	 * with the title would put the line below it under the star instead of under the
+	 * name, and the two would no longer begin at the same edge. Aligned to the top
+	 * for the same reason - it belongs to the name, not to the gap under it.
+	 *
+	 * The left margin is smaller than the right because a tool button brings its own
+	 * padding, and without the difference the title starts further in than it did.
+	 */
 	QHBoxLayout* layout = new QHBoxLayout(this);
-	layout->setContentsMargins(10, 6, 8, 6);
+	layout->setContentsMargins(4, 6, 8, 6);
 	layout->setSpacing(6);
+	layout->addWidget(m_star, 0, Qt::AlignTop);
+	layout->addWidget(m_presence, 0, Qt::AlignTop);
 	layout->addLayout(text, 1);
-	layout->addWidget(m_star);
 	layout->addWidget(m_lock);
+	layout->addWidget(m_settings);
 	layout->addWidget(m_users);
 	layout->addWidget(m_close);
 
@@ -130,18 +140,50 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 		emit favouriteToggled(on);
 	});
 
+	connect(m_settings, &QToolButton::toggled, this, &HubHeader::settingsToggled);
 	connect(m_users, &QToolButton::toggled, this, &HubHeader::userListToggled);
 	connect(m_close, &QToolButton::clicked, this, &HubHeader::closeRequested);
 
 	refreshStar();
 	refreshLock();
+	refreshPresence();
+	refreshSettings();
 	setUserCount(0);
+
+	/*
+	 * The figure takes exactly the box the star would have, so that a conversation
+	 * and a hub begin their titles at the same place. A tool button carries padding
+	 * a bare label does not, and without this the two headers are indented
+	 * differently - which is visible the moment one is opened from the other.
+	 */
+	m_presence->setFixedSize(m_star->sizeHint());
 }
 
-void Qdc::HubHeader::setTitle(const QString& title)
+void Qdc::HubHeader::setTitle(const QString& title, const QString& tooltip)
 {
 	m_title->setText(title);
-	m_title->setToolTip(title);
+	m_title->setToolTip(tooltip.isEmpty() ? title : tooltip);
+}
+
+void Qdc::HubHeader::setHubIdentity(const QString& name,
+                                    const QString& description,
+                                    const QString& address)
+{
+	setTitle(name.isEmpty() ? address : name, address);
+
+	setSubtitle(description.isEmpty()
+		? (name.isEmpty() ? QString() : address)
+		: description);
+}
+
+QString Qdc::HubHeader::title() const
+{
+	return m_title->text();
+}
+
+QString Qdc::HubHeader::subtitle() const
+{
+	return m_subtitle->text();
 }
 
 void Qdc::HubHeader::setSubtitle(const QString& subtitle)
@@ -188,21 +230,44 @@ void Qdc::HubHeader::setUserCount(int count)
 
 void Qdc::HubHeader::setNetStatus(NetStatus status)
 {
-	const QString text = net_status_text(status);
+	m_status = status;
+	refreshLock();
+}
 
-	/*
-	 * The subtitle carries the hub's own name once there is one, so a status is
-	 * only shown while there is not - otherwise connecting to a named hub would
-	 * replace its name with "Connected" and never put it back.
-	 */
-	if (m_subtitle->text().isEmpty() || !text.isEmpty()) m_subtitle->setToolTip(text);
-
-	m_lock->setToolTip(text.isEmpty() ? m_lock->toolTip() : text);
+void Qdc::HubHeader::setPresence(bool away, bool op)
+{
+	m_away = away;
+	m_op = op;
+	refreshPresence();
 }
 
 void Qdc::HubHeader::setFavouriteVisible(bool visible)
 {
 	m_star->setVisible(visible);
+}
+
+void Qdc::HubHeader::setPresenceVisible(bool visible)
+{
+	m_presence->setVisible(visible);
+}
+
+void Qdc::HubHeader::setSettingsVisible(bool visible)
+{
+	m_settings->setVisible(visible);
+}
+
+void Qdc::HubHeader::setSettingsShown(bool shown)
+{
+	const QSignalBlocker blocker(m_settings);
+	m_settings->setChecked(shown);
+}
+
+void Qdc::HubHeader::setSettingsUnsaved(bool unsaved)
+{
+	if (unsaved == m_settingsUnsaved) return;
+
+	m_settingsUnsaved = unsaved;
+	refreshSettings();
 }
 
 void Qdc::HubHeader::setUserListVisible(bool visible)
@@ -214,6 +279,21 @@ void Qdc::HubHeader::setUserListShown(bool shown)
 {
 	const QSignalBlocker blocker(m_users);
 	m_users->setChecked(shown);
+}
+
+void Qdc::HubHeader::changeEvent(QEvent* event)
+{
+	QWidget::changeEvent(event);
+
+	/* Both are pixmaps painted in the ink of the scheme that was current. */
+	if (event->type() == QEvent::PaletteChange
+	    || event->type() == QEvent::StyleChange)
+	{
+		refreshStar();
+		refreshLock();
+		refreshPresence();
+		refreshSettings();
+	}
 }
 
 void Qdc::HubHeader::refreshStar()
@@ -228,7 +308,7 @@ void Qdc::HubHeader::refreshStar()
 	const QColor colour = m_favourite ? theme().star : theme().contentMuted;
 
 	m_star->setIcon(glyph_icon(m_favourite ? Glyph::Star : Glyph::StarOutline,
-	                           colour, ratio));
+	                           colour, ratio, GLYPH));
 
 	const QString text = m_favourite ? tr("Remove from favourites")
 	                                 : tr("Add to favourites");
@@ -236,27 +316,87 @@ void Qdc::HubHeader::refreshStar()
 	m_star->setAccessibleName(text);
 }
 
+void Qdc::HubHeader::refreshPresence()
+{
+	const qreal ratio = devicePixelRatioF();
+
+	/*
+	 * The same figure the user list draws for the same person, at the size the rest
+	 * of this strip is drawn at - so a conversation and the row it was opened from
+	 * say the same thing about somebody in the same way.
+	 */
+	m_presence->setPixmap(presence_icon(m_away, m_op, GLYPH)
+		.pixmap(QSize(GLYPH, GLYPH), ratio));
+
+	QStringList said;
+	if (m_op) said << tr("Operator");
+	said << (m_away ? tr("Away") : tr("Here"));
+
+	m_presence->setToolTip(said.join(QStringLiteral(" · ")));
+	m_presence->setAccessibleName(m_presence->toolTip());
+}
+
+void Qdc::HubHeader::refreshSettings()
+{
+	const qreal ratio = devicePixelRatioF();
+
+	/*
+	 * Marked while there is something unsaved behind it, because the page it opens
+	 * can be left with the Save still lit and nothing else would say so.
+	 */
+	const QColor colour = m_settingsUnsaved ? theme().accent : theme().contentMuted;
+
+	m_settings->setIcon(glyph_icon(Glyph::Settings, colour, ratio, GLYPH));
+
+	const QString text = m_settingsUnsaved
+		? tr("Settings for this hub — unsaved changes")
+		: tr("Settings for this hub");
+
+	m_settings->setToolTip(text);
+	m_settings->setAccessibleName(text);
+}
+
 void Qdc::HubHeader::refreshLock()
 {
 	const qreal ratio = devicePixelRatioF();
 
-	const QColor colour = m_secure ? theme().success : theme().contentMuted;
+	/*
+	 * Three states rather than two. A hub that is not connected has nothing to
+	 * secure and nothing failing to secure it, so it gets neither the green nor the
+	 * red - the same judgement the tree row makes by drawing no padlock at all; see
+	 * HubsView::refreshItem(). Kept visible and muted rather than hidden, because
+	 * this sits in a fixed strip and taking it away would shuffle the buttons beside
+	 * it sideways every time a hub connected or dropped.
+	 */
+	const bool live = m_status == NetStatus::Connected
+		|| m_status == NetStatus::TlsConnected;
+
+	const QColor colour = !live
+		? theme().contentMuted
+		: (m_secure ? theme().success : theme().danger);
 
 	QPixmap pixmap(QSize(GLYPH, GLYPH) * ratio);
 	pixmap.setDevicePixelRatio(ratio);
 	pixmap.fill(Qt::transparent);
 
 	QPainter painter(&pixmap);
-	paint_glyph(painter, m_secure ? Glyph::Lock : Glyph::LockOpen,
+	paint_glyph(painter, (live && m_secure) ? Glyph::Lock : Glyph::LockOpen,
 	            QRectF(0, 0, GLYPH, GLYPH), colour);
 	painter.end();
 
 	m_lock->setPixmap(pixmap);
 
-	const QString text = m_secure
-		? tr("The connection to this hub is encrypted")
-		: tr("The connection to this hub is not encrypted");
+	/*
+	 * The glyph differs as well as the colour, so which of the three this is does
+	 * not rest on telling red from green.
+	 */
+	const QString text = !live
+		? net_status_text(m_status)
+		: (m_secure
+			? tr("The connection to this hub is encrypted")
+			: tr("This hub is not using TLS. Everything sent to it, including "
+			     "your password, travels in the clear."));
 
-	m_lock->setToolTip(text);
-	m_lock->setAccessibleName(text);
+	m_lock->setToolTip(text.isEmpty() ? tr("Not connected") : text);
+	m_lock->setAccessibleName(m_lock->toolTip());
 }

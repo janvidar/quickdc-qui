@@ -17,6 +17,8 @@ class QTableView;
 
 namespace Qdc {
 
+class FavouriteDelegate;
+
 class Favourites;
 class HubDirectory;
 class HubListModel;
@@ -109,6 +111,15 @@ private:
 	void refreshFavourites();
 	void refreshRecent();
 
+	/**
+	 * Set the star on every visited row again, without rebuilding the list.
+	 *
+	 * Keeping a hub changes one thing about a row that is otherwise the same, and a
+	 * rebuild would take the selection and the scroll position with it - and quietly
+	 * re-date every "last visited" while it was at it.
+	 */
+	void refreshRecentStars();
+
 	/** The line under the public list: how many hubs, from how many lists, when. */
 	void refreshStatus();
 
@@ -139,6 +150,22 @@ private:
 
 	/** Bookmark the selected public hub, or take the bookmark off again. */
 	void toggleBookmark();
+
+	/** Keep @a address, or stop keeping it. What every star reports to. */
+	void toggleFavourite(const QString& address);
+
+	/** What can be done with the hub under the pointer, on each of the three tabs. */
+	void showPublicMenu(const QPoint& where);
+	void showListMenu(QListWidget* list, const QPoint& where);
+
+	/**
+	 * The menu itself, which is the same on all three tabs bar one entry.
+	 *
+	 * @param visited whether to offer taking the hub off the list of those visited,
+	 *        which is the one thing only that tab can do.
+	 */
+	void hubMenu(const QPoint& globalPos, const QString& name,
+	             const QString& address, bool visited);
 
 	/** Follow the selection: which buttons make sense, and what they say. */
 	void followPublicSelection();
@@ -190,12 +217,29 @@ private:
 	    middle of it is not mistaken for somebody sorting the table. */
 	bool m_replacingRows = false;
 
+	/**
+	 * The stars. Two, because the table has a column for one and the two lists put
+	 * it in front of the row's own text; see FavouriteDelegate.
+	 */
+	FavouriteDelegate* m_columnStar;
+	FavouriteDelegate* m_listStar;
+
 	QListWidget* m_favouriteList;
 	QPushButton* m_openFavourite;
 	QPushButton* m_unbookmark;
 
 	QListWidget* m_recentList;
 	QPushButton* m_openRecent;
+	/**
+	 * Bookmark, or unbookmark, whichever hub is selected here.
+	 *
+	 * The star in the row does the same thing with the pointer; this is how it is
+	 * done without one. The other two tabs already have their own such button, and
+	 * on macOS a context menu has no key to raise it - so without this, keeping a
+	 * hub from the list of those visited could only be done by clicking.
+	 */
+	QPushButton* m_bookmarkRecent;
+
 	QPushButton* m_forget;
 	QPushButton* m_clearRecent;
 };

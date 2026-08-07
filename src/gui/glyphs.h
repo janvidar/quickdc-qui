@@ -5,6 +5,8 @@
 #ifndef HAVE_QUICKDC_QUI_GLYPHS_H
 #define HAVE_QUICKDC_QUI_GLYPHS_H
 
+#include <QIcon>
+
 class QColor;
 class QPainter;
 class QRectF;
@@ -56,6 +58,28 @@ enum class Glyph {
  */
 void paint_glyph(QPainter& painter, Glyph glyph, const QRectF& box,
                  const QColor& colour);
+
+/**
+ * 'glyph' as an icon, at 'ratio' device pixels to the point.
+ *
+ * An icon rather than a painted button, so that the style keeps drawing the
+ * pressed and hovered states of whatever shows it. The ratio has to be applied
+ * by hand: a pixmap made at the logical size is blurred on a retina display.
+ */
+QIcon glyph_icon(Glyph glyph, const QColor& colour, qreal ratio, int size = 16);
+
+/**
+ * The figure for one user, saying two things at once.
+ *
+ * The shape is whether they are here: filled for present, an outline for somebody
+ * who says they are away. The colour is what they are: the operator colour for an
+ * operator, the presence colour for everybody else.
+ *
+ * Two attributes, two ways of showing them, so neither hides the other. Shared
+ * rather than drawn twice, because the same figure names a row of the user list and
+ * the person a conversation is with, and the two must not drift apart.
+ */
+QIcon presence_icon(bool away, bool op, int size = 13);
 
 }
 

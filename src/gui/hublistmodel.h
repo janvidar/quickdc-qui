@@ -12,6 +12,8 @@
 
 namespace Qdc {
 
+class Favourites;
+
 /**
  * The public hubs, as a table.
  *
@@ -28,6 +30,9 @@ class HubListModel final : public QAbstractTableModel {
 
 public:
 	enum Column {
+		/** The star, which is all it holds; see FavouriteDelegate. */
+		FavouriteColumn,
+
 		NameColumn,
 		UsersColumn,
 		DescriptionColumn,
@@ -41,10 +46,18 @@ public:
 		HubRole = Qt::UserRole + 1,
 
 		/** The address alone, which is what connecting needs. */
-		AddressRole
+		AddressRole,
+
+		/** Whether this hub is kept, for the star to draw itself by. */
+		FavouriteRole
 	};
 
-	explicit HubListModel(QObject* parent = nullptr);
+	/**
+	 * @param favourites which of these hubs are kept. May be null, in which case no
+	 *        row is ever a favourite and the star is only ever an outline.
+	 */
+	explicit HubListModel(Favourites* favourites = nullptr,
+	                      QObject* parent = nullptr);
 
 	int rowCount(const QModelIndex& parent = QModelIndex()) const override;
 	int columnCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -58,6 +71,16 @@ public:
 	HubListEntry at(int row) const;
 
 private:
+	/**
+	 * Say the stars have changed, and nothing else.
+	 *
+	 * One column of every row rather than a reset, so that the sort the header is
+	 * showing, the selection and the scroll position all survive somebody keeping a
+	 * hub - which a reset takes with it; see HubBrowser's stored sort.
+	 */
+	void refreshFavourites();
+
+	Favourites* m_favourites;
 	QVector<HubListEntry> m_hubs;
 };
 

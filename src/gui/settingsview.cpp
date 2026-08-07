@@ -5,6 +5,7 @@
 #include "settingsview.h"
 
 #include "theme.h"
+#include "widgets.h"
 
 #include <core/configbridge.h>
 #include <core/shares.h>
@@ -145,16 +146,7 @@ Qdc::Glyph Qdc::SettingsView::glyph() const
 
 QLabel* Qdc::SettingsView::makeNote(const QString& text)
 {
-	QLabel* note = new QLabel(text, this);
-	note->setWordWrap(true);
-
-	note->setObjectName(QStringLiteral("mutedText"));
-
-	QFont smaller = note->font();
-	smaller.setPointSize(qMax(1, smaller.pointSize() - 1));
-	note->setFont(smaller);
-
-	return note;
+	return Qdc::makeNote(text, this);
 }
 
 QWidget* Qdc::SettingsView::makePage(QWidget* page)

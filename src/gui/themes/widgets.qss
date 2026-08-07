@@ -144,11 +144,19 @@ QLabel#mutedText {
     color: %(contentMuted);
 }
 
-/* The context sidebar is a panel against the conversation, not a field. */
+/*
+ * The context sidebar is a panel against the conversation, not a field. The rule
+ * down its left belongs to the panel rather than to the list inside it, or the
+ * heading above the list would sit outside the panel it heads.
+ */
+QWidget#userSidebar {
+    background: %(content);
+    border-left: 1px solid %(border);
+}
+
 QListView#userList {
     background: %(content);
     border: none;
-    border-left: 1px solid %(border);
     border-radius: 0px;
 }
 

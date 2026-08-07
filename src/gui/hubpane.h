@@ -11,6 +11,8 @@ class QLabel;
 class QLineEdit;
 class QListView;
 class QPushButton;
+class QSortFilterProxyModel;
+class QToolButton;
 
 namespace Qdc {
 
@@ -63,23 +65,61 @@ signals:
 
 protected:
 	void sendMessage(const QString& message, bool richText) override;
+	void showUserMenu(const UserInfo& user, const QPoint& globalPos) override;
 
 private:
 	/** Rebuild the Info tab from what the hub has told us. */
 	void refreshInfo();
 
-	/** What can be done with the user under the pointer. */
-	void showUserMenu(const QPoint& where);
+	/** Put the hub's own name and description across the top of the pane. */
+	void refreshHeaderIdentity();
 
 	/**
-	 * The part of the Info tab that is about who we are on this hub.
+	 * The context sidebar: who is here, over a heading that can filter them.
+	 *
+	 * A container rather than the bare list, because the search button has to sit
+	 * somewhere and a list view has no room above its first row.
+	 */
+	QWidget* buildUserSidebar();
+
+	/** Reveal or put away the filter field. Putting it away lifts the filter. */
+	void setUserFilterShown(bool shown);
+
+	void applyUserFilter(const QString& text);
+
+	/** "Users", or how many of them are showing while a filter is in force. */
+	void refreshUserHeading();
+
+	/**
+	 * The record behind a row of the list.
+	 *
+	 * Read off the index rather than by row, because a proxy sits between the list
+	 * and the model and a row of one is not a row of the other.
+	 */
+	UserInfo userAt(const QModelIndex& index) const;
+
+	/** What can be done with the user under the pointer. */
+	void showUserListMenu(const QPoint& where);
+
+	/**
+	 * The page behind the gears: who we are on this hub, and nothing else.
 	 *
 	 * The core keeps a nickname, description, e-mail and password per hub in
 	 * session.conf, under a group named by the hub's address, and falls back to the
 	 * global identity for anything not set there - so this form is four overrides
 	 * rather than four settings.
+	 *
+	 * Built once, in the constructor, and kept whether its tab is on the strip or
+	 * not: loadSession() fills it straight away, and what somebody typed has to be
+	 * there when they come back to it.
 	 */
-	QWidget* buildSessionForm();
+	QWidget* buildSessionPage();
+
+	/** Put the settings tab on the strip and go to it, or take it away again. */
+	void showSessionPage(bool shown);
+
+	/** Colour the gears while there is something unsaved behind it. */
+	void refreshSessionGears();
 
 	/** Read this hub's group again, discarding anything typed. */
 	void loadSession();
@@ -117,7 +157,25 @@ private:
 	ConfigBridge* m_config;
 
 	UserModel* m_users;
+
+	/**
+	 * What the list actually shows.
+	 *
+	 * Between the model and the view rather than inside the model, because five
+	 * other things read UserModel as everybody on the hub - the mention list, the
+	 * count in the header, the share total, byId() from the view above - and none
+	 * of them should have to know whether a filter is up.
+	 */
+	QSortFilterProxyModel* m_visibleUsers;
+
 	QListView* m_userList;
+
+	/** The container the list, its heading and its filter are laid out in. */
+	QWidget* m_userSidebar = nullptr;
+	QLabel* m_userHeading = nullptr;
+	QToolButton* m_userFilterButton = nullptr;
+	QLineEdit* m_userFilter = nullptr;
+
 	QLabel* m_info;
 
 	/* This hub's own identity. Empty means "use the one from Settings". */
@@ -125,8 +183,13 @@ private:
 	QLineEdit* m_description = nullptr;
 	QLineEdit* m_email = nullptr;
 	QLineEdit* m_password = nullptr;
+	QWidget* m_sessionForm = nullptr;
 	QPushButton* m_saveSession = nullptr;
+	QPushButton* m_revertSession = nullptr;
 	QLabel* m_sessionStatus = nullptr;
+
+	/** The page the header's settings button reveals. */
+	QWidget* m_sessionPage = nullptr;
 
 	/** True while loadSession() is filling the fields; see markSessionEdited(). */
 	bool m_loadingSession = false;
@@ -180,6 +243,9 @@ public:
 	/** The details, once the hub has sent more than a nickname. */
 	void setUser(const UserInfo& user);
 
+	/** Who this conversation is with, as far as the hub has last said. */
+	const UserInfo& peer() const;
+
 	/**
 	 * Whether this conversation is with @a user.
 	 *
@@ -214,8 +280,12 @@ signals:
 
 protected:
 	void sendMessage(const QString& message, bool richText) override;
+	void showUserMenu(const UserInfo& user, const QPoint& globalPos) override;
 
 private:
+	/** The figure across the top: what the user list would say about them. */
+	void applyPresence();
+
 	/** As HubPane: a private message goes through the hub and waits on its login. */
 	void applySendable();
 

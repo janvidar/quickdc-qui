@@ -4,13 +4,35 @@
 
 #include "glyphs.h"
 
+#include "theme.h"
+
 #include <QColor>
+#include <QHash>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QRectF>
 #include <QTransform>
 
 namespace {
+
+/**
+ * 'ink' moved 'percent' of the way towards 'muted'.
+ *
+ * A blend rather than the same colour at a lower alpha, which is what this was
+ * first: alpha takes its contrast from whatever is behind it, and a pale figure
+ * faded against a white user list came out almost invisible while the same fade
+ * over the dark scheme was fine. Mixing keeps the ink opaque, so what changes is
+ * the colour rather than how much of the background shows through it.
+ */
+QColor faded_toward(const QColor& ink, const QColor& muted, int percent)
+{
+	const int keep = 100 - percent;
+
+	return QColor((ink.red()   * keep + muted.red()   * percent) / 100,
+	              (ink.green() * keep + muted.green() * percent) / 100,
+	              (ink.blue()  * keep + muted.blue()  * percent) / 100);
+}
 
 /** The grid the paths below are drawn on. */
 constexpr qreal GRID = 24.0;
@@ -384,4 +406,86 @@ void Qdc::paint_glyph(QPainter& painter, Glyph glyph, const QRectF& box,
 	painter.drawPath(path);
 
 	painter.restore();
+}
+
+QIcon Qdc::glyph_icon(Glyph glyph, const QColor& colour, qreal ratio, int size)
+{
+	QPixmap pixmap(QSize(size, size) * ratio);
+	pixmap.setDevicePixelRatio(ratio);
+	pixmap.fill(Qt::transparent);
+
+	QPainter painter(&pixmap);
+	paint_glyph(painter, glyph, QRectF(0, 0, size, size), colour);
+	painter.end();
+
+	return QIcon(pixmap);
+}
+
+/**
+ * A figure for one user, saying two things at once.
+ *
+ * The shape is whether they are here: filled for present, an outline for somebody who
+ * says they are away. The colour is what they are: the operator colour for an
+ * operator, the presence colour for everybody else.
+ *
+ * Two attributes, two ways of showing them, so neither hides the other. Colour alone
+ * would leave the two states of an operator indistinguishable to somebody who cannot
+ * tell the inks apart, and shape alone would lose the operator.
+ *
+ * Which is why an away user keeps their own colour, dimmed, rather than going a
+ * neutral grey: grey would say "away" a second time and stop saying who they are, and
+ * an operator is worth knowing about whether or not they are reading the chat.
+ *
+ * Built rather than shipped as an asset so it follows the theme, and cached because a
+ * user list asks for it on every row of every repaint. Cached against the theme's own
+ * name as well, since the colours can change while a list is open and a pixmap made
+ * before that would keep the old ink.
+ */
+QIcon Qdc::presence_icon(bool away, bool op, int size)
+{
+	constexpr qreal RATIO = 3.0;
+
+	/*
+	 * Keyed by size as well as by what it says, because the same figure is wanted
+	 * at two sizes - a row of the user list, and the strip above a conversation.
+	 */
+	static QHash<int, QIcon> figures;
+	static QString painted;
+
+	if (painted != Qdc::theme().name)
+	{
+		figures.clear();
+		painted = Qdc::theme().name;
+	}
+
+	QIcon& icon = figures[(size * 4) + (op ? 2 : 0) + (away ? 1 : 0)];
+
+	if (icon.isNull())
+	{
+		QPixmap pixmap(QSize(size, size) * RATIO);
+		pixmap.setDevicePixelRatio(RATIO);
+		pixmap.fill(Qt::transparent);
+
+		/*
+		 * Faded towards the muted colour rather than replaced by it: enough to
+		 * recede next to a filled figure, and not so far that an away operator stops
+		 * being tellable from anybody else who has stepped out.
+		 */
+		constexpr int AWAY_MIX = 45;
+
+		QColor ink = op ? Qdc::theme().presenceOperator : Qdc::theme().presence;
+
+		if (away) ink = faded_toward(ink, Qdc::theme().contentMuted, AWAY_MIX);
+
+		QPainter painter(&pixmap);
+
+		paint_glyph(painter, away ? Glyph::PersonOutline : Glyph::Person,
+		            QRectF(0, 0, size, size), ink);
+
+		painter.end();
+
+		icon = QIcon(pixmap);
+	}
+
+	return icon;
 }

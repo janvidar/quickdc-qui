@@ -452,12 +452,30 @@ public:
 		});
 	}
 
+	/*
+	 * Both of these report only a change. A hub re-sends its own INF for reasons of
+	 * its own, and every repeat would otherwise redraw the sidebar row and write the
+	 * same name into the list of hubs visited.
+	 */
 	void EventHubName(const char* hubname) override
 	{
 		const QString name = from_utf8(hubname);
 		report([name](HubBridge* bridge) {
+			if (name == bridge->m_hubName) return;
+
 			bridge->m_hubName = name;
 			emit bridge->hubNameChanged(name);
+		});
+	}
+
+	void EventHubDescription(const char* description) override
+	{
+		const QString text = from_utf8(description);
+		report([text](HubBridge* bridge) {
+			if (text == bridge->m_hubDescription) return;
+
+			bridge->m_hubDescription = text;
+			emit bridge->hubDescriptionChanged(text);
 		});
 	}
 
@@ -725,6 +743,11 @@ Qdc::HubStatus Qdc::HubBridge::hubStatus() const
 QString Qdc::HubBridge::hubName() const
 {
 	return m_hubName;
+}
+
+QString Qdc::HubBridge::hubDescription() const
+{
+	return m_hubDescription;
 }
 
 bool Qdc::HubBridge::isSecure() const

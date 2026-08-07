@@ -13,6 +13,8 @@
 
 #include "richtext.h"
 
+#include <core/coretypes.h>
+
 #include <functional>
 
 namespace Qdc {
@@ -139,6 +141,16 @@ signals:
 	 */
 	void linkActivated(const QUrl& url);
 
+	/**
+	 * Somebody's name in the feed was right-clicked.
+	 *
+	 * Carries the record the message itself held, which is who they were when they
+	 * said it. Whoever handles this decides what is still true of them - the name
+	 * may belong to somebody who has since left, and a menu is still worth having
+	 * for one that does.
+	 */
+	void userMenuRequested(const Qdc::UserInfo& speaker, const QPoint& globalPos);
+
 protected:
 	void resizeEvent(QResizeEvent* event) override;
 
@@ -148,6 +160,7 @@ protected:
 	 */
 	void changeEvent(QEvent* event) override;
 
+	void contextMenuEvent(QContextMenuEvent* event) override;
 	void mouseMoveEvent(QMouseEvent* event) override;
 	void mousePressEvent(QMouseEvent* event) override;
 	void mouseReleaseEvent(QMouseEvent* event) override;
