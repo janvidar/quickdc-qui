@@ -687,15 +687,16 @@ void Qdc::HubsView::restoreConversations(Entry& entry)
 	}
 }
 
-void Qdc::HubsView::restoreSession()
+bool Qdc::HubsView::restoreSession()
 {
-	if (!m_config) return;
+	if (!m_config) return false;
 
 	const int total = m_config->getNumber(ConfigStore::Application, WINDOWS_GROUP,
 	                                      WINDOWS_TOTAL, 0);
-	if (total <= 0) return;
+	if (total <= 0) return false;
 
 	m_restoring = true;
+	int opened = 0;
 
 	for (int n = 0; n < total; ++n)
 	{
@@ -703,6 +704,8 @@ void Qdc::HubsView::restoreSession()
 			WINDOWS_GROUP, WINDOWS_HUB + QString::number(n), QString());
 
 		if (url.isEmpty() || !openHub(url)) continue;
+
+		opened++;
 
 		if (Entry* entry = entryFor(HubBridge::normalisedUrl(url)))
 			restoreConversations(*entry);
@@ -712,6 +715,8 @@ void Qdc::HubsView::restoreSession()
 
 	/* Once, now that everything is open, rather than partly on the way through. */
 	saveSession();
+
+	return opened > 0;
 }
 
 void Qdc::HubsView::closeHub(const QString& url)

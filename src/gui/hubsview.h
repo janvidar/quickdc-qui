@@ -98,8 +98,12 @@ public:
 	 *
 	 * The transcripts come back with them, so a conversation carries on rather
 	 * than starting over. Does nothing without a ConfigBridge to have recorded it.
+	 *
+	 * @return whether anything was opened, so that a caller can bring this view
+	 *         forward - somebody who left a conversation on screen should find it
+	 *         there, not have to go looking for it behind the home page.
 	 */
-	void restoreSession();
+	bool restoreSession();
 
 	/**
 	 * Write down what is open, for restoreSession() to put back.

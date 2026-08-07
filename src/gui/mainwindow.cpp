@@ -142,7 +142,14 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	 * window should be on screen before that starts rather than after however
 	 * long the first connection takes.
 	 */
-	QTimer::singleShot(0, m_hubs, [this] { m_hubs->restoreSession(); });
+	QTimer::singleShot(0, m_hubs, [this] {
+		/*
+		 * And onto the hubs, the way pressing Connect on a favourite goes there:
+		 * somebody who left a conversation on screen expects to find it there
+		 * rather than behind the home page.
+		 */
+		if (m_hubs->restoreSession()) showView(m_views.indexOf(m_hubs));
+	});
 }
 
 Qdc::MainWindow::~MainWindow()
