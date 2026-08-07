@@ -26,6 +26,20 @@ namespace Qdc {
  */
 void styleTitleBar(QWidget* window);
 
+/**
+ * Whether the title bar above a window of ours is one we paint.
+ *
+ * True on macOS, where styleTitleBar() colours it and the window's own title is
+ * drawn in it, so the row reads as part of the window. False where the title bar
+ * belongs to a window manager and is drawn to its theme rather than ours - and
+ * there the content needs a band of frame colour under it, or it begins against
+ * somebody else's decoration with nothing between.
+ *
+ * A property of the build rather than of the window, so it may be asked before
+ * there is one.
+ */
+bool titleBarIsOurs();
+
 }
 
 #endif // HAVE_QUICKDC_QUI_NATIVEWINDOW_H

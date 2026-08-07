@@ -12,3 +12,8 @@
 void Qdc::styleTitleBar(QWidget*)
 {
 }
+
+bool Qdc::titleBarIsOurs()
+{
+	return false;
+}

@@ -81,7 +81,21 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	central->setAutoFillBackground(true);
 
 	QHBoxLayout* body = new QHBoxLayout;
-	body->setContentsMargins(0, 0, CONTENT_INSET, CONTENT_INSET);
+
+	/*
+	 * A band of frame colour above the content where the title bar is not ours to
+	 * paint - the same width as the gap already left to the right and below, so
+	 * the panel sits in a frame rather than starting against a window manager's
+	 * decoration with nothing in between. It is also what the rounded top corners
+	 * are rounded against.
+	 *
+	 * None on macOS, where the title bar is that band: it is painted in the frame
+	 * colour and carries the window's title, so a second one below it would be the
+	 * strip this was taken away to be rid of.
+	 */
+	const int above = titleBarIsOurs() ? 0 : CONTENT_INSET;
+
+	body->setContentsMargins(0, above, CONTENT_INSET, CONTENT_INSET);
 	body->setSpacing(0);
 	body->addWidget(m_rail);
 	body->addWidget(m_stack, 1);

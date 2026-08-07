@@ -12,6 +12,11 @@
 
 #import <AppKit/AppKit.h>
 
+bool Qdc::titleBarIsOurs()
+{
+	return true;
+}
+
 void Qdc::styleTitleBar(QWidget* widget)
 {
 	if (!widget) return;
