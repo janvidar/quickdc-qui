@@ -9,7 +9,9 @@
 
 #include <QWidget>
 
+class QAbstractButton;
 class QLabel;
+class QPushButton;
 class QTabWidget;
 class QTimer;
 
@@ -80,6 +82,19 @@ public:
 	/** What the band currently says, which is empty while it is hidden. */
 	QString text() const;
 
+	/** The button that asks for the attempt now, for a test to press. */
+	QAbstractButton* reconnectButton() const;
+
+signals:
+	/**
+	 * Somebody would rather not wait out the countdown.
+	 *
+	 * The band knows an attempt is pending and when, and nothing else on screen
+	 * does - but it has no hub to act on, so the asking is passed up to whoever
+	 * owns the conversation.
+	 */
+	void reconnectRequested();
+
 protected:
 	bool eventFilter(QObject* watched, QEvent* event) override;
 	void showEvent(QShowEvent* event) override;
@@ -98,6 +113,16 @@ private:
 	QString countdown() const;
 
 	QLabel* m_label;
+
+	/**
+	 * Shown only while an attempt is pending.
+	 *
+	 * A wait that is nearly five minutes long is the case this is here for: the
+	 * hub is very likely there, the client is simply serving out a penalty for
+	 * the attempts before this one, and the person watching knows something the
+	 * backoff does not.
+	 */
+	QPushButton* m_now;
 
 	/**
 	 * Ticks while there is a wait to show, and is stopped the moment there is not.

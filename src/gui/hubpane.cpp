@@ -211,6 +211,15 @@ Qdc::HubPane::HubPane(HubBridge* hub, ConfigBridge* config, QWidget* parent)
 	connect(hub, &HubBridge::reconnectScheduled,
 	        connectionBar(), &ConnectionBar::setReconnectIn);
 
+	/*
+	 * The band offers to stop waiting; this is what it means. connectToHub() is
+	 * the same call that opened the hub, and the core drops the attempt it had
+	 * pending when a connection is asked for.
+	 */
+	connect(connectionBar(), &ConnectionBar::reconnectRequested, this, [hub] {
+		hub->connectToHub();
+	});
+
 	connect(hub, &HubBridge::hubStatusChanged, this, [this](HubStatus status) {
 		/* Logging in is half of whether a message can be sent; see status_reason. */
 		m_hubStatus = status;
@@ -604,6 +613,15 @@ Qdc::DmPane::DmPane(HubBridge* hub, const UserInfo& user,
 	 */
 	connect(hub, &HubBridge::reconnectScheduled,
 	        connectionBar(), &ConnectionBar::setReconnectIn);
+
+	/*
+	 * The band offers to stop waiting; this is what it means. connectToHub() is
+	 * the same call that opened the hub, and the core drops the attempt it had
+	 * pending when a connection is asked for.
+	 */
+	connect(connectionBar(), &ConnectionBar::reconnectRequested, this, [hub] {
+		hub->connectToHub();
+	});
 
 	/*
 	 * Who we are talking to, followed for as long as this is open. A message can only

@@ -46,6 +46,7 @@
 #include <QFileDialog>
 #include <QMenu>
 #include <QElapsedTimer>
+#include <QAbstractButton>
 #include <QSignalSpy>
 #include <QTimer>
 #include <QTemporaryDir>
@@ -133,6 +134,8 @@ private slots:
 	void theConnectionBandOnlyShowsWhileAHubCannotBeUsed();
 	void theConnectionBandCountsTheWaitDownAndForgetsIt();
 	void aScheduledReconnectReachesTheBand();
+	void theBandOffersToStopWaitingOnlyWhileThereIsAWait();
+	void pressingReconnectNowAsksTheHub();
 
 private:
 	Qdc::UserInfo user(const QString& nick, bool op = false) const;
@@ -3070,6 +3073,62 @@ void TestHubs::aScheduledReconnectReachesTheBand()
 
 	QVERIFY(!bar->isHidden());
 	QVERIFY(bar->text().contains(QStringLiteral("25")));
+}
+
+/*
+ * The wait can be nearly five minutes, and somebody watching often knows what
+ * the backoff does not - that whatever broke the connection has been fixed. The
+ * offer to stop waiting is only there while there is a wait to stop.
+ */
+void TestHubs::theBandOffersToStopWaitingOnlyWhileThereIsAWait()
+{
+	Qdc::ConnectionBar bar;
+
+	QAbstractButton* now = bar.reconnectButton();
+	QVERIFY(now);
+	QVERIFY(now->isHidden());
+
+	bar.setStatus(Qdc::NetStatus::Disconnected, Qdc::HubStatus::None);
+	QVERIFY(now->isHidden());
+
+	bar.setReconnectIn(40);
+	QVERIFY(!now->isHidden());
+
+	/* An attempt with no wait behind it is one already under way. */
+	bar.setReconnectIn(-1);
+	QVERIFY(now->isHidden());
+}
+
+void TestHubs::pressingReconnectNowAsksTheHub()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	Qdc::ConnectionBar* bar = pane->findChild<Qdc::ConnectionBar*>();
+	QVERIFY(bar);
+
+	emit pane->hub()->netStatusChanged(Qdc::NetStatus::ErrorConnectionRefused);
+	emit pane->hub()->reconnectScheduled(120);
+
+	QAbstractButton* now = bar->reconnectButton();
+	QVERIFY(now && !now->isHidden());
+
+	QSignalSpy asked(bar, &Qdc::ConnectionBar::reconnectRequested);
+
+	now->click();
+
+	QCOMPARE(asked.count(), 1);
+
+	/*
+	 * And the offer is withdrawn as it is taken. The attempt reports a status of
+	 * its own within the moment, and a button still offering to start one that
+	 * is already running invites a second press.
+	 */
+	QVERIFY(now->isHidden());
+	QVERIFY(!bar->text().contains(QStringLiteral("120")));
 }
 
 #include "tst_hubs.moc"

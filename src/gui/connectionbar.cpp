@@ -6,6 +6,7 @@
 
 #include <QEvent>
 #include <QHBoxLayout>
+#include <QPushButton>
 #include <QLabel>
 #include <QShowEvent>
 #include <QTabBar>
@@ -22,6 +23,7 @@ constexpr int TICK_MS = 1000;
 Qdc::ConnectionBar::ConnectionBar(QWidget* parent)
 	: QWidget(parent)
 	, m_label(new QLabel(this))
+	, m_now(new QPushButton(tr("Reconnect now"), this))
 	, m_tick(new QTimer(this))
 {
 	setObjectName(QStringLiteral("connectionBar"));
@@ -43,6 +45,30 @@ Qdc::ConnectionBar::ConnectionBar(QWidget* parent)
 	layout->setContentsMargins(10, 5, 10, 5);
 	layout->setSpacing(6);
 	layout->addWidget(m_label, 1);
+
+	m_now->setObjectName(QStringLiteral("connectionBarAction"));
+	m_now->setCursor(Qt::PointingHandCursor);
+	m_now->setFlat(true);
+
+	/* Or it takes the return key from the message being written underneath. */
+	m_now->setAutoDefault(false);
+	m_now->setFocusPolicy(Qt::NoFocus);
+
+	m_now->hide();
+	layout->addWidget(m_now, 0);
+
+	connect(m_now, &QPushButton::clicked, this, [this] {
+		/*
+		 * Hidden at once. The attempt reports a status of its own within the
+		 * moment, and a button still offering to start one that is already
+		 * running invites a second press.
+		 */
+		m_remaining = -1;
+		m_tick->stop();
+		refresh();
+
+		emit reconnectRequested();
+	});
 
 	m_tick->setInterval(TICK_MS);
 	m_tick->setTimerType(Qt::CoarseTimer);
@@ -153,6 +179,11 @@ void Qdc::ConnectionBar::setReconnectIn(int seconds)
 	else m_tick->stop();
 
 	refresh();
+}
+
+QAbstractButton* Qdc::ConnectionBar::reconnectButton() const
+{
+	return m_now;
 }
 
 QString Qdc::ConnectionBar::text() const
@@ -273,6 +304,9 @@ void Qdc::ConnectionBar::refresh()
 
 	m_label->setText(wait.isEmpty() ? text
 	                                : tr("%1 — %2").arg(text, wait));
+
+	/* Only while there is a wait to cut short. */
+	m_now->setVisible(m_remaining > 0);
 
 	/*
 	 * Placed after the text rather than before it: the band is as tall as what it
