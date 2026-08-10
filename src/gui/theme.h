@@ -83,6 +83,12 @@ struct Theme {
 	 *
 	 * Light, so it carries selectionText rather than white — which is what lets the
 	 * same pair work on the dark rail and on a white table alike.
+	 *
+	 * Light is not the same as invisible, though, and this was: a hair off white on a
+	 * white table, against a row stripe nearly as pale, so a selected row and an
+	 * unselected one could not be told apart and swept text showed nothing at all.
+	 * Far enough from both surfaces to be seen, and still dark text on a pale wash
+	 * rather than the strong accent a menu highlight keeps for itself.
 	 */
 	QColor selection;
 	QColor selectionText;

@@ -19,6 +19,11 @@
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QStyle>
+#include <QClipboard>
+#include <QMenu>
+#include <QGuiApplication>
+#include <QKeyEvent>
+#include <QTextCursor>
 #include <QTextDocument>
 #include <QTextOption>
 #include <QtMath>
@@ -318,6 +323,17 @@ public:
 	bool notice = false;
 };
 
+bool Qdc::operator==(const FeedPos& left, const FeedPos& right)
+{
+	return left.row == right.row && left.offset == right.offset;
+}
+
+bool Qdc::operator<(const FeedPos& left, const FeedPos& right)
+{
+	if (left.row != right.row) return left.row < right.row;
+	return left.offset < right.offset;
+}
+
 Qdc::ChatDelegate::ChatDelegate(QObject* parent)
 	: QStyledItemDelegate(parent)
 	, m_idle(new QTimer(this))
@@ -480,10 +496,34 @@ void Qdc::ChatDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opt
 	QAbstractTextDocumentLayout::PaintContext context;
 	context.palette = option.palette;
 
-	if (option.state & QStyle::State_Selected)
+	const int last = layout.document.characterCount() - 1;
+
+	int from = 0;
+	int to = 0;
+
+	if (index.row() >= m_from.row && index.row() <= m_to.row)
 	{
-		context.palette.setColor(QPalette::Text,
-			option.palette.color(QPalette::HighlightedText));
+		from = (index.row() == m_from.row) ? qBound(0, m_from.offset, last) : 0;
+		to = (index.row() == m_to.row) ? qBound(0, m_to.offset, last) : last;
+	}
+
+	if (to > from)
+	{
+		/*
+		 * The background alone, with every ink left as it was. A selection in a text
+		 * box sets the foreground too, but this feed says who is speaking and what
+		 * kind of line it is in colour - a name, an operator, a link, a hub notice -
+		 * and painting over all of it would take that away for the one message
+		 * somebody happens to be copying.
+		 */
+		QAbstractTextDocumentLayout::Selection highlight;
+
+		highlight.cursor = QTextCursor(&const_cast<Layout&>(layout).document);
+		highlight.cursor.setPosition(from);
+		highlight.cursor.setPosition(to, QTextCursor::KeepAnchor);
+		highlight.format.setBackground(theme().selection);
+
+		context.selections.append(highlight);
 	}
 
 	layout.document.documentLayout()->draw(painter, context);
@@ -529,6 +569,42 @@ QString Qdc::ChatDelegate::anchorAt(const QModelIndex& index,
 	return layout.document.documentLayout()->anchorAt(inside);
 }
 
+int Qdc::ChatDelegate::characterAt(const QModelIndex& index,
+                                   const QStyleOptionViewItem& option,
+                                   const QPoint& point) const
+{
+	const int width = option.rect.width() - 2 * MARGIN_X;
+	if (width <= 0) return -1;
+
+	const Layout& layout = layoutFor(index, width, option);
+
+	/* Into the document's own coordinates, as anchorAt() does. */
+	const QPointF inside = QPointF(point) - QPointF(option.rect.left() + MARGIN_X,
+	                                                option.rect.top() + MARGIN_Y);
+
+	/*
+	 * Fuzzy, so a point beside the text answers with the end of the nearest line
+	 * rather than with nothing. Unlike anchorAt() the coordinates are not rejected
+	 * for being negative: a drag that has gone above this row wants its start.
+	 */
+	return layout.document.documentLayout()->hitTest(inside, Qt::FuzzyHit);
+}
+
+QString Qdc::ChatDelegate::plainText(const QModelIndex& index,
+                                     const QStyleOptionViewItem& option) const
+{
+	const int width = option.rect.width() - 2 * MARGIN_X;
+	if (width <= 0) return QString();
+
+	return layoutFor(index, width, option).document.toPlainText();
+}
+
+void Qdc::ChatDelegate::setSelection(const FeedPos& from, const FeedPos& to)
+{
+	m_from = from;
+	m_to = to;
+}
+
 Qdc::ChatFeed::ChatFeed(QWidget* parent)
 	: QListView(parent)
 	, m_delegate(new ChatDelegate(this))
@@ -538,7 +614,13 @@ Qdc::ChatFeed::ChatFeed(QWidget* parent)
 	/* Heights differ per row, so the view must measure rather than assume. */
 	setUniformItemSizes(false);
 
-	setSelectionMode(QAbstractItemView::ExtendedSelection);
+	/*
+	 * A row at a time is not what somebody copying out of a chat wants - the whole
+	 * point is to take part of a line, or a few lines, without their timestamps. So
+	 * the view selects nothing and the text selection below is what a drag does; two
+	 * kinds of selection over the same rows would fight for the same drag.
+	 */
+	setSelectionMode(QAbstractItemView::NoSelection);
 	setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
 	setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	setFrameShape(QFrame::NoFrame);
@@ -549,6 +631,137 @@ Qdc::ChatFeed::ChatFeed(QWidget* parent)
 	viewport()->setMouseTracking(true);
 
 	connect(m_delegate, &ChatDelegate::rowNeedsRepaint, this, &ChatFeed::repaintRow);
+}
+
+int Qdc::ChatFeed::lengthOf(int row) const
+{
+	if (!model() || row < 0 || row >= model()->rowCount()) return 0;
+
+	const QModelIndex index = model()->index(row, 0);
+
+	QStyleOptionViewItem option;
+	initViewItemOption(&option);
+	option.rect = visualRect(index);
+
+	return static_cast<int>(m_delegate->plainText(index, option).length());
+}
+
+Qdc::FeedPos Qdc::ChatFeed::positionAt(const QPoint& point) const
+{
+	if (!model() || model()->rowCount() == 0) return FeedPos();
+
+	QModelIndex index = indexAt(point);
+
+	/*
+	 * Above or below every row, which is where a sweep spends much of its time. The
+	 * nearest end is what was meant: dragging off the bottom selects to the last
+	 * character rather than stopping at whichever row the pointer last crossed.
+	 */
+	if (!index.isValid())
+	{
+		const int rows = model()->rowCount();
+
+		const QModelIndex first = model()->index(0, 0);
+		if (point.y() < visualRect(first).top()) return FeedPos{0, 0};
+
+		const int lastRow = rows - 1;
+		return FeedPos{lastRow, lengthOf(lastRow)};
+	}
+
+	QStyleOptionViewItem option;
+	initViewItemOption(&option);
+	option.rect = visualRect(index);
+
+	const int at = m_delegate->characterAt(index, option, point);
+	if (at < 0) return FeedPos();
+
+	return FeedPos{index.row(), at};
+}
+
+void Qdc::ChatFeed::applySelection()
+{
+	const bool backwards = m_cursor < m_anchor;
+
+	const FeedPos from = backwards ? m_cursor : m_anchor;
+	const FeedPos to = backwards ? m_anchor : m_cursor;
+
+	m_delegate->setSelection(from, to);
+
+	/*
+	 * Every row it could touch, rather than working out which changed: a sweep is a
+	 * handful of rows and the alternative is keeping the previous range to compare
+	 * against, which is bookkeeping for nothing.
+	 */
+	viewport()->update();
+}
+
+bool Qdc::ChatFeed::hasSelectedText() const
+{
+	return !selectedText().isEmpty();
+}
+
+QString Qdc::ChatFeed::selectedText() const
+{
+	if (!m_anchor.isValid() || !m_cursor.isValid()) return QString();
+	if (m_anchor == m_cursor) return QString();
+
+	const bool backwards = m_cursor < m_anchor;
+
+	const FeedPos from = backwards ? m_cursor : m_anchor;
+	const FeedPos to = backwards ? m_anchor : m_cursor;
+
+	QStringList lines;
+
+	for (int row = from.row; row <= to.row && model() && row < model()->rowCount();
+	     ++row)
+	{
+		const QModelIndex index = model()->index(row, 0);
+
+		QStyleOptionViewItem option;
+		initViewItemOption(&option);
+		option.rect = visualRect(index);
+
+		const QString text = m_delegate->plainText(index, option);
+
+		const int start = (row == from.row) ? qBound(0, from.offset, int(text.length()))
+		                                    : 0;
+
+		const int end = (row == to.row) ? qBound(0, to.offset, int(text.length()))
+		                                : static_cast<int>(text.length());
+
+		if (end > start) lines.append(text.mid(start, end - start));
+	}
+
+	return lines.join(QLatin1Char('\n'));
+}
+
+void Qdc::ChatFeed::copySelection()
+{
+	const QString text = selectedText();
+	if (text.isEmpty()) return;
+
+	if (QClipboard* board = QGuiApplication::clipboard()) board->setText(text);
+}
+
+void Qdc::ChatFeed::selectAllText()
+{
+	if (!model() || model()->rowCount() == 0) return;
+
+	const int lastRow = model()->rowCount() - 1;
+
+	m_anchor = FeedPos{0, 0};
+	m_cursor = FeedPos{lastRow, lengthOf(lastRow)};
+
+	applySelection();
+}
+
+void Qdc::ChatFeed::clearSelection()
+{
+	m_anchor = FeedPos();
+	m_cursor = FeedPos();
+
+	m_delegate->setSelection(FeedPos(), FeedPos());
+	viewport()->update();
 }
 
 void Qdc::ChatFeed::setModel(QAbstractItemModel* model)
@@ -579,11 +792,20 @@ void Qdc::ChatFeed::setModel(QAbstractItemModel* model)
 	connect(model, &QAbstractItemModel::rowsRemoved, this, [this] {
 		m_delegate->invalidateLayout();
 		scheduleDelayedItemsLayout();
+
+		/*
+		 * A selection names its rows by number, and trimming the backlog renumbers
+		 * every row after the one that went - so what was swept would silently become
+		 * a sweep across different messages. Dropped rather than moved: the row it
+		 * started on may be the one that has gone.
+		 */
+		clearSelection();
 	});
 
 	connect(model, &QAbstractItemModel::modelReset, this, [this] {
 		m_delegate->invalidateLayout();
 		scheduleDelayedItemsLayout();
+		clearSelection();
 	});
 }
 
@@ -696,7 +918,28 @@ void Qdc::ChatFeed::contextMenuEvent(QContextMenuEvent* event)
 
 	if (!anchorAt(where).startsWith(USER_SCHEME))
 	{
-		QListView::contextMenuEvent(event);
+		/*
+		 * Not over a name, so this is about the text. Offered as a menu as well as a
+		 * shortcut because a selection nobody knows they can copy is no better than no
+		 * selection at all.
+		 */
+		QMenu menu(this);
+
+		QAction* copy = menu.addAction(tr("Copy"));
+		copy->setShortcut(QKeySequence::Copy);
+		copy->setEnabled(hasSelectedText());
+
+		QAction* all = menu.addAction(tr("Select all"));
+		all->setShortcut(QKeySequence::SelectAll);
+		all->setEnabled(model() && model()->rowCount() > 0);
+
+		event->accept();
+
+		QAction* picked = menu.exec(viewport()->mapToGlobal(where));
+
+		if (picked == copy) copySelection();
+		else if (picked == all) selectAllText();
+
 		return;
 	}
 
@@ -721,6 +964,22 @@ void Qdc::ChatFeed::mouseMoveEvent(QMouseEvent* event)
 {
 	QListView::mouseMoveEvent(event);
 
+	if (m_sweeping && (event->buttons() & Qt::LeftButton))
+	{
+		const FeedPos was = m_cursor;
+		const FeedPos now = positionAt(event->position().toPoint());
+
+		if (now.isValid() && !(now == was))
+		{
+			m_cursor = now;
+			applySelection();
+		}
+
+		/* The pointer is sweeping text, so it stays a caret whatever it is over. */
+		viewport()->setCursor(Qt::IBeamCursor);
+		return;
+	}
+
 	/* Not while dragging out a selection, where the pointer is doing something else. */
 	const QString anchor = event->buttons() == Qt::NoButton
 		? anchorAt(event->position().toPoint()) : QString();
@@ -730,8 +989,12 @@ void Qdc::ChatFeed::mouseMoveEvent(QMouseEvent* event)
 	 * it is one so that it can be found rather than opened, and a hand over it would
 	 * promise something that does not happen.
 	 */
+	/*
+	 * A caret over the words, because until there was any way to select them there was
+	 * nothing to say they could be - and the pointer is where that is said.
+	 */
 	if (anchor.isEmpty() || anchor.startsWith(USER_SCHEME))
-		viewport()->unsetCursor();
+		viewport()->setCursor(Qt::IBeamCursor);
 	else
 		viewport()->setCursor(Qt::PointingHandCursor);
 }
@@ -741,11 +1004,28 @@ void Qdc::ChatFeed::mousePressEvent(QMouseEvent* event)
 	m_pressedAnchor = event->button() == Qt::LeftButton
 		? anchorAt(event->position().toPoint()) : QString();
 
+	if (event->button() == Qt::LeftButton)
+	{
+		/*
+		 * A press begins a sweep of no width, which shows nothing - so pressing
+		 * anywhere is also how a selection is put away. A click on a link is
+		 * therefore a sweep as well, and an empty one, which is why it still opens
+		 * the link on release.
+		 */
+		m_anchor = positionAt(event->position().toPoint());
+		m_cursor = m_anchor;
+		m_sweeping = m_anchor.isValid();
+
+		applySelection();
+	}
+
 	QListView::mousePressEvent(event);
 }
 
 void Qdc::ChatFeed::mouseReleaseEvent(QMouseEvent* event)
 {
+	if (event->button() == Qt::LeftButton) m_sweeping = false;
+
 	const QString anchor = m_pressedAnchor;
 	m_pressedAnchor.clear();
 
@@ -765,6 +1045,30 @@ void Qdc::ChatFeed::mouseReleaseEvent(QMouseEvent* event)
 	if (!RichText::isLinkable(url)) return;
 
 	emit linkActivated(url);
+}
+
+void Qdc::ChatFeed::keyPressEvent(QKeyEvent* event)
+{
+	/*
+	 * Said here rather than left to the view, which has no notion of text and so no
+	 * notion of copying any. Until this there was no way at all to get a line of chat
+	 * onto the clipboard.
+	 */
+	if (event->matches(QKeySequence::Copy))
+	{
+		copySelection();
+		event->accept();
+		return;
+	}
+
+	if (event->matches(QKeySequence::SelectAll))
+	{
+		selectAllText();
+		event->accept();
+		return;
+	}
+
+	QListView::keyPressEvent(event);
 }
 
 void Qdc::ChatFeed::leaveEvent(QEvent* event)

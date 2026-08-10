@@ -39,6 +39,7 @@
 #include <QLineEdit>
 #include <QPainter>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QTabWidget>
 #include <QTextBlock>
 #include <QTextEdit>
@@ -87,6 +88,12 @@ private slots:
 	void chatFeedForgetsItsLayoutsWhenRowsMove();
 	void chatFeedClicksALinkAndIgnoresADrag();
 	void chatFeedLinksAnAddressInAPlainMessage();
+	void chatFeedSweepsOutPartOfALine();
+	void chatFeedSweepsAcrossRowsAndCopiesWhatItCovers();
+	void chatFeedSweepsBackwardsJustTheSame();
+	void chatFeedShowsTheTextItHasSwept();
+	void chatFeedForgetsASelectionWhoseRowsMoved();
+	void chatFeedSweepsOnPastTheBottomEdge();
 	void aNicknameInTheFeedAsksForItsOwnMenu();
 	void chatFeedDrawsAPictureItHas();
 	void chatFeedKeepsAnAnimationMoving();
@@ -164,10 +171,32 @@ private:
 	/** Type into the composer's box and press Return, as a person would. */
 	static void writeAndSend(Qdc::Composer* composer, const QString& text);
 
+	/** Drag from one point to another in steps, as a pointer does. */
+	static void sweep(QWidget* on, const QPoint& from, const QPoint& to);
+
 	QTemporaryDir m_dir;
 	Qdc::CoreThread* m_thread = nullptr;
 	Qdc::FilelistBridge* m_filelists = nullptr;
 };
+
+void TestHubs::sweep(QWidget* on, const QPoint& from, const QPoint& to)
+{
+	QTest::mousePress(on, Qt::LeftButton, Qt::NoModifier, from);
+
+	/*
+	 * In steps rather than one jump: a selection follows the moves, and a press
+	 * followed straight by a release at the far end is a click, not a sweep.
+	 */
+	constexpr int STEPS = 10;
+
+	for (int n = 1; n <= STEPS; ++n)
+	{
+		QTest::mouseMove(on, QPoint(from.x() + (to.x() - from.x()) * n / STEPS,
+		                            from.y() + (to.y() - from.y()) * n / STEPS));
+	}
+
+	QTest::mouseRelease(on, Qt::LeftButton, Qt::NoModifier, to);
+}
 
 Qdc::UserInfo TestHubs::user(const QString& nick, bool op) const
 {
@@ -842,6 +871,239 @@ void TestHubs::chatFeedLinksAnAddressInAPlainMessage()
 
 	QVERIFY(model.index(1).data(Qdc::ChatModel::MessageRole)
 	        .value<Qdc::ChatMessage>().text.contains(QStringLiteral("*about*")));
+}
+
+namespace {
+
+/** A feed of three short lines, laid out and exposed, ready to be swept. */
+struct SweepableFeed {
+	Qdc::ChatModel model;
+	Qdc::ChatFeed feed;
+
+	bool ready()
+	{
+		feed.setModel(&model);
+		feed.resize(700, 220);
+
+		for (const auto& one : {std::make_pair("alice", "the build is at revision 4471"),
+		                        std::make_pair("bob", "thanks, pulling it now"),
+		                        std::make_pair("carol", "mine says 4470 though")})
+		{
+			Qdc::ChatMessage message;
+			message.from.id = QString::fromLatin1(one.first);
+			message.from.nick = QString::fromLatin1(one.first);
+			message.from.sourceId = message.from.nick;
+			message.received = QDateTime::currentDateTime();
+			message.text = QString::fromLatin1(one.second);
+			model.append(message);
+		}
+
+		feed.show();
+		return QTest::qWaitForWindowExposed(&feed);
+	}
+
+	/** The middle of row 'n', 'across' pixels in from its left edge. */
+	QPoint at(int n, int across)
+	{
+		const QRect row = feed.visualRect(model.index(n));
+		return QPoint(row.left() + across, row.center().y());
+	}
+};
+
+}
+
+void TestHubs::chatFeedSweepsOutPartOfALine()
+{
+	SweepableFeed one;
+	QVERIFY(one.ready());
+
+	QVERIFY(!one.feed.hasSelectedText());
+	QCOMPARE(one.feed.selectedText(), QString());
+
+	sweep(one.feed.viewport(), one.at(0, 120), one.at(0, 300));
+
+	QVERIFY(one.feed.hasSelectedText());
+
+	const QString swept = one.feed.selectedText();
+
+	/*
+	 * A run out of the middle of the line and nothing else: no timestamp, no
+	 * nickname, no neighbouring message. That is the whole point of the change - a
+	 * row at a time could not do it.
+	 */
+	QVERIFY2(!swept.isEmpty(), "sweeping across a line selected nothing");
+	QVERIFY2(!swept.contains(QLatin1Char('\n')), qPrintable(swept));
+
+	const QString whole =
+		QStringLiteral("the build is at revision 4471");
+
+	QVERIFY2(whole.contains(swept), qPrintable(swept));
+	QVERIFY2(swept.length() < whole.length(), qPrintable(swept));
+
+	/* Pressing without dragging puts it away again. */
+	QTest::mouseClick(one.feed.viewport(), Qt::LeftButton, Qt::NoModifier,
+	                  one.at(2, 40));
+
+	QVERIFY(!one.feed.hasSelectedText());
+}
+
+void TestHubs::chatFeedSweepsAcrossRowsAndCopiesWhatItCovers()
+{
+	SweepableFeed one;
+	QVERIFY(one.ready());
+
+	sweep(one.feed.viewport(), one.at(0, 200), one.at(2, 220));
+
+	const QString swept = one.feed.selectedText();
+
+	/* Three rows touched, so two newlines between them. */
+	QCOMPARE(swept.count(QLatin1Char('\n')), 2);
+
+	const QStringList lines = swept.split(QLatin1Char('\n'));
+	QCOMPARE(lines.size(), 3);
+
+	/* The row in the middle is covered end to end, timestamp and name included. */
+	QVERIFY2(lines.at(1).contains(QStringLiteral("thanks, pulling it now")),
+	         qPrintable(lines.at(1)));
+	QVERIFY2(lines.at(1).contains(QStringLiteral("bob")), qPrintable(lines.at(1)));
+
+	/* The first and last are partial, which is why they are not the whole line. */
+	QVERIFY2(!lines.at(0).contains(QStringLiteral("alice")), qPrintable(lines.at(0)));
+	QVERIFY2(lines.at(2).contains(QStringLiteral("carol")), qPrintable(lines.at(2)));
+
+	/*
+	 * And Ctrl+C reaches the clipboard, which nothing in this application could do
+	 * before: there was no copy shortcut anywhere in it.
+	 */
+	QGuiApplication::clipboard()->clear();
+
+	QTest::keyClick(&one.feed, Qt::Key_C, Qt::ControlModifier);
+	QCOMPARE(QGuiApplication::clipboard()->text(), swept);
+
+	/* Ctrl+A takes every row, first character to last. */
+	QTest::keyClick(&one.feed, Qt::Key_A, Qt::ControlModifier);
+
+	const QString all = one.feed.selectedText();
+	QVERIFY2(all.contains(QStringLiteral("alice")), qPrintable(all));
+	QVERIFY2(all.contains(QStringLiteral("mine says 4470 though")), qPrintable(all));
+	QCOMPARE(all.count(QLatin1Char('\n')), 2);
+}
+
+void TestHubs::chatFeedSweepsBackwardsJustTheSame()
+{
+	SweepableFeed one;
+	QVERIFY(one.ready());
+
+	sweep(one.feed.viewport(), one.at(0, 200), one.at(2, 220));
+	const QString forwards = one.feed.selectedText();
+	QVERIFY(!forwards.isEmpty());
+
+	/* Up the way rather than down it; a selection has no preferred direction. */
+	SweepableFeed other;
+	QVERIFY(other.ready());
+
+	sweep(other.feed.viewport(), other.at(2, 220), other.at(0, 200));
+
+	QCOMPARE(other.feed.selectedText(), forwards);
+}
+
+void TestHubs::chatFeedShowsTheTextItHasSwept()
+{
+	SweepableFeed one;
+	QVERIFY(one.ready());
+
+	const QPixmap before = one.feed.grab();
+
+	sweep(one.feed.viewport(), one.at(0, 120), one.at(0, 300));
+	QVERIFY(one.feed.hasSelectedText());
+
+	const QPixmap after = one.feed.grab();
+
+	/*
+	 * Drawn, not merely remembered. This is the complaint the whole change answers -
+	 * a selection nothing on screen reported - so it is asserted against the pixels
+	 * rather than against the state behind them.
+	 */
+	QVERIFY2(before.toImage() != after.toImage(),
+	         "sweeping text changed nothing on screen");
+}
+
+void TestHubs::chatFeedForgetsASelectionWhoseRowsMoved()
+{
+	SweepableFeed one;
+	QVERIFY(one.ready());
+
+	sweep(one.feed.viewport(), one.at(0, 200), one.at(1, 200));
+	QVERIFY(one.feed.hasSelectedText());
+
+	/*
+	 * A selection names its rows by number, and dropping the oldest renumbers the
+	 * rest - so what was swept would quietly become a sweep across other messages.
+	 * Trimmed the way the feed really trims: a capacity, and one more line arriving.
+	 */
+	one.model.setCapacity(3);
+
+	Qdc::ChatMessage late;
+	late.from = user(QStringLiteral("dave"));
+	late.received = QDateTime::currentDateTime();
+	late.text = QStringLiteral("late to this");
+	one.model.append(late);
+
+	QCOMPARE(one.model.rowCount(), 3);
+
+	QVERIFY(!one.feed.hasSelectedText());
+	QCOMPARE(one.feed.selectedText(), QString());
+}
+
+void TestHubs::chatFeedSweepsOnPastTheBottomEdge()
+{
+	Qdc::ChatModel model;
+	Qdc::ChatFeed feed;
+
+	feed.setModel(&model);
+	feed.resize(700, 160);
+
+	for (int n = 0; n < 60; ++n)
+	{
+		Qdc::ChatMessage message;
+		message.from = user(QStringLiteral("alice"));
+		message.received = QDateTime::currentDateTime();
+		message.text = QStringLiteral("line number %1 of the conversation").arg(n);
+		model.append(message);
+	}
+
+	feed.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&feed));
+
+	feed.verticalScrollBar()->setValue(0);
+
+	const int before = feed.verticalScrollBar()->value();
+
+	/*
+	 * Held below the last visible row, which is how anybody selects more of a
+	 * conversation than fits on screen. The view scrolls itself; what this pins is
+	 * that the selection keeps up with it rather than stopping at whichever row was
+	 * the last one visible when the sweep began.
+	 */
+	QTest::mousePress(feed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(200, 8));
+
+	const QPoint past(300, feed.viewport()->height() + 30);
+
+	for (int n = 0; n < 30 && feed.verticalScrollBar()->value()
+	                          < feed.verticalScrollBar()->maximum(); ++n)
+	{
+		QTest::mouseMove(feed.viewport(), past);
+		QTest::qWait(20);
+	}
+
+	QTest::mouseRelease(feed.viewport(), Qt::LeftButton, Qt::NoModifier, past);
+
+	QVERIFY2(feed.verticalScrollBar()->value() > before, "the sweep did not scroll");
+
+	/* Far more than the handful of rows that were on screen to begin with. */
+	QVERIFY2(feed.selectedText().count(QLatin1Char('\n')) > 10,
+	         qPrintable(QString::number(
+			 feed.selectedText().count(QLatin1Char('\n')))));
 }
 
 void TestHubs::chatFeedDrawsAPictureItHas()

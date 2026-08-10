@@ -362,7 +362,7 @@ Qdc::Theme Qdc::defaultTheme()
 	theme.sidebarHover      = QColor(0xff, 0xff, 0xff, 0x1a);
 	theme.sidebarHeading    = QColor(0xa8, 0xb4, 0xe0);
 
-	theme.selection         = QColor(0xf0, 0xf3, 0xfc);
+	theme.selection         = QColor(0xd7, 0xe0, 0xf7);
 	theme.selectionText     = theme.frame;
 
 	theme.presence          = QColor(0xfc, 0xc8, 0x94);

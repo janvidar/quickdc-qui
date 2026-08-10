@@ -19,6 +19,24 @@
 
 namespace Qdc {
 
+/**
+ * A place in the feed: which row, and how many characters into that row's text.
+ *
+ * A selection cannot be a pair of character offsets alone, because the feed is a row
+ * per message and each row lays its own document out - so a position needs to say
+ * which document it is in. Offsets count into that document's plain text, prefix
+ * included: somebody who drags from the timestamp means to copy the timestamp.
+ */
+struct FeedPos {
+	int row = -1;
+	int offset = 0;
+
+	bool isValid() const { return row >= 0; }
+};
+
+bool operator==(const FeedPos& left, const FeedPos& right);
+bool operator<(const FeedPos& left, const FeedPos& right);
+
 class ChatModel;
 
 /**
@@ -62,6 +80,29 @@ public:
 	QString anchorAt(const QModelIndex& index, const QStyleOptionViewItem& option,
 	                 const QPoint& point) const;
 
+	/**
+	 * Which character of this row's text is under 'point'.
+	 *
+	 * The nearest one rather than only a direct hit, because this answers a drag:
+	 * somebody sweeping across a message passes above and below its line as often as
+	 * along it, and a position of "nowhere" in the middle of a sweep would make the
+	 * selection flicker.
+	 */
+	int characterAt(const QModelIndex& index, const QStyleOptionViewItem& option,
+	                const QPoint& point) const;
+
+	/** The row's text as it is shown, which is what a selection of it copies. */
+	QString plainText(const QModelIndex& index,
+	                  const QStyleOptionViewItem& option) const;
+
+	/**
+	 * The range to draw highlighted, as a pair of positions in the feed.
+	 *
+	 * Held here rather than asked for per row, because painting is where it is needed
+	 * and the delegate is handed one row at a time with nothing to ask.
+	 */
+	void setSelection(const FeedPos& from, const FeedPos& to);
+
 signals:
 	/**
 	 * A row has to be drawn again: a picture in it has moved on a frame.
@@ -88,6 +129,10 @@ private:
 	mutable int m_cachedWidth = -1;
 
 	std::function<RichText::LocalMedia(const QString& tth)> m_media;
+
+	/** What to highlight; see setSelection(). Ordered, so from is never after to. */
+	FeedPos m_from;
+	FeedPos m_to;
 
 	/**
 	 * Stops animating what nobody is looking at.
@@ -131,6 +176,26 @@ public:
 	/** The link under a point in the viewport, or empty. */
 	QString anchorAt(const QPoint& point) const;
 
+	/**
+	 * The text somebody has swept out, rows joined by newlines, or empty.
+	 *
+	 * What is shown rather than what arrived: markdown has been rendered by the time
+	 * it is on screen, and a magnet is a chip naming a file, so copying gives the
+	 * words that were being read rather than the markup behind them.
+	 */
+	QString selectedText() const;
+
+	bool hasSelectedText() const;
+
+public slots:
+	/** Put the swept text on the clipboard. Does nothing when there is none. */
+	void copySelection();
+
+	/** Every row, end to end. */
+	void selectAllText();
+
+	void clearSelection();
+
 signals:
 	/**
 	 * A link in a message was clicked.
@@ -161,6 +226,7 @@ protected:
 	void changeEvent(QEvent* event) override;
 
 	void contextMenuEvent(QContextMenuEvent* event) override;
+	void keyPressEvent(QKeyEvent* event) override;
 	void mouseMoveEvent(QMouseEvent* event) override;
 	void mousePressEvent(QMouseEvent* event) override;
 	void mouseReleaseEvent(QMouseEvent* event) override;
@@ -170,9 +236,34 @@ private:
 	/** Draw one row again, because a picture in it moved on a frame. */
 	void repaintRow(int row);
 
+	/**
+	 * Where in the feed a point in the viewport is.
+	 *
+	 * Clamped to the first and last rows rather than answering "nowhere" above or
+	 * below them, so a sweep that runs off the top or the bottom selects as far as it
+	 * went instead of stopping where the pointer left the rows.
+	 */
+	FeedPos positionAt(const QPoint& point) const;
+
+	/** How many characters a row holds. */
+	int lengthOf(int row) const;
+
+	/** Hand the ordered pair to the delegate and repaint what it covers. */
+	void applySelection();
+
 	void onRowsInserted();
 
 	ChatDelegate* m_delegate;
+
+	/**
+	 * Where a sweep began and where it has reached. Either may be the earlier of the
+	 * two, because a selection can be dragged upwards.
+	 */
+	FeedPos m_anchor;
+	FeedPos m_cursor;
+
+	/** Whether the button is still down on a sweep that started in this view. */
+	bool m_sweeping = false;
 
 	/**
 	 * Whether the view was at the bottom before the rows arrived. Sampled at
