@@ -103,6 +103,8 @@ Qdc::RichText::RenderOptions TestRichText::options()
 	o.colours.quote = QColor(0x60, 0x60, 0x60);
 	o.colours.quoteBar = QColor(0x90, 0x90, 0x90);
 	o.colours.link = QColor(0x20, 0x50, 0xc0);
+	o.colours.chip = QColor(0x20, 0x20, 0x20);
+	o.colours.chipBack = QColor(0xe8, 0xe8, 0xe8);
 	o.fontPointSize = 10.0;
 	return o;
 }
@@ -795,11 +797,40 @@ void TestRichText::aBareMagnetIsLinkedAlthoughItNamesNoHost()
 
 	QCOMPARE(linkedIn(markdown), (QStringList{uri}));
 
+	/*
+	 * And it is drawn as the file it names rather than as the hash that names it: the
+	 * URI is the one part of a magnet nobody can read, so what shows is the name and
+	 * the size, exactly as a magnet written as a link is shown.
+	 */
+	QTextDocument shown;
+	shown.setHtml(plain);
+
+	const QString read = shown.toPlainText();
+
+	QVERIFY2(read.contains(QStringLiteral("notes.txt")), qPrintable(read));
+	QVERIFY2(read.contains(QStringLiteral("1.0 KiB")), qPrintable(read));
+
+	/* The hash is not on screen at all. */
+	QVERIFY2(!read.contains(tth), qPrintable(read));
+
+	/* The words around it survive being replaced. */
+	QVERIFY2(read.contains(QStringLiteral("have a look at")), qPrintable(read));
+	QVERIFY2(read.contains(QStringLiteral("if you like")), qPrintable(read));
+
 	/* A magnet with no usable hash names no file, so there is nothing to click. */
 	const QString useless = Qdc::RichText::renderPlain(
 		QStringLiteral("magnet:?dn=nameless here"), o);
 
 	QCOMPARE(anchorTargets(useless), QStringList());
+
+	/* An ordinary address is still shown as itself; only a magnet becomes a chip. */
+	const QString page = Qdc::RichText::renderPlain(
+		QStringLiteral("see https://example.org/rules"), o);
+
+	QTextDocument web;
+	web.setHtml(page);
+
+	QVERIFY(web.toPlainText().contains(QStringLiteral("https://example.org/rules")));
 }
 
 void TestRichText::nothingThatMerelyEndsInAColonIsLinked()

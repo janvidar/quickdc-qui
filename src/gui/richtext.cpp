@@ -560,7 +560,20 @@ QString link_bare_urls(const QString& text, Mode mode,
 		if (!Qdc::RichText::isLinkable(url)) { ++i; continue; }
 
 		flush(i);
-		out += wrap_link(emit_text(text.mid(i, end - i), mode), url, mode, colours);
+
+		/*
+		 * A magnet names a file rather than a page, and its name is the only part of
+		 * one a person can read - the rest is a hash. So it is drawn as the chip a
+		 * magnet written as a link already gets, which says what the file is called
+		 * and how big it is, rather than as forty characters of base32 wrapped over
+		 * two lines. A bare one is never a picture: displaying media inline is
+		 * something the sender asks for with the '!' only a written link can carry.
+		 */
+		const Qdc::RichText::Attachment file = Qdc::RichText::readMagnet(url);
+
+		out += file.isValid()
+			? chip_for(file, url, mode, colours)
+			: wrap_link(emit_text(text.mid(i, end - i), mode), url, mode, colours);
 
 		i = end;
 		plainFrom = end;
