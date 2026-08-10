@@ -37,6 +37,9 @@ private slots:
 	void magnetAttachmentsBecomeChips();
 	void aPictureThatIsHereIsDrawnInline();
 	void bareUrlsAreLinkedWithoutTrailingPunctuation();
+	void plainMessagesLinkTheAddressesInThem();
+	void aBareMagnetIsLinkedAlthoughItNamesNoHost();
+	void nothingThatMerelyEndsInAColonIsLinked();
 	void remoteTextCannotInjectMarkup();
 	void plainRenderingKeepsLineBreaksAndMarkers();
 	void toPlainTextStripsMarkers();
@@ -687,6 +690,136 @@ void TestRichText::bareUrlsAreLinkedWithoutTrailingPunctuation()
 	const QString bare = Qdc::RichText::renderMarkdown(
 		QStringLiteral("ratio 3://4"), options());
 	QVERIFY(!bare.contains(QStringLiteral("<a ")));
+}
+
+void TestRichText::plainMessagesLinkTheAddressesInThem()
+{
+	Qdc::RichText::RenderOptions o = options();
+	o.prefix = QStringLiteral("<b>alice</b> ");
+
+	/*
+	 * A message without RT1 is not markdown, but an address in one is still the thing
+	 * in it worth clicking - and most hubs cannot carry the flag that would make a
+	 * message markdown in the first place.
+	 */
+	const QString html = Qdc::RichText::renderPlain(
+		QStringLiteral("see https://example.org/rules and http://other.example.org"), o);
+
+	QCOMPARE(anchorTargets(html), (QStringList{QStringLiteral("https://example.org/rules"),
+	                                   QStringLiteral("http://other.example.org")}));
+
+	/* A hub address too, which is how one gets opened from chat. */
+	const QString hub = Qdc::RichText::renderPlain(
+		QStringLiteral("join adcs://hub.example.org:412 now"), o);
+
+	QCOMPARE(anchorTargets(hub),
+	         (QStringList{QStringLiteral("adcs://hub.example.org:412")}));
+
+	/* The full stop ended the sentence, not the address. */
+	const QString stopped = Qdc::RichText::renderPlain(
+		QStringLiteral("see https://example.org/rules. thanks"), o);
+
+	QCOMPARE(anchorTargets(stopped),
+	         (QStringList{QStringLiteral("https://example.org/rules")}));
+
+	QVERIFY(stopped.contains(QStringLiteral(". thanks")));
+
+	/*
+	 * Everything else about a plain message is unchanged: an asterisk is still an
+	 * asterisk, a line break is still a break, and markup from a stranger is still
+	 * escaped rather than rendered.
+	 */
+	const QString literal = Qdc::RichText::renderPlain(
+		QStringLiteral("weighs *about* 3kg\r\nsee <script>x</script>"), o);
+
+	QVERIFY(literal.contains(QStringLiteral("*about*")));
+	QVERIFY(literal.contains(QStringLiteral("<br>")));
+	QVERIFY(!literal.contains(QStringLiteral("<script")));
+	QVERIFY(literal.contains(QStringLiteral("&lt;script")));
+	QCOMPARE(anchorTargets(literal), QStringList());
+
+	/* And an address beside markup that is not markup here does not swallow it. */
+	const QString mixed = Qdc::RichText::renderPlain(
+		QStringLiteral("*https://example.org/*"), o);
+
+	QCOMPARE(anchorTargets(mixed), (QStringList{QStringLiteral("https://example.org/")}));
+}
+
+void TestRichText::aBareMagnetIsLinkedAlthoughItNamesNoHost()
+{
+	const QString tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
+
+	const QString uri =
+		QStringLiteral("magnet:?xt=urn:tree:tiger:%1&xl=1024&dn=notes.txt").arg(tth);
+
+	/*
+	 * A magnet has a colon and no slashes after it, so the "scheme://" shape every
+	 * other address has does not find one. It is the URI a file is offered by, which
+	 * makes it the address most worth clicking of all.
+	 */
+	Qdc::RichText::RenderOptions o = options();
+
+	/*
+	 * Read back through a document rather than off the attribute, because a magnet
+	 * separates its parameters with "&" and an href holds that escaped - which is
+	 * correct HTML and not what a click would follow. What a click follows is what
+	 * matters, so that is what is asserted.
+	 */
+	const auto linkedIn = [](const QString& html) {
+		QTextDocument document;
+		document.setHtml(html);
+
+		QStringList found;
+
+		for (QTextBlock block = document.begin(); block.isValid();
+		     block = block.next())
+		{
+			for (QTextBlock::iterator it = block.begin(); !it.atEnd(); ++it)
+			{
+				const QTextCharFormat format = it.fragment().charFormat();
+				if (format.isAnchor()) found << format.anchorHref();
+			}
+		}
+
+		return found;
+	};
+
+	const QString plain = Qdc::RichText::renderPlain(
+		QStringLiteral("have a look at %1 if you like").arg(uri), o);
+
+	QCOMPARE(linkedIn(plain), (QStringList{uri}));
+
+	/* The same in a formatted message, which did not find one either. */
+	const QString markdown = Qdc::RichText::renderMarkdown(
+		QStringLiteral("have a look at %1 if you like").arg(uri), o);
+
+	QCOMPARE(linkedIn(markdown), (QStringList{uri}));
+
+	/* A magnet with no usable hash names no file, so there is nothing to click. */
+	const QString useless = Qdc::RichText::renderPlain(
+		QStringLiteral("magnet:?dn=nameless here"), o);
+
+	QCOMPARE(anchorTargets(useless), QStringList());
+}
+
+void TestRichText::nothingThatMerelyEndsInAColonIsLinked()
+{
+	Qdc::RichText::RenderOptions o = options();
+
+	/*
+	 * The bare colon is accepted for magnet alone. Taking any word followed by one
+	 * would make a link of the way people write a time, a label or a nickname.
+	 */
+	for (const QString& said : {QStringLiteral("note: bring cables"),
+	                            QStringLiteral("starts at 12:30 sharp"),
+	                            QStringLiteral("mailto:someone@example.org"),
+	                            QStringLiteral("javascript:alert(1)"),
+	                            QStringLiteral("file:///etc/passwd"),
+	                            QStringLiteral("ratio 3://4")})
+	{
+		QCOMPARE(anchorTargets(Qdc::RichText::renderPlain(said, o)), QStringList());
+		QCOMPARE(anchorTargets(Qdc::RichText::renderMarkdown(said, o)), QStringList());
+	}
 }
 
 void TestRichText::remoteTextCannotInjectMarkup()

@@ -86,6 +86,7 @@ private slots:
 	void chatFeedGivesAMarkdownMessageRoomForItsBlocks();
 	void chatFeedForgetsItsLayoutsWhenRowsMove();
 	void chatFeedClicksALinkAndIgnoresADrag();
+	void chatFeedLinksAnAddressInAPlainMessage();
 	void aNicknameInTheFeedAsksForItsOwnMenu();
 	void chatFeedDrawsAPictureItHas();
 	void chatFeedKeepsAnAnimationMoving();
@@ -782,6 +783,65 @@ void TestHubs::aNicknameInTheFeedAsksForItsOwnMenu()
 	QTest::mouseRelease(feed.viewport(), Qt::LeftButton, Qt::NoModifier, onNick);
 
 	QCOMPARE(followed.count(), 0);
+}
+
+void TestHubs::chatFeedLinksAnAddressInAPlainMessage()
+{
+	Qdc::ChatFeed feed;
+	Qdc::ChatModel model;
+
+	feed.setModel(&model);
+	feed.resize(600, 300);
+	feed.show();
+
+	/*
+	 * No RT1 on this one, which is every message on a hub that cannot carry the flag -
+	 * and most of them cannot. The address in it is still the thing worth clicking.
+	 */
+	Qdc::ChatMessage message;
+	message.from = user(QStringLiteral("alice"));
+	message.received = QDateTime::currentDateTime();
+	message.richText = false;
+	message.text = QStringLiteral("the rules are at https://example.org/rules ok");
+	model.append(message);
+
+	QVERIFY(QTest::qWaitForWindowExposed(&feed));
+
+	const QRect row = feed.visualRect(model.index(0));
+	QVERIFY(row.isValid());
+
+	QPoint onLink;
+	for (int x = row.left(); x < row.right(); ++x)
+	{
+		const QPoint point(x, row.center().y());
+
+		if (feed.anchorAt(point) == QStringLiteral("https://example.org/rules"))
+		{
+			onLink = point;
+			break;
+		}
+	}
+
+	QVERIFY2(!onLink.isNull(), "the address in a plain message is not a link");
+
+	QSignalSpy followed(&feed, &Qdc::ChatFeed::linkActivated);
+
+	QTest::mousePress(feed.viewport(), Qt::LeftButton, Qt::NoModifier, onLink);
+	QTest::mouseRelease(feed.viewport(), Qt::LeftButton, Qt::NoModifier, onLink);
+
+	QCOMPARE(followed.count(), 1);
+	QCOMPARE(followed.at(0).at(0).toUrl(),
+	         QUrl(QStringLiteral("https://example.org/rules")));
+
+	/* And the asterisks around it are still asterisks, not formatting. */
+	Qdc::ChatMessage literal;
+	literal.from = user(QStringLiteral("bob"));
+	literal.received = QDateTime::currentDateTime();
+	literal.text = QStringLiteral("weighs *about* 3kg");
+	model.append(literal);
+
+	QVERIFY(model.index(1).data(Qdc::ChatModel::MessageRole)
+	        .value<Qdc::ChatMessage>().text.contains(QStringLiteral("*about*")));
 }
 
 void TestHubs::chatFeedDrawsAPictureItHas()

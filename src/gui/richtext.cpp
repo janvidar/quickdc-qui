@@ -223,13 +223,27 @@ int url_end(const QString& text, int from)
 	int end = from;
 	while (end < text.size() && !text.at(end).isSpace()) ++end;
 
-	static const QString trailing = QStringLiteral(".,;:!?'\")]}");
+	/*
+	 * The asterisk is here for the sake of a message that is not markdown, where it is
+	 * how people have always emphasised a word by hand: an address written between two
+	 * of them is an address between two markers, not one ending in a marker. In a
+	 * formatted message emphasis has already been parsed away before this runs, so it
+	 * costs nothing there.
+	 */
+	static const QString trailing = QStringLiteral(".,;:!?'\")]}*");
 	while (end > from && trailing.contains(text.at(end - 1))) --end;
 
 	return end;
 }
 
-/** A scheme followed by "://" starting at 'at', or -1. */
+/**
+ * A scheme this client would open, starting at 'at', or -1.
+ *
+ * Two shapes, because not every URI names a host. http, https and the hub schemes are
+ * followed by "://"; a magnet has no authority at all and is followed by nothing but
+ * its colon. The bare colon is accepted only for magnet, deliberately: taking any word
+ * followed by one would make a link of "note:" and of the time of day.
+ */
 int scheme_length(const QString& text, int at)
 {
 	int n = at;
@@ -246,9 +260,19 @@ int scheme_length(const QString& text, int at)
 	}
 
 	if (n == at || !text.at(at).isLetter()) return -1;
-	if (!QStringView(text).mid(n).startsWith(QStringLiteral("://"))) return -1;
 
-	return n - at;
+	const QStringView rest = QStringView(text).mid(n);
+
+	if (rest.startsWith(QStringLiteral("://"))) return n - at;
+
+	if (rest.startsWith(QLatin1Char(':'))
+	    && QStringView(text).mid(at, n - at)
+	           .compare(QStringLiteral("magnet"), Qt::CaseInsensitive) == 0)
+	{
+		return n - at;
+	}
+
+	return -1;
 }
 
 QString wrap_link(const QString& label, const QUrl& url, Mode mode,
@@ -1348,10 +1372,19 @@ QString Qdc::RichText::renderMarkdown(const QString& markdown,
 
 QString Qdc::RichText::renderPlain(const QString& text, const RenderOptions& options)
 {
-	QString escaped = normalise_breaks(text).toHtmlEscaped();
-	escaped.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+	/*
+	 * An address somebody simply typed is linked here as it is in a formatted message.
+	 * Nothing else about the text is interpreted - an asterisk stays an asterisk - but
+	 * an address is not markup, it is the one thing in a line of chat that is worth
+	 * clicking, and most hubs cannot carry the flag that would make a message formatted
+	 * in the first place. The escaping is link_bare_urls()' own, run over each run of
+	 * text between the addresses, so a stranger's angle brackets are as harmless here
+	 * as they were before.
+	 */
+	const QString body = link_bare_urls(normalise_breaks(text), Mode::Html,
+	                                    options.colours);
 
 	return QStringLiteral("<div style=\"margin-left:%1px; text-indent:-%1px;\">%2%3</div>")
 		.arg(options.indent)
-		.arg(options.prefix, style_body(escaped, options));
+		.arg(options.prefix, style_body(body, options));
 }
