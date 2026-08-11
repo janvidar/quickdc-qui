@@ -8,6 +8,7 @@
 #include <gui/theme.h>
 
 #include <QApplication>
+#include <QIcon>
 #include <QMessageBox>
 #include <QSocketNotifier>
 
@@ -95,7 +96,24 @@ int main(int argc, char** argv)
 	QApplication::setApplicationName(QStringLiteral("QuickDC"));
 	QApplication::setApplicationDisplayName(QStringLiteral("QuickDC"));
 	QApplication::setOrganizationName(QStringLiteral("QuickDC"));
-	QApplication::setDesktopFileName(QStringLiteral("quickdc-qui"));
+	QApplication::setOrganizationDomain(QStringLiteral("extatic.org"));
+	QApplication::setApplicationVersion(QStringLiteral(QUICKDC_QUI_VERSION_STRING));
+
+	/*
+	 * The application id, not the name of the executable. An installed desktop
+	 * entry is named after the former, and this is what a Wayland compositor
+	 * matches a window against to find it - so a mismatch costs the window its
+	 * icon and its association with whatever launched it.
+	 */
+	QApplication::setDesktopFileName(QStringLiteral(QUICKDC_QUI_APP_ID));
+
+	/*
+	 * X11 wants the icon on the window itself rather than looked up from the
+	 * entry, and a themed lookup is the only way to reach the one the package
+	 * installed: every other figure this application shows, it paints. Empty
+	 * where nothing is installed, which is what an uninstalled build had anyway.
+	 */
+	QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral(QUICKDC_QUI_APP_ID)));
 
 	/*
 	 * Before any widget is built, so nothing is created against the platform

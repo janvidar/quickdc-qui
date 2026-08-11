@@ -1,0 +1,135 @@
+#
+## QuickDC as a Flatpak
+##
+## Built with packaging/flatpak/build.sh, which is also what a nightly cron job
+## calls. The source is the directory this manifest sits in, two levels up, and
+## that path is relative to the manifest rather than to the working directory -
+## so this one file builds the working tree when it is run from the working tree
+## and a clean checkout when it is run from one.
+##
+## Copyright (c) 2026, Jan Vidar Krey
+#
+
+id: org.extatic.QuickDC
+
+# org.kde.Platform is the only Flatpak runtime that carries Qt at all -
+# org.freedesktop.Platform has none and org.gnome.Platform is GTK - and despite
+# the name it is the freedesktop runtime with Qt 6 and KDE Frameworks on top.
+# The frameworks this application does not use cost it nothing: they are in the
+# shared runtime, not in the app. What it does use is Qt Core and Widgets, the
+# QPA plugins and the platform theme, and OpenSSL, zlib and bzip2 from the
+# freedesktop base underneath - which is why there is one module below and not
+# five.
+#
+# 6.11 rather than an older-looking branch: 6.9 was last rebuilt in January and
+# still sits on freedesktop-sdk 24.08. Something rebuilt every night belongs on
+# a branch that is itself still being rebuilt.
+runtime: org.kde.Platform
+runtime-version: '6.11'
+sdk: org.kde.Sdk
+
+command: quickdc-qui
+
+finish-args:
+  # A peer-to-peer client. It dials hubs and the peers they introduce, and
+  # quickdc/core/api/server.cpp binds TCP and UDP 1411 on every interface at
+  # startup - main.cpp refuses to open a window if that fails, so this is not
+  # optional. --share=network drops the network namespace rather than proxying
+  # it, which is what puts that listener on the real interfaces where a peer can
+  # reach it.
+  - --share=network
+
+  - --socket=wayland
+  - --socket=fallback-x11
+  # The X11 shared memory path. Without it every window is a round trip.
+  - --share=ipc
+  - --device=dri
+
+  # The directories a share is likely to be made of, and the one a download
+  # lands in. Named individually rather than as --filesystem=home, and that is
+  # not only about being modest with permissions: granting the whole home
+  # directory mounts it over the top of the --persist bind below, so the two
+  # cannot both be had. Sharing something outside these - a collection on
+  # another mount, say - is one line from the person running it:
+  #
+  #     flatpak override --user --filesystem=/mnt/media org.extatic.QuickDC
+  #
+  # Every file dialog in this application passes DontUseNativeDialog, so the
+  # portal chooser never runs and the in-process one browses whatever is
+  # visible here. A share is then walked and hashed recursively, which the
+  # document portal could not have granted anyway.
+  - --filesystem=xdg-download
+  - --filesystem=xdg-music
+  - --filesystem=xdg-videos
+  - --filesystem=xdg-pictures
+  - --filesystem=xdg-documents
+
+  # Every path this application keeps is hardcoded under ~/.quickdc: the
+  # configuration, the session, the download queue, the hash cache and the
+  # self-signed certificate. This puts that one directory inside ~/.var/app, so
+  # a nightly cannot write over the files a distribution build is using and
+  # does not leave them behind when it is uninstalled.
+  - --persist=.quickdc
+
+# No --socket=session-bus. The only thing that would want it is the "reveal in
+# file manager" path in src/gui/fileactions.cpp, which shells out to dbus-send -
+# a binary this runtime does not have - so the call fails and the
+# QDesktopServices fallback beside it takes over. That reaches the OpenURI
+# portal, and a portal needs no permission at all.
+
+cleanup:
+  # The two vendored libraries install themselves: a static archive each, the
+  # whole of their headers, and a CMake package. Those rules are unconditional
+  # and nothing in /app consumes any of it - this build links both libraries
+  # into the one executable - so it is swept up here rather than by patching a
+  # pinned submodule.
+  #
+  # Not /lib/debug: that is where flatpak-builder stages the .Debug extension.
+  - /include
+  - /lib/cmake
+  - /lib/pkgconfig
+  - '*.a'
+  - '*.la'
+
+modules:
+  - name: quickdc-qui
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      # The top level forces Debug when no build type is set, and Debug is what
+      # turns on the core's tracing - so a package has to say what it wants.
+      # flatpak-builder splits the debug info into a .Debug extension of its
+      # own, which is what makes RelWithDebInfo free here and a crash report
+      # from a tester readable.
+      - -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - -DQUICKDC_QUI_INSTALL=ON
+      - -DQUICKDC_QUI_BUILD_TESTS=OFF
+      # All three of these default off already. They are named anyway because a
+      # package is the wrong place to discover that one of them stopped doing
+      # so: tracing writes hub passwords to a log file, and loopback auth hands
+      # the whole share to any process on the machine.
+      - -DQUICKDC_TRACE=OFF
+      - -DQUICKDC_SANITIZE=OFF
+      - -DQUICKDC_ALLOW_LOOPBACK_AUTH=OFF
+    sources:
+      # A directory rather than a git source. The submodule URLs in .gitmodules
+      # are relative - ../quickdc.git, ../samurai.git - and resolve against an
+      # ssh:// remote that flatpak-builder has no key for, so a recursive clone
+      # is not available to it. A checkout already has all three trees.
+      #
+      # .gitignore is empty and a dir source would not read it anyway, so this
+      # skip list is load-bearing: 6.5.3 alone is an aqtinstall Qt of some
+      # hundreds of megabytes, copied on every build.
+      #
+      # .git is deliberately not skipped. It is small, the submodules' .git
+      # files are relative pointers that survive the copy, and git is in the
+      # SDK - so `git describe` inside the sandbox yields a real build id
+      # instead of the string "internal".
+      - type: dir
+        path: ../..
+        skip:
+          - .flatpak-builder
+          - .cache
+          - build
+          - 6.5.3
+          - aqtinstall.log

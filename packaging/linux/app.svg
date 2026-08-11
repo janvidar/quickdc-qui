@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="128" height="128" viewBox="0 0 128 128">
+  <!--
+      The application icon.
+      Copyright (c) 2026, Jan Vidar Krey
+
+      This comment is inside the element rather than above it, which is not a
+      matter of taste: appstreamcli decides whether a file is an SVG by looking
+      for "<svg" near the start of it, and gives up somewhere past the first
+      couple of hundred bytes. A header comment of this length above the element
+      pushes it out of reach and the Flatpak build fails with an unhelpful
+      icon-file-read-error.
+
+      The figure is the one src/gui/glyphs.cpp already draws for the transfers
+      destination - an arrow down and an arrow up, the two directions a transfer
+      can go - laid out on the same nominal 24 by 24 grid, scaled four times and
+      set in a 128 square. The paths are transfers_path() verbatim, so the icon
+      in a launcher and the icon in the navigation rail cannot drift apart.
+
+      Filled paths and no strokes, which is how every figure in this application
+      is drawn, and the plate is theme.frame from the default scheme.
+  -->
+
+  <rect x="0" y="0" width="128" height="128" rx="28" ry="28" fill="#1e328f"/>
+
+  <!--
+      The glyph spans 3.5 to 20.5 across and 3 to 21 down, both centred on 12,
+      so this transform puts it in the middle of the plate with the margin an
+      icon wants around it.
+  -->
+  <g transform="translate(16,16) scale(4)" fill="#ffffff">
+    <path d="M 7,3 L 9.5,3 L 9.5,15.5 L 13,15.5 L 8.25,21 L 3.5,15.5 L 7,15.5 Z"/>
+    <path d="M 14.5,21 L 17,21 L 17,8.5 L 20.5,8.5 L 15.75,3 L 11,8.5 L 14.5,8.5 Z"/>
+  </g>
+</svg>

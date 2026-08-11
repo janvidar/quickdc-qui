@@ -1,0 +1,22 @@
+#
+## The desktop entry, configured with the application id.
+##
+## No MimeType line. The schemes this client understands - adc, adcs, dchub and
+## magnet - are recognised inside chat text and nowhere else: main.cpp never
+## looks at argv, so declaring them here would make QuickDC the system handler
+## for a link and then drop it on the floor.
+#
+
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=QuickDC
+GenericName=Direct Connect Client
+Comment=Share and download files on ADC and NMDC hubs
+Exec=quickdc-qui
+Icon=@QUICKDC_QUI_APP_ID@
+Terminal=false
+Categories=Network;FileTransfer;P2P;
+Keywords=Direct Connect;DC;ADC;NMDC;hub;peer-to-peer;file sharing;
+StartupNotify=true
+StartupWMClass=quickdc-qui

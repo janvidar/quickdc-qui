@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    AppStream metadata: what a software centre shows, and what a Flatpak build
+    is refused without.
+
+    Configured rather than written out, because the application id appears in it
+    twice and in two other files besides, and the version has to be the one the
+    build actually is - which for a nightly is not the project version.
+
+    Copyright (c) 2026, Jan Vidar Krey
+-->
+<component type="desktop-application">
+  <id>@QUICKDC_QUI_APP_ID@</id>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>QuickDC</name>
+  <summary>Share and download files on Direct Connect hubs</summary>
+
+  <developer id="org.extatic">
+    <name>Jan Vidar Krey</name>
+  </developer>
+
+  <description>
+    <p>
+      QuickDC is a client for the ADC / Direct Connect file sharing networks. It
+      connects to hubs, and a hub is two things at once: a chat room, and a
+      search index over everything the people in it are sharing.
+    </p>
+    <p>
+      A download is taken from every peer that has the file rather than from
+      one of them, so a file four people are offering arrives over four
+      connections, and a transfer that is interrupted resumes where it stopped
+      instead of starting again.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>ADC, ADCS and NMDC hubs</li>
+      <li>Multi-source downloads, with resume</li>
+      <li>Search across every connected hub at once</li>
+      <li>Browse another user's share as a file tree</li>
+      <li>Hub chat and private messages, with rich formatted text</li>
+      <li>A built-in ADC hub, for running one of your own</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">@QUICKDC_QUI_APP_ID@.desktop</launchable>
+
+  <categories>
+    <category>Network</category>
+    <category>FileTransfer</category>
+  </categories>
+
+  <keywords>
+    <keyword>Direct Connect</keyword>
+    <keyword>ADC</keyword>
+    <keyword>ADCS</keyword>
+    <keyword>NMDC</keyword>
+    <keyword>peer-to-peer</keyword>
+    <keyword>file sharing</keyword>
+  </keywords>
+
+  <!--
+      The repository stands in as the homepage: AppStream refuses to validate
+      without one, and there is no project site to point at yet.
+  -->
+  <url type="homepage">https://gitea.extatic.org/janvidar/quickdc-qui</url>
+  <url type="bugtracker">https://gitea.extatic.org/janvidar/quickdc-qui/issues</url>
+  <url type="vcs-browser">https://gitea.extatic.org/janvidar/quickdc-qui</url>
+
+  <!--
+      A public network: the chat is other people's, and so is whatever they have
+      decided to share.
+  -->
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+  </content_rating>
+
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+
+  <!--
+      One release, and it is whatever this build is - the project has no tags
+      yet, so there is no history to list. type="development" is what says so.
+  -->
+  <releases>
+    <release version="@QUICKDC_QUI_VERSION_STRING@" date="@QUICKDC_QUI_RELEASE_DATE@" type="development">
+      <description>
+        <p>Development build. See the commit log for what changed.</p>
+      </description>
+    </release>
+  </releases>
+</component>

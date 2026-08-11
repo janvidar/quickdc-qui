@@ -1,0 +1,21 @@
+#
+## Keep this in step with the skip list in
+## packaging/flatpak/org.extatic.QuickDC.yml: a dir source does not read this
+## file, so anything large that appears here has to be named there as well.
+#
+
+# Build trees.
+build/
+dist/
+
+# A Qt downloaded with aqtinstall, and its log.
+6.5.3/
+aqtinstall.log
+
+# clangd's index.
+.cache/
+
+# flatpak-builder's state, and what the version stamp writes.
+.flatpak-builder/
+packaging/nightly-version.txt
+*.flatpak

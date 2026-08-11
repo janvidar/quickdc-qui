@@ -1,21 +1,53 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+    The bundle's Info.plist.
+
+    Configured with configure_file and @-substitution rather than handed to
+    MACOSX_BUNDLE_INFO_PLIST as a template: CMake's own substitution resolves
+    the documented MACOSX_BUNDLE_* names and nothing else, and two of the keys
+    below are not in that set.
+
+    Copyright (c) 2026, Jan Vidar Krey
+-->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Must name the binary in Contents/MacOS, or the bundle will not launch. -->
 	<key>CFBundleExecutable</key>
-	<string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+	<string>@QUICKDC_QUI_BUNDLE_NAME@</string>
 	<key>CFBundleIdentifier</key>
-	<string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+	<string>@QUICKDC_QUI_APP_ID@</string>
 	<key>CFBundleName</key>
-	<string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+	<string>@QUICKDC_QUI_BUNDLE_NAME@</string>
 	<key>CFBundleDisplayName</key>
-	<string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+	<string>@QUICKDC_QUI_BUNDLE_NAME@</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+
+	<!--
+	    Two different things, and Apple is strict about the first: it must be
+	    one to three integers separated by dots, so the nightly string cannot
+	    go there. The version a person is shown is the project's; the one that
+	    says which build they actually have is below it, where any string is
+	    allowed.
+	-->
 	<key>CFBundleShortVersionString</key>
-	<string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+	<string>@PROJECT_VERSION@</string>
 	<key>CFBundleVersion</key>
-	<string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+	<string>@QUICKDC_QUI_VERSION_STRING@</string>
+
+	<key>CFBundleIconFile</key>
+	<string>@QUICKDC_QUI_ICNS_NAME@</string>
+
+	<!--
+	    Finder reads this to explain itself before launching something that
+	    cannot run, rather than letting dyld fail. It has to agree with
+	    CMAKE_OSX_DEPLOYMENT_TARGET, which is why it is substituted rather
+	    than written out.
+	-->
+	<key>LSMinimumSystemVersion</key>
+	<string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
+
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>NSHighResolutionCapable</key>
