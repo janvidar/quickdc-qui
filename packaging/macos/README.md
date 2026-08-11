@@ -78,9 +78,12 @@ means configuring and building OpenSSL 3 twice, `darwin64-arm64` and
 `OPENSSL_ROOT_DIR` at the result. Until somebody needs it, building on each
 machine and shipping two disk images is less work.
 
-`CMAKE_OSX_DEPLOYMENT_TARGET` is pinned to 11.0 in the top-level
-`CMakeLists.txt` — Qt 6.5's own floor. Without it the build stamps whatever SDK
-the build machine has and quietly refuses to launch on anything older.
+`CMAKE_OSX_DEPLOYMENT_TARGET` is pinned to 13.3 in the top-level
+`CMakeLists.txt`. Qt 6.5's own floor is 11.0, but `std::format` sets a higher
+one: libc++ keeps the floating point half of it in the dylib, which arrived in
+13.3, so a lower target does not compile at all. Without any target the build
+stamps whatever SDK the build machine has and quietly refuses to launch on
+anything older.
 
 ---
 

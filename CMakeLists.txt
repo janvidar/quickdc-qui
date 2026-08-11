@@ -22,11 +22,13 @@ if(APPLE)
 
     # Named rather than left to the SDK, which would otherwise stamp whichever
     # version the machine that built it happened to have and refuse to run on
-    # anything older. 11.0 is Qt 6.5's own floor, so there is nothing to gain
-    # by going lower. Set before any target is defined, and cached so that a
+    # anything older. Qt 6.5's own floor is 11.0, but std::format is lower still
+    # than that here: libc++ leaves the floating point half of it in the dylib,
+    # and that arrived in 13.3, so anything older fails to compile rather than
+    # fails to run. Set before any target is defined, and cached so that a
     # packager can raise it.
     if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING
             "Oldest macOS this build will run on" FORCE)
     endif()
 endif()
