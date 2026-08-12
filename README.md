@@ -47,6 +47,10 @@ Note that macOS builds are not signed with an Apple Developer ID, so anybody
 who is handed one will be told the application is damaged until they clear the
 quarantine attribute. The macOS README explains what to tell them.
 
+A Snap is sketched in [packaging/snap.md](packaging/snap.md) and deliberately
+not built: it is worth doing only if it goes to the Snap Store, whose edge
+channel is the one thing that would give nightlies automatic updates.
+
 ## Licence
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
