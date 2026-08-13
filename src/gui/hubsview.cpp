@@ -1422,12 +1422,14 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 	 * adds is our own text: a name that reaches the bound would otherwise have the
 	 * "(3)" cut off it, and a stranger would get to decide whether this row admits to
 	 * having anything unread. The tooltip is the same value, since hovering a doctored
-	 * name must not be the way to see it undoctored.
+	 * name must not be the way to see it undoctored - and it is wrapped, because a
+	 * tooltip is drawn as markup whenever Qt guesses it might be; see
+	 * RichText::literalHtml().
 	 */
 	const QString shown = RichText::displayText(pane->paneTitle());
 
 	item->setText(NameColumn, decorate(shown, pane->unreadCount()));
-	item->setToolTip(NameColumn, shown);
+	item->setToolTip(NameColumn, RichText::literalHtml(shown));
 
 	QFont face = item->font(NameColumn);
 	face.setBold(pane->unreadCount() > 0);
@@ -1465,9 +1467,9 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 	 * On the row's own tooltip, since the padlock is painted over the row rather than
 	 * being an item of its own with somewhere to put one.
 	 */
-	item->setToolTip(NameColumn, secure
+	item->setToolTip(NameColumn, RichText::literalHtml(secure
 		? tr("%1\nEncrypted with TLS").arg(shown)
-		: tr("%1\nNot encrypted").arg(shown));
+		: tr("%1\nNot encrypted").arg(shown)));
 }
 
 void Qdc::HubsView::changeEvent(QEvent* event)

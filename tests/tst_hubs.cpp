@@ -2964,10 +2964,14 @@ void TestHubs::theHeaderNamesTheHubAndKeepsTheAddress()
 	QCOMPARE(header.title(), QStringLiteral("The Example Hub"));
 	QCOMPARE(header.subtitle(), QStringLiteral("films and arguments about them"));
 
-	/* The address is never unreachable, whatever is on the two lines. */
+	/*
+	 * The address is never unreachable, whatever is on the two lines - and it is on the
+	 * tooltip as markup, because that is the only way to hand Qt a string it will not
+	 * read as markup itself; see RichText::literalHtml().
+	 */
 	QLabel* title = header.findChildren<QLabel*>().value(0);
 	QVERIFY(title);
-	QCOMPARE(title->toolTip(), url);
+	QCOMPARE(title->toolTip(), Qdc::RichText::literalHtml(url));
 }
 
 void TestHubs::aHubsOwnDescriptionReachesThePane()
@@ -4164,7 +4168,7 @@ void TestHubs::aDoctoredHubNameCannotReverseItsRow()
 	QVERIFY2(shown != url, "the reduction left this address alone");
 
 	QCOMPARE(row->text(0), shown);
-	QCOMPARE(row->toolTip(0), shown);
+	QCOMPARE(row->toolTip(0), Qdc::RichText::literalHtml(shown));
 
 	/* Marked as doctored rather than quietly repaired, and not still reversing. */
 	QVERIFY(shown.contains(MARKER));
@@ -4208,7 +4212,8 @@ void TestHubs::aNicknameIsReducedInItsRowAndItsTooltip()
 	QTreeWidgetItem* row = hub->child(0);
 
 	QCOMPARE(row->text(0), QStringLiteral("alice b"));
-	QCOMPARE(row->toolTip(0), QStringLiteral("alice b"));
+	QCOMPARE(row->toolTip(0),
+	         Qdc::RichText::literalHtml(QStringLiteral("alice b")));
 
 	/* And the name itself was never touched: it is who the conversation is with. */
 	Qdc::DmPane* dm = theConversation(hubs);

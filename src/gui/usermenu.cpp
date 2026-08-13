@@ -4,6 +4,8 @@
 
 #include "usermenu.h"
 
+#include "richtext.h"
+
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QMenu>
@@ -19,8 +21,10 @@ Qdc::UserChoice Qdc::showUserMenu(QWidget* parent, const UserInfo& user,
 	 * only implied by where it opened, and a menu that opened over the wrong row is
 	 * exactly the mistake worth making impossible to miss.
 	 */
-	QAction* who = menu.addAction(user.nick.isEmpty()
-		? QObject::tr("This user") : user.nick);
+	const QString who_shown = RichText::displayText(user.nick);
+
+	QAction* who = menu.addAction(who_shown.isEmpty()
+		? QObject::tr("This user") : who_shown);
 
 	who->setEnabled(false);
 	menu.addSeparator();
@@ -38,10 +42,17 @@ Qdc::UserChoice Qdc::showUserMenu(QWidget* parent, const UserInfo& user,
 	/* A private message is routed by the session id, and a browse by the source id. */
 	const bool reachable = options.unavailable.isEmpty();
 
+	/*
+	 * The reason carries a nickname the caller has already reduced, and a tooltip is
+	 * drawn as markup whenever Qt guesses it might be, so it is handed over as markup
+	 * to stop it being read as any; see RichText::literalHtml().
+	 */
+	const QString unavailable = RichText::literalHtml(options.unavailable);
+
 	if (talk)
 	{
 		talk->setEnabled(reachable && !user.id.isEmpty());
-		if (!reachable) talk->setToolTip(options.unavailable);
+		if (!reachable) talk->setToolTip(unavailable);
 	}
 
 	if (files)
@@ -50,7 +61,7 @@ Qdc::UserChoice Qdc::showUserMenu(QWidget* parent, const UserInfo& user,
 		                  && !user.sourceId.isEmpty());
 
 		if (!reachable)
-			files->setToolTip(options.unavailable);
+			files->setToolTip(unavailable);
 		else if (user.sourceId.isEmpty())
 			files->setToolTip(QObject::tr("The hub has not said enough about them to ask yet."));
 	}

@@ -5,6 +5,7 @@
 #include "searchview.h"
 
 #include "glyphs.h"
+#include "richtext.h"
 #include "searchmodel.h"
 #include "theme.h"
 
@@ -549,8 +550,10 @@ void Qdc::SearchView::showResultMenu(const QPoint& where)
 	QAction* get = menu.addAction(tr("Download"));
 	QAction* getTo = menu.addAction(tr("Download to…"));
 	menu.addSeparator();
+	const QString peer_shown = RichText::displayText(hit.user.nick);
+
 	QAction* files = menu.addAction(tr("Browse %1's files")
-		.arg(hit.user.nick.isEmpty() ? tr("this user") : hit.user.nick));
+		.arg(peer_shown.isEmpty() ? tr("this user") : peer_shown));
 
 	/*
 	 * A folder cannot be queued: the queue holds files. Left in the menu and
@@ -611,6 +614,8 @@ void Qdc::SearchView::browse(const SearchHit& hit)
 
 	m_filelists->request(hit.hubUrl, hit.user.sourceId);
 
+	const QString asked_shown = RichText::displayText(hit.user.nick);
+
 	/*
 	 * Said here because the list opens somewhere else entirely - in the hub's own
 	 * conversation, minutes later if the peer has to be retried - and without a word
@@ -619,7 +624,8 @@ void Qdc::SearchView::browse(const SearchHit& hit)
 	QMessageBox::information(this, tr("Browse files"),
 		tr("Asked %1 for their file list. It opens beside their conversation on %2 "
 		   "once it arrives, which can take a while.")
-			.arg(hit.user.nick.isEmpty() ? tr("the user") : hit.user.nick, hit.hubUrl));
+			.arg(asked_shown.isEmpty() ? tr("the user") : asked_shown,
+			     RichText::displayText(hit.hubUrl)));
 }
 
 QString Qdc::SearchView::downloadDirectory() const
