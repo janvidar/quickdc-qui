@@ -17,6 +17,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QTextBrowser>
 #include <QTreeView>
 #include <QUrl>
@@ -64,8 +65,10 @@ void say(QLabel* label, const QString& text)
  * with a paragraph of epistemology after it is not a byline.
  *
  * The nickname is what a reader recognises, so it is what is drawn; the CID stands in
- * where the hub gave no nickname. A post whose claimed author disagrees with the hub's
- * is not drawn at all - see listable() - so nothing here has to explain a disagreement.
+ * where the hub gave no nickname. A post whose document claims a different author is
+ * drawn from here exactly like any other, and the document's claim is not drawn beside
+ * it: the honest case of a disagreement is a relayed post, nothing on this machine can
+ * tell that from a forgery, and a byline that argued with itself would say only that.
  *
  * The time is the hub's, which is the one that orders the board. The author's own DA is
  * not drawn anywhere: nothing verifies it, nothing may be ordered by it, and a date
@@ -99,10 +102,19 @@ Qdc::BoardPane::BoardPane(QWidget* parent)
 
 	layout->addWidget(buildBoardHeader());
 
+	/*
+	 * The post being read takes the whole of the area beside the list, and what is
+	 * being written takes the same area rather than a strip under it: reading and
+	 * writing are two things somebody is doing, not two panels they need at once.
+	 */
+	m_area = new QStackedWidget(this);
+	m_area->addWidget(buildReader());
+	m_area->addWidget(buildComposer());
+
 	m_split = new QSplitter(Qt::Horizontal, this);
 	m_split->addWidget(buildThreadList());
-	m_split->addWidget(buildReader());
-	m_split->setStretchFactor(0, 2);
+	m_split->addWidget(m_area);
+	m_split->setStretchFactor(0, 1);
 	m_split->setStretchFactor(1, 3);
 
 	layout->addWidget(m_split, 1);
@@ -212,22 +224,15 @@ QWidget* Qdc::BoardPane::buildThreadList()
 	QHBoxLayout* actions = new QHBoxLayout;
 	actions->setSpacing(6);
 
-	m_newThread = new QPushButton(tr("New thread"), side);
-	m_newThread->setObjectName(QStringLiteral("boardNewThread"));
-	connect(m_newThread, &QPushButton::clicked, this, [this] { showCompose(Compose::Thread); });
-	actions->addWidget(m_newThread);
-
 	/*
-	 * A full re-read rather than a refresh. Resuming from a cursor is what the client
-	 * does the rest of the time and it cannot see a hub that reordered or removed
-	 * entries; reading the board from the beginning and reconciling the result against
-	 * what is held is the only detection there is, so it is offered rather than left to
-	 * happen on some schedule nobody can see.
+	 * A post rather than a thread. What it starts is a thread and that is the wire's
+	 * word for it; what somebody is doing is writing a post, and the one button on a
+	 * board that has nothing on it yet should say what pressing it does.
 	 */
-	m_reread = new QPushButton(tr("Re-read the board"), side);
-	m_reread->setObjectName(QStringLiteral("boardReread"));
-	connect(m_reread, &QPushButton::clicked, this, [this] { emit rereadRequested(); });
-	actions->addWidget(m_reread);
+	m_newPost = new QPushButton(tr("New post"), side);
+	m_newPost->setObjectName(QStringLiteral("boardNewPost"));
+	connect(m_newPost, &QPushButton::clicked, this, [this] { showCompose(Compose::Thread); });
+	actions->addWidget(m_newPost);
 
 	actions->addStretch(1);
 	layout->addLayout(actions);
@@ -254,6 +259,7 @@ QWidget* Qdc::BoardPane::buildThreadList()
 QWidget* Qdc::BoardPane::buildReader()
 {
 	QWidget* reader = new QWidget(this);
+	m_reader = reader;
 
 	QVBoxLayout* layout = new QVBoxLayout(reader);
 	layout->setContentsMargins(6, 0, 12, 12);
@@ -303,45 +309,67 @@ QWidget* Qdc::BoardPane::buildReader()
 
 	layout->addWidget(m_body, 1);
 
-	QHBoxLayout* actions = new QHBoxLayout;
+	m_actions = new QWidget(reader);
+
+	QHBoxLayout* actions = new QHBoxLayout(m_actions);
+	actions->setContentsMargins(0, 0, 0, 0);
 	actions->setSpacing(6);
 
-	m_fetch = new QPushButton(tr("Fetch this post"), reader);
+	m_fetch = new QPushButton(tr("Fetch this post"), m_actions);
 	m_fetch->setObjectName(QStringLiteral("boardFetch"));
 	connect(m_fetch, &QPushButton::clicked, this, &BoardPane::fetch);
 	actions->addWidget(m_fetch);
 
-	m_parent = new QPushButton(tr("Ask the hub for the parent"), reader);
+	m_parent = new QPushButton(tr("Ask the hub for the parent"), m_actions);
 	m_parent->setObjectName(QStringLiteral("boardParent"));
 	connect(m_parent, &QPushButton::clicked, this, &BoardPane::requestParent);
 	actions->addWidget(m_parent);
 
-	m_reply = new QPushButton(tr("Reply"), reader);
+	m_reply = new QPushButton(tr("Reply"), m_actions);
 	m_reply->setObjectName(QStringLiteral("boardReply"));
 	connect(m_reply, &QPushButton::clicked, this, [this] { showCompose(Compose::Reply); });
 	actions->addWidget(m_reply);
 
-	/*
-	 * Withdraw, and never delete. Withdrawing removes an entry from the hub's index; the
-	 * document is by then held by everybody who has read it and will go on being served
-	 * by them, so an interface offering to delete a post promises something this
-	 * extension cannot deliver.
-	 */
-	m_withdraw = new QPushButton(tr("Withdraw"), reader);
-	m_withdraw->setObjectName(QStringLiteral("boardWithdraw"));
-	connect(m_withdraw, &QPushButton::clicked, this, &BoardPane::withdraw);
-	actions->addWidget(m_withdraw);
+	m_delete = new QPushButton(tr("Delete"), m_actions);
+	m_delete->setObjectName(QStringLiteral("boardDelete"));
+	connect(m_delete, &QPushButton::clicked, this, &BoardPane::askToDelete);
+	actions->addWidget(m_delete);
 
 	actions->addStretch(1);
-	layout->addLayout(actions);
+	layout->addWidget(m_actions);
 
-	m_withdrawNote = makeNote(
-		tr("Withdrawing takes the post out of this hub's index. It cannot promise the "
-		   "post is gone: anyone who has read it may still hold the document and may "
-		   "still hand it to somebody else."), reader);
-	layout->addWidget(m_withdrawNote);
+	m_question = new QWidget(reader);
 
-	layout->addWidget(buildComposer());
+	QHBoxLayout* asking = new QHBoxLayout(m_question);
+	asking->setContentsMargins(0, 0, 0, 0);
+	asking->setSpacing(6);
+
+	/*
+	 * What the hub is being asked to do, and nothing about what becomes of the bytes.
+	 * The entry goes out of the index and the withdrawal travels to whoever is watching
+	 * the board, which is all that is in this client's gift: a copy is a file on
+	 * somebody else's disk, and a line promising it is gone would be a promise made on
+	 * their behalf.
+	 */
+	QLabel* question = makeNote(
+		tr("Delete this post? It is taken out of this hub's index, and other clients "
+		   "are asked to drop their copies."), m_question);
+
+	question->setObjectName(QStringLiteral("boardDeleteQuestion"));
+	asking->addWidget(question, 1);
+
+	m_deleteConfirm = new QPushButton(tr("Delete"), m_question);
+	m_deleteConfirm->setObjectName(QStringLiteral("boardDeleteConfirm"));
+	connect(m_deleteConfirm, &QPushButton::clicked, this, &BoardPane::confirmDelete);
+	asking->addWidget(m_deleteConfirm);
+
+	QPushButton* keep = new QPushButton(tr("Cancel"), m_question);
+	keep->setObjectName(QStringLiteral("boardDeleteCancel"));
+	connect(keep, &QPushButton::clicked, this, &BoardPane::dropTheQuestion);
+	asking->addWidget(keep);
+
+	m_question->hide();
+	layout->addWidget(m_question);
 
 	return reader;
 }
@@ -351,18 +379,17 @@ QWidget* Qdc::BoardPane::buildComposer()
 	m_composeBox = new QWidget(this);
 
 	QVBoxLayout* layout = new QVBoxLayout(m_composeBox);
-	layout->setContentsMargins(0, 0, 0, 0);
+	layout->setContentsMargins(6, 0, 12, 12);
 	layout->setSpacing(4);
 
 	QHBoxLayout* top = new QHBoxLayout;
 	top->setSpacing(6);
 
 	/*
-	 * The subject is not filled in from the post being replied to. What is typed here
-	 * becomes bytes of a document whose hash is the post's name, so it must be exactly
-	 * what its author wrote and nothing this client tidied on the way - and a subject
-	 * copied out of a stranger's post could not be drawn reduced in a field that is
-	 * about to be sent.
+	 * The subject line above and the editor below, in the space the post being read was
+	 * in. What is typed in either becomes the bytes of a document whose hash is the
+	 * post's name, so nothing here is reduced on the way in or tidied on the way out -
+	 * see prefillReply(), which is the one place text arrives from somewhere else.
 	 */
 	m_composeSubject = new QLineEdit(m_composeBox);
 	m_composeSubject->setObjectName(QStringLiteral("boardComposeSubject"));
@@ -384,12 +411,10 @@ QWidget* Qdc::BoardPane::buildComposer()
 	connect(m_composer, &Composer::imagePasted, this, &BoardPane::imagePasted);
 	connect(m_composer, &Composer::filesDropped, this, &BoardPane::filesDropped);
 
-	layout->addWidget(m_composer);
+	layout->addWidget(m_composer, 1);
 
 	m_composeNote = makeNote(QString(), m_composeBox);
 	layout->addWidget(m_composeNote);
-
-	m_composeBox->hide();
 
 	return m_composeBox;
 }
@@ -568,6 +593,30 @@ void Qdc::BoardPane::setPostUnavailable(const QString& tth, const QString& reaso
 	refreshReading();
 }
 
+void Qdc::BoardPane::setPostUnverifiable(const QString& tth)
+{
+	if (tth.isEmpty()) return;
+
+	m_threads->setVerificationFailed(tth);
+
+	if (tth != m_reading) return;
+
+	/*
+	 * The reader was looking at it when it turned out not to be the post it claimed to
+	 * be, so the reading area is emptied along with the row. What was on the screen was
+	 * the hub's description of a document that has now been read and was something
+	 * else, which is not a thing to leave up.
+	 */
+	m_post = BoardPost();
+	m_hasPost = false;
+	m_reading.clear();
+
+	dropTheQuestion();
+	refreshReading();
+
+	emit readingChanged(QString());
+}
+
 void Qdc::BoardPane::reportRefusal(int code, const QString& description,
                                    const QString& tth, const QString& board)
 {
@@ -629,6 +678,7 @@ void Qdc::BoardPane::clear()
 	m_gapBand->hide();
 	m_refusalBand->hide();
 
+	dropTheQuestion();
 	showCompose(Compose::None);
 	refreshReading();
 
@@ -642,6 +692,9 @@ void Qdc::BoardPane::read(const QString& tth)
 
 	if (changed)
 	{
+		/* A question about the last post is not a question about this one. */
+		dropTheQuestion();
+
 		m_reading = tth;
 
 		/* The document of the post that was being read says nothing about this one. */
@@ -825,28 +878,36 @@ void Qdc::BoardPane::refreshActions()
 	                    && m_board.may(BoardPermission::Reply) && !m_board.removed);
 
 	/*
-	 * Withdrawal is offered where either permission exists. Whether the post is this
+	 * Deletion is offered where either permission exists. Whether the post is this
 	 * user's own is not something the pane can tell - it is a comparison against our own
 	 * CID, which is not part of a board - and the hub re-checks it anyway.
 	 */
-	const bool mayWithdraw = m_board.may(BoardPermission::WithdrawOwn)
+	const bool mayDelete = m_board.may(BoardPermission::WithdrawOwn)
 		|| m_board.may(BoardPermission::WithdrawAny);
 
-	m_withdraw->setVisible(reading && !withdrawn && mayWithdraw && !m_board.removed);
-	m_withdrawNote->setVisible(m_withdraw->isVisible());
+	const bool offerDelete = reading && !withdrawn && mayDelete && !m_board.removed;
 
-	m_newThread->setEnabled(m_board.may(BoardPermission::StartThread)
-	                        && !m_board.removed);
+	m_delete->setVisible(offerDelete);
+
+	/* A question that can no longer be answered goes, rather than waiting to be. */
+	if (!offerDelete) dropTheQuestion();
 
 	/*
-	 * A reply being written is not taken away when its post is withdrawn. The words are
-	 * somebody's own and the tombstone arrived from elsewhere, so the box keeps them and
-	 * says what has happened instead; the submission is where it is stopped.
+	 * Gone rather than greyed where the board does not take posts. A control that is
+	 * there and cannot be used invites somebody to find out why; a read-only board is
+	 * simply one without that button on it.
+	 */
+	m_newPost->setVisible(m_board.may(BoardPermission::StartThread) && !m_board.removed);
+
+	/*
+	 * A reply being written is not taken away when its post leaves the board. The words
+	 * are somebody's own and the tombstone arrived from elsewhere, so the box keeps them
+	 * and says what has happened instead; the submission is where it is stopped.
 	 */
 	if (m_compose == Compose::Reply && !m_replyTo.isEmpty()
 	    && m_threads->isWithdrawn(m_replyTo))
 	{
-		say(m_composeNote, tr("The post this replies to has been withdrawn. What you "
+		say(m_composeNote, tr("The post this replies to has been deleted. What you "
 		                      "wrote is kept here."));
 	}
 }
@@ -873,11 +934,29 @@ void Qdc::BoardPane::requestParent()
 	emit parentRequested(parent);
 }
 
-void Qdc::BoardPane::withdraw()
+void Qdc::BoardPane::askToDelete()
 {
 	if (m_reading.isEmpty()) return;
 
-	emit withdrawRequested(m_reading);
+	m_actions->hide();
+	m_question->show();
+}
+
+void Qdc::BoardPane::confirmDelete()
+{
+	const QString post = m_reading;
+
+	dropTheQuestion();
+
+	if (post.isEmpty()) return;
+
+	emit withdrawRequested(post);
+}
+
+void Qdc::BoardPane::dropTheQuestion()
+{
+	m_question->hide();
+	m_actions->show();
 }
 
 void Qdc::BoardPane::showCompose(Compose mode)
@@ -891,12 +970,17 @@ void Qdc::BoardPane::showCompose(Compose mode)
 		m_composer->clear();
 
 		say(m_composeNote, QString());
-		m_composeBox->hide();
+
+		/* The post that was being read comes back, exactly as it was left. */
+		m_area->setCurrentWidget(m_reader);
+		refreshReading();
 		return;
 	}
 
 	/* A refusal of the last attempt is not an answer about this one. */
 	m_refusalBand->hide();
+
+	dropTheQuestion();
 
 	m_replyTo = mode == Compose::Reply ? m_reading : QString();
 
@@ -906,8 +990,8 @@ void Qdc::BoardPane::showCompose(Compose mode)
 	if (mode == Compose::Thread)
 	{
 		m_composer->setPlaceholderText(tr("Write the post"));
-		m_composeSubject->setPlaceholderText(tr("Subject, which a new thread needs"));
-		say(m_composeNote, tr("A new thread. Its subject and body become a document "
+		m_composeSubject->setPlaceholderText(tr("Subject, which a new post needs"));
+		say(m_composeNote, tr("A new post. Its subject and body become a document "
 		                      "whose hash is the post's name."));
 	}
 	else
@@ -915,10 +999,59 @@ void Qdc::BoardPane::showCompose(Compose mode)
 		m_composer->setPlaceholderText(tr("Write the reply"));
 		m_composeSubject->setPlaceholderText(tr("Subject, which a reply may leave empty"));
 		say(m_composeNote, tr("A reply to the post you are reading."));
+
+		prefillReply();
 	}
 
-	m_composeBox->show();
+	m_area->setCurrentWidget(m_composeBox);
 	m_composer->focusInput();
+}
+
+void Qdc::BoardPane::prefillReply()
+{
+	if (m_replyTo.isEmpty()) return;
+
+	/*
+	 * The document's words where the document has been read, and the hub's subject
+	 * where it has not. A reply begun on a post nobody fetched quotes nothing, because
+	 * there is nothing here that the post said - only what the hub says it is about.
+	 */
+	const BoardEntry entry = m_threads->entryOf(m_replyTo);
+
+	const QString subject = m_hasPost && m_post.tth == m_replyTo
+		? m_post.subject : entry.subject;
+
+	/* Once. A reply to "Re: x" is about "Re: x", and "Re: Re: x" says nothing more. */
+	const QString prefix = tr("Re: ", "prefix on the subject of a reply");
+
+	m_composeSubject->setText(subject.startsWith(prefix, Qt::CaseInsensitive)
+		? subject : prefix + subject);
+
+	if (!m_hasPost || m_post.tth != m_replyTo) return;
+
+	const QString quoted = m_post.body.trimmed();
+	if (quoted.isEmpty()) return;
+
+	QString reply;
+
+	/*
+	 * Markdown's quote, a line at a time, and the author's own bytes throughout: a body
+	 * on its way into a document is never put through displayText(), which is a
+	 * reduction for drawing a stranger's text and would leave a replacement character
+	 * or an ellipsis of ours inside somebody's post.
+	 */
+	for (const QString& line : quoted.split(QLatin1Char('\n')))
+	{
+		QStringView text(line);
+		if (text.endsWith(QLatin1Char('\r'))) text.chop(1);
+
+		reply += QStringLiteral("> ");
+		reply += text;
+		reply += QLatin1Char('\n');
+	}
+
+	/* A blank line after the quote, which is where the cursor is left. */
+	m_composer->setText(reply + QLatin1Char('\n'));
 }
 
 void Qdc::BoardPane::submit(const QString& message, bool richText)
@@ -947,14 +1080,14 @@ void Qdc::BoardPane::submit(const QString& message, bool richText)
 		if (m_replyTo.isEmpty()) return;
 
 		/*
-		 * The post being replied to may have been withdrawn while the reply was being
-		 * written. Its hash is still a valid parent and the hub will very likely refuse
-		 * the post for naming an entry it no longer indexes, so saying so here is better
-		 * than letting the refusal explain it.
+		 * The post being replied to may have gone from the index while the reply was
+		 * being written. Its hash is still a valid parent and the hub will very likely
+		 * refuse the post for naming an entry it no longer indexes, so saying so here is
+		 * better than letting the refusal explain it.
 		 */
 		if (m_threads->isWithdrawn(m_replyTo))
 		{
-			say(m_composeNote, tr("The post this replies to has been withdrawn, so the "
+			say(m_composeNote, tr("The post this replies to has been deleted, so the "
 			                      "hub will most likely refuse a reply to it. What you "
 			                      "wrote is kept here."));
 			return;

@@ -19,6 +19,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSplitter;
+class QStackedWidget;
 class QTextBrowser;
 class QTreeView;
 class QUrl;
@@ -39,25 +40,28 @@ class Composer;
  * The pane's one job is to be honest about how much is known. An index entry is the
  * hub's description of a document that may not exist, and until the bytes have been
  * fetched and hashed the subject on the screen is *the hub's* subject line: so nothing
- * is fetched merely because an entry arrived, the reading pane says where each field
- * came from, and a post that has not been read is not drawn as though it had been. The
- * six states of PostState are six different things and each is drawn as the thing it is;
- * collapsing any two of them would present a claim as a fact.
+ * is fetched merely because an entry arrived, and a post that has not been read is not
+ * drawn as though it had been - there are no words on the screen and something to press
+ * instead. What a state changes is what is there to read, and never a word beside the
+ * post about how far it has been checked.
  *
  * Three further rules are the specification's and are visible in what this draws:
  *
- * - The word is "withdraw". Withdrawing takes an entry out of the hub's index and can
- *   promise nothing about the document, which by then may be held by everyone who has
- *   read it, so an interface offering to delete a post makes a promise the extension
- *   cannot keep. "Delete" appears nowhere.
+ * - The button says "Delete", because that is what somebody pressing it means, and what
+ *   it does is the extension's withdrawal: the entry leaves this hub's index and other
+ *   clients are asked to drop their copies. It cannot promise the document is gone -
+ *   whoever has read it holds it - so the confirmation says what happens and stops
+ *   there rather than promising anything about the bytes.
  * - Nothing is published until its entry comes back. There is no success message in this
  *   protocol - the entry is the acknowledgement - so a submitted post is described as
  *   handed to the hub and nothing more, and what was typed is kept in case it is refused.
  * - A CID is never presented as a verified identity and a nickname is never used to
- *   attribute a post. Where the document's author and the hub's disagree, the post is
- *   attributed to the hub's with the disagreement shown; the honest case is a post
- *   relayed to a second hub by somebody who did not write it, and it looks exactly like
- *   a forgery.
+ *   attribute a post. A post is attributed to the hub's claim, always, and the author
+ *   the document claims is drawn nowhere at all - including where the two disagree,
+ *   which is shown as nothing: the honest case of a disagreement is a post relayed to a
+ *   second hub by somebody who did not write it, it is indistinguishable from a forgery,
+ *   and neither hiding such a post nor asking a reader to adjudicate it is something
+ *   this machine can do anything with.
  */
 class BoardPane final : public QWidget {
 	Q_OBJECT
@@ -141,6 +145,17 @@ public slots:
 	void setPostUnavailable(const QString& tth, const QString& reason);
 
 	/**
+	 * The document is here and it is not the post the entry named.
+	 *
+	 * The bytes did not hash to the name, or they did and the header did not parse.
+	 * Nothing about the post can be shown after that - not even the hub's subject line,
+	 * which is a description of a document that has now been read and was something
+	 * else - so the post is taken off the board altogether; see BoardModel::listable(),
+	 * which is the one place that decision is made.
+	 */
+	void setPostUnverifiable(const QString& tth);
+
+	/**
 	 * The hub refused something.
 	 *
 	 * This extension has no token, so a refusal is matched to what it refuses by the
@@ -208,16 +223,24 @@ signals:
 	void replySubmitted(const QString& parent, const QString& subject,
 	                    const QString& body, bool richText);
 
-	/** Take a post out of the hub's index. Never called deletion; see the class note. */
+	/**
+	 * Take a post out of the hub's index.
+	 *
+	 * The extension's withdrawal, which is what the Delete button asks for: the name is
+	 * the operation's and the button's is the reader's. See the class note for what the
+	 * confirmation may say about it.
+	 */
 	void withdrawRequested(const QString& tth);
 
 	/**
 	 * Read the whole board again from the beginning rather than from the cursor.
 	 *
-	 * Offered as an action because it is the only way a hub that reordered or removed
-	 * entries in violation of the extension becomes visible at all, and a client that
-	 * never does it has no detection whatever. What arrives is reconciled against what
-	 * is held rather than replacing it, so nothing here is thrown away first.
+	 * Nothing in the pane emits this. It is the only way a hub that reordered or
+	 * removed entries in violation of the extension becomes visible at all - what
+	 * arrives is reconciled against what is held rather than replacing it - and it is
+	 * driven automatically now, by connecting to the hub, rather than by a button
+	 * asking a reader to keep the board honest themselves. Kept because the pane is
+	 * where a client would say so if there were ever a reason to ask from here.
 	 */
 	void rereadRequested();
 
@@ -272,9 +295,31 @@ private:
 	void fetch();
 
 	void requestParent();
-	void withdraw();
+
+	/**
+	 * Ask before deleting, and put the question where the buttons were.
+	 *
+	 * In the pane rather than in a dialog over it, so that the post being deleted stays
+	 * on the screen behind the question - and so that the question goes away by itself
+	 * when the reader moves to another post, which a modal box could not do.
+	 */
+	void askToDelete();
+	void confirmDelete();
+
+	/** Put the buttons back, whether the question was answered or abandoned. */
+	void dropTheQuestion();
 
 	void showCompose(Compose mode);
+
+	/**
+	 * What a reply opens with: the parent's subject prefixed once, and its words quoted.
+	 *
+	 * Neither goes through RichText::displayText(). That is a reduction for drawing a
+	 * stranger's text safely, and this text is on its way into a document whose hash is
+	 * its name - so a replacement character or an ellipsis put in here would be in the
+	 * post somebody sends, under a name every reader checks the bytes against.
+	 */
+	void prefillReply();
 
 	/** The composer's send button, for a new thread or for a reply. */
 	void submit(const QString& message, bool richText);
@@ -326,8 +371,19 @@ private:
 	QLabel* m_refusal;
 
 	QTreeView* m_list;
-	QPushButton* m_newThread;
-	QPushButton* m_reread;
+	QPushButton* m_newPost;
+
+	/**
+	 * The area beside the thread list, which is either a post or a post being written.
+	 *
+	 * One at a time and never both: a reader who has asked to write something is
+	 * writing it, and a composer standing open under every post they read would take a
+	 * third of the pane from the thing the pane is for. Cancelling puts the post that
+	 * was being read back on the screen.
+	 */
+	QStackedWidget* m_area;
+
+	QWidget* m_reader;
 
 	QLabel* m_subject;
 
@@ -336,11 +392,15 @@ private:
 
 	QTextBrowser* m_body;
 
+	/** The row under the post, and the question that takes its place. */
+	QWidget* m_actions;
 	QPushButton* m_fetch;
 	QPushButton* m_parent;
 	QPushButton* m_reply;
-	QPushButton* m_withdraw;
-	QLabel* m_withdrawNote;
+	QPushButton* m_delete;
+
+	QWidget* m_question;
+	QPushButton* m_deleteConfirm;
 
 	QWidget* m_composeBox;
 	QLineEdit* m_composeSubject;
