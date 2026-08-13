@@ -1,0 +1,1339 @@
+/*
+ * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
+ */
+
+#include "boardbridge.h"
+
+#include "corethread.h"
+#include "hubbridge.h"
+#include "transferbridge.h"
+
+#include <api/core.h>
+#include <api/transfers.h>
+#include <bbs/boardindex.h>
+#include <bbs/poststore.h>
+#include <hash/hashjob.h>
+#include <network/adc/adcbbs.h>
+#include <share/sharemanager.h>
+
+#include <samurai/crypto/digest/merkletree.h>
+#include <samurai/crypto/digest/tiger.h>
+#include <samurai/io/file.h>
+
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+
+#include <string>
+#include <vector>
+
+namespace {
+
+/** A tiger root in base32, which is how long a post's name is. */
+constexpr int TTH_LENGTH = 39;
+
+/**
+ * The most this client will fetch for one post unless it is told otherwise.
+ *
+ * A post document is a header and a body of text, so this is enormous for what it
+ * bounds - and that is the point. It is not a guess at how large a post is; it is
+ * the point past which a peer that keeps sending is answering something other than
+ * the question that was asked. What a fetch is normally bounded by is the size the
+ * entry declared, and this is what bounds a declaration nothing verified.
+ */
+constexpr quint64 FETCH_CAP = 4u * 1024 * 1024;
+
+/**
+ * How many bodies are fetched at once.
+ *
+ * Small, and bounded apart from the download queue's own budget: a thread of fifty
+ * replies is fifty files somebody is waiting on, and the queue would treat every
+ * one of them exactly as it treats the film the user asked for last night. Two
+ * moving with the rest waiting here is a thread that fills in from the top while
+ * the user's own downloads keep their slots.
+ */
+constexpr int CONCURRENT_FETCHES = 2;
+
+/** What one board may talk this client into moving, and over how long. */
+constexpr quint64 ALLOWANCE_BYTES = 64u * 1024 * 1024;
+constexpr int ALLOWANCE_SECONDS = 3600;
+
+/**
+ * How long a source search has to answer before the author is named as a source.
+ *
+ * The author of a post is a source for its body from the moment the entry arrives,
+ * and is the last party to ask: an author who records who fetches their post has a
+ * complete census of everybody who read it early. That is unavoidable in the end
+ * and need not be volunteered at the start, so the search goes out first and this
+ * is how long it is given - long enough for the hubs to answer and for a peer
+ * connection to be brokered, short enough that a reader waiting on a post nobody
+ * else holds is not left waiting on principle.
+ */
+constexpr int AUTHOR_GRACE_MS = 20000;
+
+/** How often the fetches in flight are looked at; see BoardBridge::m_watch. */
+constexpr int WATCH_INTERVAL_MS = 2000;
+
+QString from_std(const std::string& text)
+{
+	return QString::fromUtf8(text.c_str(), static_cast<qsizetype>(text.size()));
+}
+
+std::string to_std(const QString& text)
+{
+	const QByteArray utf8 = text.toUtf8();
+	return std::string(utf8.constData(), static_cast<size_t>(utf8.size()));
+}
+
+/**
+ * The tiger tree root of a document, base32, computed here and now.
+ *
+ * The download queue has already checked the hash of anything it reported complete,
+ * and this checks it again, because the check is what makes every other rule in the
+ * extension safe: a document reaches the store under a name, that name is what this
+ * client will answer searches for afterwards, and a board is kept and re-served for
+ * years rather than consumed once. Doing it twice costs one pass over a few
+ * kilobytes that have just been read into memory anyway - and a document that
+ * arrived by some route other than the queue has not been checked at all.
+ */
+QString tiger_tree_root(const QByteArray& document)
+{
+	Samurai::Crypto::Digest::Tiger tiger;
+	Samurai::Crypto::Digest::MerkleTree tree(
+		&tiger, Samurai::Crypto::Digest::DEFAULT_MERKLE_BLOCK_SIZE,
+		QUICKDC_TTH_TREE_LEVELS);
+
+	tree.update(document.constData(), static_cast<size_t>(document.size()));
+
+	char printed[128];
+	if (!tree.digest().getFormattedString(
+			Samurai::Crypto::Digest::HashValue::Format::Base32, printed,
+			sizeof(printed)))
+	{
+		return QString();
+	}
+
+	return QString::fromLatin1(printed);
+}
+
+QuickDC::BoardEntry to_core(const Qdc::BoardEntry& entry)
+{
+	QuickDC::BoardEntry converted;
+
+	converted.tth        = to_std(entry.tth);
+	converted.size       = entry.size;
+	converted.board      = to_std(entry.board);
+	converted.cid        = to_std(entry.cid);
+	converted.nick       = to_std(entry.nick);
+	converted.parent     = to_std(entry.parent);
+	converted.thread     = to_std(entry.thread);
+	converted.subject    = to_std(entry.subject);
+	converted.timestamp  = entry.timestamp;
+	converted.removed    = entry.removed;
+
+	return converted;
+}
+
+Qdc::BoardEntry from_core(const QuickDC::BoardEntry& entry)
+{
+	Qdc::BoardEntry converted;
+
+	converted.tth        = from_std(entry.tth);
+	converted.size       = entry.size;
+	converted.board      = from_std(entry.board);
+	converted.cid        = from_std(entry.cid);
+	converted.nick       = from_std(entry.nick);
+	converted.parent     = from_std(entry.parent);
+	converted.thread     = from_std(entry.thread);
+	converted.subject    = from_std(entry.subject);
+	converted.timestamp  = entry.timestamp;
+	converted.removed    = entry.removed;
+
+	return converted;
+}
+
+QuickDC::Board to_core(const Qdc::BoardInfo& board)
+{
+	QuickDC::Board converted;
+
+	converted.name         = to_std(board.name);
+	converted.title        = to_std(board.title);
+	converted.description  = to_std(board.description);
+	converted.permissions  = board.permissions;
+	converted.maxSize      = board.maxSize;
+	converted.newest       = board.newest;
+	converted.oldest       = board.oldest;
+	converted.posts        = board.posts;
+	converted.removed      = board.removed;
+
+	return converted;
+}
+
+Qdc::BoardBridge::View from_core(QuickDC::BoardIndex::View view)
+{
+	switch (view)
+	{
+		case QuickDC::BoardIndex::View::Complete:
+			return Qdc::BoardBridge::View::Complete;
+
+		case QuickDC::BoardIndex::View::Gap:
+			return Qdc::BoardBridge::View::Gap;
+
+		case QuickDC::BoardIndex::View::Unknown:
+			break;
+	}
+
+	return Qdc::BoardBridge::View::Unknown;
+}
+
+}
+
+namespace Qdc {
+
+/**
+ * The core side half of a BoardBridge: what the hubs said, and every document.
+ *
+ * Built and destroyed inside jobs on the core thread, and only ever called from
+ * there. Neither half is thread safe and both belong to the thread that drives the
+ * core, which is also the thread the share manager reports a hash on.
+ *
+ * The two are held together because most questions need both of them - where does
+ * this board resume from, and is this post held - and are separate objects in the
+ * core because they are scoped differently: an index is per hub, since a hub's
+ * assertions about a board are its own and merging two hubs' produces a board that
+ * exists nowhere, while the documents are global, since a post is named by the hash
+ * of its own bytes and is the same post wherever it is indexed.
+ */
+class BoardStore final {
+
+public:
+	BoardStore(const std::string& boards, const std::string& documents,
+	           QuickDC::Share::Manager* shares)
+		: index(boards)
+		, posts(documents, shares)
+	{
+	}
+
+	BoardStore(const BoardStore&) = delete;
+	BoardStore& operator=(const BoardStore&) = delete;
+
+	QuickDC::BoardIndex index;
+	QuickDC::PostStore posts;
+};
+
+/** Where one board stands, carried back in one piece. */
+struct BoardState {
+	quint64 cursor = 0;
+	BoardBridge::View view = BoardBridge::View::Unknown;
+};
+
+/** What the store already knows about a post somebody has asked to read. */
+struct Known {
+	/** Where the document is; empty when none is held. */
+	QString path;
+
+	/** Held, and already known not to be the post it claims to be. */
+	bool failed = false;
+};
+
+/** What verifying one document came to, ready to be emitted. */
+struct Verdict {
+	BoardPost post;
+
+	/** Empty where the post can be read, and a sentence for a person otherwise. */
+	QString reason;
+};
+
+}
+
+Qdc::BoardBridge::BoardBridge(CoreThread* thread, TransferBridge* transfers,
+                              const QString& directory, QObject* parent)
+	: QObject(parent)
+	, m_thread(thread)
+	, m_transfers(transfers)
+	, m_directory(directory.isEmpty()
+		? QDir(QDir::homePath()).filePath(QStringLiteral(".quickdc"))
+		: directory)
+	, m_stores(std::make_shared<StoreBox>())
+	, m_relay(Relay::create())
+	, m_cap(FETCH_CAP)
+	, m_concurrent(CONCURRENT_FETCHES)
+	, m_allowanceBytes(ALLOWANCE_BYTES)
+	, m_allowanceSeconds(ALLOWANCE_SECONDS)
+{
+	/*
+	 * A body on its way is written here and moved into the store once it has been
+	 * checked, which is why it is a directory of its own: the store holds what has
+	 * verified, and a file that is still arriving has been verified by nobody.
+	 *
+	 * Every name under all three is a tiger root this client has checked. Nothing a
+	 * hub said reaches a path - not a board name, of which ".." is a legal one, and
+	 * not the display name of an attachment.
+	 */
+	const QString incoming = QDir(m_directory).filePath(QStringLiteral("incoming"));
+	const QString boards = QDir(m_directory).filePath(QStringLiteral("boards"));
+	const QString documents = QDir(m_directory).filePath(QStringLiteral("posts"));
+
+	m_watch = new QTimer(this);
+	m_watch->setInterval(WATCH_INTERVAL_MS);
+
+	connect(m_watch, &QTimer::timeout, this, [this] {
+		if (m_fetching.isEmpty())
+		{
+			m_watch->stop();
+			return;
+		}
+
+		nameAuthors();
+
+		/*
+		 * Asked for rather than waited for. The answer arrives as
+		 * snapshotChanged(), where the cap is applied - so a peer that keeps
+		 * sending is stopped whether or not anything is drawing a transfer list.
+		 */
+		if (m_transfers) m_transfers->refresh();
+	});
+
+	if (m_transfers)
+	{
+		/*
+		 * A body somebody is reading is not a download somebody chose, so it stays
+		 * out of the transfer list and out of the queue view. A thread of ten
+		 * replies would otherwise be ten rows nobody asked for, in a list whose
+		 * whole purpose is what the user did ask for.
+		 */
+		m_transfers->hidePath(incoming);
+
+		connect(m_transfers, &TransferBridge::downloadCompleted, this,
+		        [this](const QString& filename, quint64, const QString& tth) {
+			const auto at = m_fetching.constFind(filename);
+			if (at == m_fetching.constEnd()) return;
+
+			const Fetch fetch = *at;
+
+			/*
+			 * The queue reports the hash it verified the file against, and it has
+			 * to be the one that was asked for. Verification below would say so
+			 * anyway; this only saves reading the file to find out.
+			 */
+			if (!tth.isEmpty() && tth != fetch.entry.tth)
+			{
+				giveUp(fetch.entry.tth, tr("What arrived is not the post that was "
+				                           "asked for."));
+				return;
+			}
+
+			adopt(fetch.hubUrl, fetch.entry, filename);
+		});
+
+		connect(m_transfers, &TransferBridge::snapshotChanged, this, [this] {
+			abandonOverCap(m_transfers->activeTransfers());
+
+			/* A document that could not be discarded a moment ago may go now. */
+			releasePending();
+		});
+	}
+
+	if (!m_thread) return;
+
+	/*
+	 * Posted rather than waited on. Both halves read a directory as they are built,
+	 * and a window that waited for that stopped drawing for as long as the core's
+	 * current turn took. Everything this bridge can be asked to do afterwards is
+	 * posted too and finds the store through the same box, so an order given before
+	 * it exists simply queues up behind it.
+	 */
+	m_thread->post([holder = m_stores, thread = m_thread,
+	                incoming = to_std(incoming), boards = to_std(boards),
+	                documents = to_std(documents)] {
+		QuickDC::Core* core = thread->core();
+
+		QDir().mkpath(from_std(incoming));
+
+		holder->store = new BoardStore(boards, documents,
+		                               core ? core->shares : nullptr);
+
+		/*
+		 * Whatever was marked to go before the last shutdown goes now, and this is
+		 * the one moment when nothing has to be vouched for: an offer to the share
+		 * manager lasts no longer than the process that made it, so a store that
+		 * has just been built is serving nothing and no upload can be holding a
+		 * handle into one of these files.
+		 */
+		for (const std::string& tth : holder->store->posts.pending())
+			holder->store->posts.release(tth);
+	});
+}
+
+Qdc::BoardBridge::~BoardBridge()
+{
+	/* Nothing in flight has anywhere to report to from here on. */
+	m_relay->detach();
+
+	if (!m_thread) return;
+
+	/*
+	 * Posted, and it does not have to block. Nothing in the core holds a pointer to
+	 * either half: neither is a listener registered anywhere, and the store listens
+	 * to the share manager only while a hash job it started is outstanding, which
+	 * its own destructor is what sees to.
+	 *
+	 * Nothing is released here, which is deliberate. A document marked to go stays
+	 * marked; marks survive a restart, and the next start-up releases them at the
+	 * one moment when nothing can be reading the file.
+	 */
+	m_thread->post([holder = m_stores] {
+		delete holder->store;
+		holder->store = nullptr;
+	});
+}
+
+QString Qdc::BoardBridge::hubKey(const QString& url)
+{
+	return HubBridge::settingsUrl(url);
+}
+
+void Qdc::BoardBridge::follow(HubBridge* hub)
+{
+	if (!hub || m_followed.contains(hub)) return;
+
+	const QString key = hubKey(hub->url());
+	m_followed.insert(hub, key);
+
+	connect(hub, &HubBridge::boardEntriesReceived, this,
+	        [this, key](const QVector<BoardEntry>& entries) {
+		store(key, entries);
+	});
+
+	connect(hub, &HubBridge::boardDescribed, this,
+	        [this, key](const BoardInfo& board) {
+		describe(key, board);
+	});
+
+	/*
+	 * The lambdas above are bound to both objects, so either one going takes them
+	 * with it. This is only so that follows() stops saying yes about a hub that has
+	 * gone, and so that a resume() answered afterwards has something to test.
+	 */
+	connect(hub, &QObject::destroyed, this, [this, hub] {
+		m_followed.remove(hub);
+	});
+}
+
+void Qdc::BoardBridge::unfollow(HubBridge* hub)
+{
+	if (!hub || !m_followed.contains(hub)) return;
+
+	m_followed.remove(hub);
+
+	disconnect(hub, &HubBridge::boardEntriesReceived, this, nullptr);
+	disconnect(hub, &HubBridge::boardDescribed, this, nullptr);
+}
+
+bool Qdc::BoardBridge::follows(HubBridge* hub) const
+{
+	return m_followed.contains(hub);
+}
+
+void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& entries)
+{
+	if (!m_thread || entries.isEmpty()) return;
+
+	/*
+	 * Converted to the core's own value type before the closure takes them: a
+	 * QString shares its buffer with its copies, and these are read on the core's
+	 * thread while this one goes on holding the originals.
+	 *
+	 * What comes back is which of them were kept, by position, rather than the
+	 * entries themselves - the caller's copies are right here, and converting them
+	 * back would be the same strings built twice.
+	 */
+	std::vector<QuickDC::BoardEntry> converted;
+	converted.reserve(entries.size());
+
+	for (const BoardEntry& entry : entries)
+		converted.push_back(to_core(entry));
+
+	m_thread->call(m_relay,
+		[holder = m_stores, converted = std::move(converted), hub = to_std(hubUrl)] {
+			QVector<int> kept;
+
+			if (!holder->store) return kept;
+
+			for (size_t n = 0; n < converted.size(); ++n)
+			{
+				const QuickDC::BoardEntry& entry = converted.at(n);
+
+				if (entry.board.empty()) continue;
+
+				/*
+				 * True for an entry that was written down, and true as well where
+				 * nothing could be written at all - an index with nowhere to write
+				 * holds nothing, so nothing it is told can be a repeat of anything,
+				 * and a live entry must not be dropped from a view because the
+				 * cache is broken. False is a duplicate from the resumption window
+				 * or a hash that is not a tiger root.
+				 */
+				if (!holder->store->index.append(hub, entry.board, entry))
+					continue;
+
+				kept.append(static_cast<int>(n));
+
+				/*
+				 * A tombstone is a request to stop holding the document, honoured
+				 * by the clients that receive it and meaningless to those that do
+				 * not - so it marks, and does not delete. The release is the other
+				 * half and waits for somebody who can say nothing is reading it.
+				 */
+				if (entry.removed) holder->store->posts.forget(entry.tth);
+			}
+
+			return kept;
+		},
+		[this, hubUrl, entries](const QVector<int>& kept) {
+			QHash<QString, QVector<BoardEntry>> byBoard;
+			bool withdrawn = false;
+
+			for (int n : kept)
+			{
+				const BoardEntry& entry = entries.at(n);
+				byBoard[entry.board].append(entry);
+
+				if (!entry.removed) continue;
+
+				withdrawn = true;
+				setState(entry.tth, PostState::Withdrawn);
+			}
+
+			for (auto at = byBoard.constBegin(); at != byBoard.constEnd(); ++at)
+				emit entriesStored(hubUrl, at.key(), at.value());
+
+			/*
+			 * Nothing is fetched here, and that is a rule rather than an omission.
+			 * A subscription is cheap and a body is not; the stream delivers an
+			 * entry within a second of the hub accepting it, so a prompt fetch names
+			 * a reader who was online and subscribed at that moment - to the author
+			 * first of all, who is the only source until somebody else has read it.
+			 */
+			if (withdrawn) releasePending();
+		});
+}
+
+void Qdc::BoardBridge::describe(const QString& hubUrl, const BoardInfo& board)
+{
+	if (!m_thread || board.name.isEmpty()) return;
+
+	const QString name = board.name;
+
+	m_thread->call(m_relay,
+		[holder = m_stores, hub = to_std(hubUrl), described = to_core(board)] {
+			BoardState state;
+
+			if (!holder->store) return state;
+
+			holder->store->index.describe(hub, described);
+
+			state.cursor = holder->store->index.cursor(hub, described.name);
+			state.view = from_core(holder->store->index.view(hub, described.name));
+
+			return state;
+		},
+		[this, hubUrl, name](const BoardState& state) {
+			/*
+			 * A descriptor is the only thing that can turn a complete view of a
+			 * board into one with a hole in it: the hub raises the oldest timestamp
+			 * it will replay, and what is between that and the cursor is not coming.
+			 * So the state is re-reported whenever one arrives, rather than waiting
+			 * to be asked.
+			 */
+			emit boardStateReady(hubUrl, name, state.cursor, state.view);
+		});
+}
+
+void Qdc::BoardBridge::loadEntries(const QString& hubUrl, const QString& board)
+{
+	if (!m_thread || board.isEmpty()) return;
+
+	m_thread->call(m_relay,
+		[holder = m_stores, hub = to_std(hubUrl), name = to_std(board)] {
+			QVector<BoardEntry> entries;
+
+			if (!holder->store) return entries;
+
+			const std::vector<QuickDC::BoardEntry> held =
+				holder->store->index.entries(hub, name);
+
+			entries.reserve(static_cast<qsizetype>(held.size()));
+
+			for (const QuickDC::BoardEntry& entry : held)
+				entries.append(from_core(entry));
+
+			return entries;
+		},
+		[this, hubUrl, board](const QVector<BoardEntry>& entries) {
+			emit entriesLoaded(hubUrl, board, entries);
+		});
+}
+
+void Qdc::BoardBridge::requestState(const QString& hubUrl, const QString& board)
+{
+	if (!m_thread || board.isEmpty()) return;
+
+	m_thread->call(m_relay,
+		[holder = m_stores, hub = to_std(hubUrl), name = to_std(board)] {
+			BoardState state;
+
+			if (!holder->store) return state;
+
+			state.cursor = holder->store->index.cursor(hub, name);
+			state.view = from_core(holder->store->index.view(hub, name));
+
+			return state;
+		},
+		[this, hubUrl, board](const BoardState& state) {
+			emit boardStateReady(hubUrl, board, state.cursor, state.view);
+		});
+}
+
+void Qdc::BoardBridge::resume(HubBridge* hub, const QString& board)
+{
+	if (!hub || !m_thread || board.isEmpty()) return;
+
+	const QString key = hubKey(hub->url());
+
+	m_thread->call(m_relay,
+		[holder = m_stores, url = to_std(key), name = to_std(board)] {
+			BoardState state;
+
+			if (!holder->store) return state;
+
+			state.cursor = holder->store->index.cursor(url, name);
+			state.view = from_core(holder->store->index.view(url, name));
+
+			return state;
+		},
+		[this, hub, key, board](const BoardState& state) {
+			/*
+			 * The hub may be gone by now: this is the answer to a question asked of
+			 * another thread. What says so is whether it is still followed, which
+			 * its own destruction sees to.
+			 */
+			if (m_followed.contains(hub)) hub->subscribeBoard(board, state.cursor);
+
+			emit boardStateReady(key, board, state.cursor, state.view);
+		});
+}
+
+Qdc::PostState Qdc::BoardBridge::postState(const QString& tth) const
+{
+	return m_state.value(tth, PostState::Announced);
+}
+
+QString Qdc::BoardBridge::attribution(const QString& tth) const
+{
+	return m_attributed.value(tth);
+}
+
+void Qdc::BoardBridge::setPrefetch(const QString& hubUrl, bool prefetch)
+{
+	if (prefetch) m_prefetch.insert(hubUrl);
+	else m_prefetch.remove(hubUrl);
+}
+
+bool Qdc::BoardBridge::prefetches(const QString& hubUrl) const
+{
+	return m_prefetch.contains(hubUrl);
+}
+
+void Qdc::BoardBridge::setServing(const QString& hubUrl, bool serving)
+{
+	if (serving == m_serving.contains(hubUrl)) return;
+
+	if (serving) m_serving.insert(hubUrl);
+	else m_serving.remove(hubUrl);
+
+	if (!m_thread) return;
+
+	/*
+	 * The documents this hub's boards were read from, and only those. A document is
+	 * named by its own bytes and is the same post on every hub that indexes it, so
+	 * the store is keyed globally - but whether it is answered for is a per-hub
+	 * setting, and the hub a document was fetched from is the one whose setting
+	 * governs it. A post fetched from two hubs follows the first of them, which is
+	 * one hub's worth of imprecision in a decision the user makes per hub.
+	 */
+	std::vector<std::string> documents;
+
+	for (auto at = m_fetchedFrom.constBegin(); at != m_fetchedFrom.constEnd(); ++at)
+	{
+		if (at.value() != hubUrl) continue;
+
+		documents.push_back(to_std(at.key()));
+	}
+
+	if (documents.empty()) return;
+
+	/*
+	 * Withheld rather than detached, for the same reason as every other withdrawal
+	 * here: marking is safe at any moment, and stopping a peer's transfer dead is
+	 * not this layer's decision to take from inside a setting being changed.
+	 */
+	m_thread->post([holder = m_stores, documents = std::move(documents), serving] {
+		if (!holder->store) return;
+
+		for (const std::string& tth : documents)
+		{
+			if (serving) holder->store->posts.serve(tth);
+			else holder->store->posts.withhold(tth);
+		}
+	});
+
+	if (!serving) releasePending();
+}
+
+bool Qdc::BoardBridge::serves(const QString& hubUrl) const
+{
+	return m_serving.contains(hubUrl);
+}
+
+void Qdc::BoardBridge::setFetchCap(quint64 bytes)
+{
+	m_cap = bytes;
+}
+
+quint64 Qdc::BoardBridge::fetchCap() const
+{
+	return m_cap;
+}
+
+void Qdc::BoardBridge::setConcurrentFetches(int fetches)
+{
+	m_concurrent = qMax(1, fetches);
+	startWaiting();
+}
+
+int Qdc::BoardBridge::concurrentFetches() const
+{
+	return m_concurrent;
+}
+
+void Qdc::BoardBridge::setBoardAllowance(quint64 bytes, int seconds)
+{
+	m_allowanceBytes = bytes;
+	m_allowanceSeconds = seconds;
+}
+
+void Qdc::BoardBridge::setCacheBounds(quint64 ageSeconds, quint64 totalBytes)
+{
+	m_ageBound = ageSeconds;
+	m_totalBound = totalBytes;
+}
+
+bool Qdc::BoardBridge::passesCap(quint64 received, quint64 declared, quint64 cap)
+{
+	if (cap > 0 && received > cap) return true;
+
+	return declared > 0 && received > declared;
+}
+
+void Qdc::BoardBridge::fetch(const QString& hubUrl, const BoardEntry& entry)
+{
+	if (entry.tth.size() != TTH_LENGTH)
+	{
+		/*
+		 * A hash that is not a tiger root names no document, could never be
+		 * fetched, and must not reach a filename. Refused here rather than passed
+		 * on, because everything below this takes the hash as a name.
+		 */
+		giveUp(entry.tth, tr("The hub named this post with something that is not a "
+		                     "hash, so there is nothing to fetch."));
+		return;
+	}
+
+	if (entry.removed)
+	{
+		giveUp(entry.tth, tr("This post has been withdrawn."));
+		return;
+	}
+
+	/* Already on its way. Asking twice is not a reason to ask a peer twice. */
+	if (m_byTth.contains(entry.tth)) return;
+
+	for (const auto& waiting : m_waiting)
+	{
+		if (waiting.second.tth == entry.tth) return;
+	}
+
+	if (!m_thread)
+	{
+		giveUp(entry.tth, tr("The core is not running."));
+		return;
+	}
+
+	/*
+	 * Asked of the store first, on the core thread. A document already held and
+	 * already verified is a post that can be read without asking anybody for
+	 * anything, and a document already known not to be the post it claims to be
+	 * must not be fetched, checked and refused over and over.
+	 */
+	m_thread->call(m_relay,
+		[holder = m_stores, tth = to_std(entry.tth)] {
+			Known known;
+
+			if (!holder->store) return known;
+
+			QuickDC::PostStore& posts = holder->store->posts;
+
+			known.failed =
+				posts.verification(tth) == QuickDC::PostStore::Verification::Failed;
+
+			if (!known.failed && posts.has(tth))
+				known.path = from_std(posts.pathFor(tth));
+
+			return known;
+		},
+		[this, hubUrl, entry](const Known& known) {
+			if (known.failed)
+			{
+				giveUp(entry.tth,
+				       tr("The document behind this post is not the post it claims "
+				          "to be, and every copy of it is these same bytes."));
+				return;
+			}
+
+			/*
+			 * Held already, so it is read and checked again rather than taken on
+			 * trust. What is cached is the outcome of verification and not the
+			 * reading of it, and this is the one path that turns a document into
+			 * something on screen.
+			 */
+			if (!known.path.isEmpty())
+			{
+				adopt(hubUrl, entry, known.path);
+				return;
+			}
+
+			startFetch(hubUrl, entry);
+		});
+}
+
+void Qdc::BoardBridge::prefetchThread(const QString& hubUrl,
+                                      const QVector<BoardEntry>& thread)
+{
+	/*
+	 * Off unless this hub has been named, and that is the whole of the check. The
+	 * extension asks that nothing be prefetched by default and that whatever is be
+	 * a per-hub decision, because reading a post is visible to whoever wrote it and
+	 * a client that quietly fetched a thread would be answering for its user.
+	 */
+	if (!prefetches(hubUrl)) return;
+
+	for (const BoardEntry& entry : thread)
+	{
+		if (entry.removed) continue;
+		if (postState(entry.tth) == PostState::Verified) continue;
+
+		fetch(hubUrl, entry);
+	}
+}
+
+void Qdc::BoardBridge::startFetch(const QString& hubUrl, const BoardEntry& entry)
+{
+	/*
+	 * The declared size is the author's claim and the cap is this client's own. An
+	 * entry declaring more than the cap is not asked for at all - and a peer cannot
+	 * be trusted to stop where it said it would, so the bound that means anything is
+	 * the one applied below to what has actually arrived.
+	 */
+	if (m_cap > 0 && entry.size > m_cap)
+	{
+		giveUp(entry.tth, tr("This post is said to be %1 bytes, which is more than "
+		                     "this client will fetch for one post.").arg(entry.size));
+		return;
+	}
+
+	if (m_fetching.size() >= m_concurrent)
+	{
+		/*
+		 * Waiting here rather than in the download queue, which is what keeps a
+		 * thread somebody opened from taking the slots of the film they asked for
+		 * last night - and what makes closing that thread again free.
+		 */
+		m_waiting.append({hubUrl, entry});
+		return;
+	}
+
+	if (!m_transfers)
+	{
+		giveUp(entry.tth, tr("There is nothing here to fetch a post with."));
+		return;
+	}
+
+	Fetch fetch;
+	fetch.hubUrl = hubUrl;
+	fetch.entry = entry;
+	fetch.path = QDir(QDir(m_directory).filePath(QStringLiteral("incoming")))
+		.filePath(entry.tth);
+	fetch.cap = entry.size > 0 && (m_cap == 0 || entry.size < m_cap) ? entry.size
+	                                                                : m_cap;
+
+	/*
+	 * Charged where the fetch actually goes out, so that one waiting behind the
+	 * concurrency bound is charged when it starts rather than when it was asked for.
+	 */
+	if (!withinAllowance(hubUrl, entry.board, fetch.cap))
+	{
+		giveUp(entry.tth, tr("This board has been asked for as much as it is allowed "
+		                     "for the moment. Try again shortly."));
+		return;
+	}
+
+	fetch.since.start();
+
+	m_fetching.insert(fetch.path, fetch);
+	m_byTth.insert(entry.tth, fetch.path);
+
+	setState(entry.tth, PostState::Fetching);
+
+	/*
+	 * The size handed to the queue is the cap rather than the declaration, so that a
+	 * peer answering an entry which declared nothing is bounded too. What goes on
+	 * the wire is "TTH/{root}", built from the hash rather than from the name, and
+	 * the hash is what the queue checks the result against.
+	 */
+	m_transfers->enqueueForReading(fetch.path, entry.tth, fetch.cap);
+
+	if (!m_watch->isActive()) m_watch->start();
+}
+
+void Qdc::BoardBridge::startWaiting()
+{
+	while (!m_waiting.isEmpty() && m_fetching.size() < m_concurrent)
+	{
+		const std::pair<QString, BoardEntry> next = m_waiting.takeFirst();
+		startFetch(next.first, next.second);
+	}
+}
+
+void Qdc::BoardBridge::giveUp(const QString& tth, const QString& reason)
+{
+	const QString path = m_byTth.take(tth);
+
+	if (!path.isEmpty())
+	{
+		m_fetching.remove(path);
+
+		/*
+		 * The partial file goes with it. They are bytes nothing describes - named
+		 * after a hash they did not turn out to have - and worth nothing to the next
+		 * attempt, which starts again from whoever answers next.
+		 */
+		if (m_transfers) m_transfers->removeFromQueue(path, true);
+	}
+
+	/*
+	 * A withdrawn post is not an unavailable one. The tombstone is what is known
+	 * about it and it is the more particular of the two, so it stands.
+	 */
+	if (postState(tth) != PostState::Withdrawn)
+		setState(tth, PostState::Unavailable);
+
+	emit postUnavailable(tth, reason);
+
+	startWaiting();
+}
+
+void Qdc::BoardBridge::setState(const QString& tth, PostState state)
+{
+	if (tth.isEmpty()) return;
+
+	const auto at = m_state.constFind(tth);
+	if (at != m_state.constEnd() && *at == state) return;
+
+	m_state.insert(tth, state);
+	emit postStateChanged(tth, state);
+}
+
+bool Qdc::BoardBridge::withinAllowance(const QString& hubUrl, const QString& board,
+                                       quint64 bytes)
+{
+	if (m_allowanceBytes == 0 || m_allowanceSeconds <= 0) return true;
+
+	Allowance& allowance = m_allowances[hubUrl + QLatin1Char('/') + board];
+
+	if (!allowance.since.isValid()
+	    || allowance.since.elapsed() > m_allowanceSeconds * 1000LL)
+	{
+		allowance.since.start();
+		allowance.spent = 0;
+	}
+
+	if (allowance.spent + bytes > m_allowanceBytes) return false;
+
+	allowance.spent += bytes;
+	return true;
+}
+
+void Qdc::BoardBridge::nameAuthors()
+{
+	if (!m_transfers) return;
+
+	for (Fetch& fetch : m_fetching)
+	{
+		if (fetch.authorNamed) continue;
+		if (fetch.since.elapsed() < AUTHOR_GRACE_MS) continue;
+
+		fetch.authorNamed = true;
+
+		/*
+		 * The search has had its chance, so the author is named at last. A source
+		 * other than the entry's own CID is preferred wherever a search turns one
+		 * up, because an author who records who fetches their post has a census of
+		 * its readers - but a post nobody else holds is unreadable without them, and
+		 * unreadable is worse than seen to be read.
+		 */
+		m_transfers->addFallbackSource(fetch.entry.tth, fetch.hubUrl,
+		                               fetch.entry.cid);
+	}
+}
+
+void Qdc::BoardBridge::abandonOverCap(const QVector<TransferInfo>& transfers)
+{
+	for (const TransferInfo& row : transfers)
+	{
+		if (row.upload) continue;
+
+		const auto at = m_fetching.constFind(row.filename);
+		if (at == m_fetching.constEnd()) continue;
+
+		if (!passesCap(row.transferred, at->entry.size, at->cap)) continue;
+
+		giveUp(at->entry.tth,
+		       tr("The peer sending this post sent more than the post was said to "
+		          "be, so the transfer was abandoned."));
+	}
+}
+
+void Qdc::BoardBridge::adopt(const QString& hubUrl, const BoardEntry& entry,
+                             const QString& path)
+{
+	if (!m_thread || path.isEmpty()) return;
+
+	const bool serving = serves(hubUrl);
+	const quint64 cap = m_cap;
+
+	m_thread->call(m_relay,
+		[holder = m_stores, file = to_std(path), wanted = to_core(entry), serving,
+		 cap] {
+			Verdict verdict;
+			verdict.post.tth = from_std(wanted.tth);
+			verdict.post.state = PostState::Unavailable;
+
+			if (!holder->store)
+			{
+				verdict.reason = BoardBridge::tr("There is nowhere to keep posts.");
+				return verdict;
+			}
+
+			QuickDC::PostStore& posts = holder->store->posts;
+
+			/*
+			 * Whether this is the store's own copy, which decides whether it is
+			 * adopted: adopting a document already held removes the file it was
+			 * handed, and handing over the store's own path would be the store
+			 * deleting the document it holds.
+			 */
+			const bool held = !file.empty() && posts.pathFor(wanted.tth) == file;
+
+			QFile document(from_std(file));
+
+			if (!document.open(QIODevice::ReadOnly))
+			{
+				verdict.reason = BoardBridge::tr("The document could not be read.");
+				return verdict;
+			}
+
+			/*
+			 * One byte past the cap, so that a file over it is recognised as over it
+			 * rather than read in full and then measured. The declared size is not
+			 * consulted here at all: it is the author's claim, and this is the check
+			 * that does not rest on one.
+			 */
+			const QByteArray bytes = cap > 0
+				? document.read(static_cast<qint64>(cap) + 1) : document.readAll();
+
+			document.close();
+
+			if (cap > 0 && static_cast<quint64>(bytes.size()) > cap)
+			{
+				verdict.reason = BoardBridge::tr(
+					"The document is larger than this client will read for one "
+					"post.");
+				return verdict;
+			}
+
+			/*
+			 * Step 1, and everything else rests on it. Until this has passed an
+			 * index entry is a stranger's description of a file that may not exist.
+			 * A copy that fails it is discarded entirely rather than remembered:
+			 * these bytes say nothing about the post, and the next peer to answer
+			 * may have the document itself.
+			 */
+			if (tiger_tree_root(bytes) != from_std(wanted.tth))
+			{
+				if (held) posts.record(wanted.tth,
+				                       QuickDC::PostStore::Verification::Failed);
+				else QFile::remove(from_std(file));
+
+				verdict.reason = BoardBridge::tr(
+					"What arrived is not the post that hash names, so it was thrown "
+					"away.");
+				return verdict;
+			}
+
+			/*
+			 * Step 2. Refused and never repaired: the document was asked for by
+			 * hash, so a reader that repaired one would hold bytes that no longer
+			 * hash to the name it requested - and would serve the repair on to the
+			 * next reader under the original name.
+			 */
+			QuickDC::Post parsed;
+
+			if (!ADC::parsePost(bytes.constData(),
+			                    static_cast<size_t>(bytes.size()), parsed))
+			{
+				/*
+				 * These bytes are the post - they hash to its name - and they are
+				 * not a post document. Every copy of it is these same bytes, so it
+				 * is unreadable for ever: kept and remembered as failed, so that it
+				 * is not fetched and refused again, and offered to nobody.
+				 */
+				if (!held) posts.adopt(wanted.tth, file);
+
+				posts.record(wanted.tth, QuickDC::PostStore::Verification::Failed);
+
+				verdict.reason = BoardBridge::tr(
+					"The document is not a post: its header does not parse.");
+				return verdict;
+			}
+
+			/* Step 3. The document is inside the hash and the entry is not. */
+			verdict.post.cid = from_std(parsed.cid);
+			verdict.post.parent = from_std(parsed.parent);
+			verdict.post.subject = from_std(parsed.subject);
+
+			/*
+			 * Read as UTF-8, which is what the extension says a header is; a body is
+			 * raw bytes, and one that cannot be decoded is replaced rather than
+			 * refused. These bytes hashed to the name they were asked for, so this
+			 * is the post, and a post is not unreadable for a byte its author got
+			 * wrong.
+			 */
+			verdict.post.body = from_std(parsed.body);
+
+			verdict.post.dated = parsed.date.has_value();
+			verdict.post.date = parsed.date.value_or(0);
+			verdict.post.richText = parsed.isRichText();
+
+			/*
+			 * Step 4, which has no automatic resolution. The document says who wrote
+			 * the post and the hub says who submitted it: two claims about two
+			 * events. Where they agree the post is that CID's; where they disagree
+			 * it is attributed to the hub's claim with the document's shown as a
+			 * claim, because the honest case - a post relayed to a second hub by
+			 * somebody who did not write it - is indistinguishable from a forgery.
+			 */
+			verdict.post.state = parsed.cid == wanted.cid ? PostState::Verified
+			                                              : PostState::Disputed;
+
+			if (!held) posts.adopt(wanted.tth, file);
+
+			posts.record(wanted.tth, QuickDC::PostStore::Verification::Verified);
+
+			/*
+			 * Offered only now, and only where the user said to answer for this
+			 * hub's posts. A disputed post is still the post its hash names - the
+			 * disagreement is about who wrote it, not about what it says - so it is
+			 * served like any other document that verified.
+			 */
+			if (serving) posts.serve(wanted.tth);
+
+			return verdict;
+		},
+		[this, hubUrl, entry](const Verdict& verdict) {
+			const QString tth = entry.tth;
+			const QString path = m_byTth.take(tth);
+
+			if (!path.isEmpty()) m_fetching.remove(path);
+
+			if (verdict.post.state == PostState::Unavailable)
+			{
+				setState(tth, PostState::Unavailable);
+				emit postUnavailable(tth, verdict.reason);
+				startWaiting();
+				return;
+			}
+
+			/*
+			 * Attributed to the hub's claim, always, and remembered so that a pane
+			 * holding only the post can say who it is from without going near the
+			 * index.
+			 */
+			m_attributed.insert(tth, entry.cid);
+			m_fetchedFrom.insert(tth, hubUrl);
+
+			setState(tth, verdict.post.state);
+			emit postReady(tth, verdict.post);
+
+			startWaiting();
+		});
+}
+
+void Qdc::BoardBridge::evictNow()
+{
+	if (!m_thread) return;
+
+	const quint64 age = m_ageBound;
+	const quint64 total = m_totalBound;
+
+	if (age == 0 && total == 0)
+	{
+		/* Nothing is bounded, so nothing is chosen - but marks may still be due. */
+		releasePending();
+		return;
+	}
+
+	const quint64 now = static_cast<quint64>(QDateTime::currentSecsSinceEpoch());
+
+	m_thread->call(m_relay,
+		[holder = m_stores, age, total, now] {
+			if (!holder->store) return 0;
+
+			QuickDC::PostStore::Bounds bounds;
+			bounds.age = age;
+			bounds.total = total;
+
+			/*
+			 * Marks and does not delete, which is what makes eviction safe to run
+			 * from a timer at all: choosing what should go is safe at any moment,
+			 * and saying when it may go is somebody else's business.
+			 */
+			return static_cast<int>(holder->store->posts.evict(bounds, now).size());
+		},
+		[this](int marked) {
+			if (marked > 0) releasePending();
+		});
+}
+
+void Qdc::BoardBridge::releasePending()
+{
+	if (!m_thread) return;
+
+	/*
+	 * What is being sent to somebody, as this thread last saw it. An upload holds an
+	 * interior pointer into the object that withdrawing a hash destroys, so a
+	 * document named by one of these is left marked and released later - and nothing
+	 * is lost by waiting, since a marked document is still readable and still
+	 * correct.
+	 */
+	QVector<TransferInfo> uploading;
+
+	if (m_transfers)
+	{
+		for (const TransferInfo& row : m_transfers->activeTransfers())
+		{
+			if (!row.upload) continue;
+
+			uploading.append(row);
+		}
+	}
+
+	std::vector<std::string> named;
+	named.reserve(uploading.size());
+
+	for (const TransferInfo& row : uploading)
+		named.push_back(to_std(QFileInfo(row.filename).fileName()));
+
+	m_thread->post([holder = m_stores, thread = m_thread, named = std::move(named)] {
+		if (!holder->store) return;
+
+		/*
+		 * Asked of the transfer manager as well as of the snapshot above, because a
+		 * snapshot is as old as the last reading and an upload may have started
+		 * since. This is the reading that cannot be stale: it is taken in the same
+		 * job as the release, between turns of the reactor, so nothing can begin
+		 * serving a file between the two.
+		 */
+		QVector<TransferInfo> live;
+
+		for (const std::string& name : named)
+		{
+			TransferInfo row;
+			row.upload = true;
+			row.filename = from_std(name);
+
+			live.append(row);
+		}
+
+		QuickDC::Core* core = thread->core();
+
+		if (core && core->transfers)
+		{
+			for (QuickDC::Transfer* transfer = core->transfers->first(); transfer;
+			     transfer = core->transfers->next())
+			{
+				if (!transfer->isUpload()) continue;
+
+				TransferInfo row;
+				row.upload = true;
+
+				if (Samurai::IO::File* file = transfer->getFile())
+					row.filename = QString::fromStdString(file->getName());
+
+				live.append(row);
+			}
+		}
+
+		QVector<QString> pending;
+
+		for (const std::string& tth : holder->store->posts.pending())
+			pending.append(from_std(tth));
+
+		for (const QString& tth : BoardBridge::releasable(pending, live))
+			holder->store->posts.release(to_std(tth));
+	});
+}
+
+QVector<QString> Qdc::BoardBridge::releasable(const QVector<QString>& pending,
+                                              const QVector<TransferInfo>& transfers)
+{
+	if (pending.isEmpty()) return pending;
+
+	QSet<QString> reading;
+
+	for (const TransferInfo& row : transfers)
+	{
+		if (!row.upload) continue;
+		if (row.filename.isEmpty()) continue;
+
+		/*
+		 * A document is filed under its hash and under nothing else, so a file being
+		 * sent names the document it holds by its last path component. Anything else
+		 * being uploaded is a shared file and is not this store's to withdraw.
+		 */
+		reading.insert(QFileInfo(row.filename).fileName());
+	}
+
+	QVector<QString> allowed;
+	allowed.reserve(pending.size());
+
+	for (const QString& tth : pending)
+	{
+		if (reading.contains(tth)) continue;
+
+		allowed.append(tth);
+	}
+
+	return allowed;
+}

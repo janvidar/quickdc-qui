@@ -6,6 +6,7 @@
 
 #include "corethread.h"
 
+#include <api/bulletins.h>
 #include <api/core.h>
 #include <api/hub.h>
 #include <chat/archive.h>
@@ -20,6 +21,17 @@ namespace {
 /** How many replies travel together, and how long the first of them waits. */
 constexpr int HIT_BATCH = 64;
 constexpr int HIT_BATCH_MS = 50;
+
+/**
+ * The same, for index entries.
+ *
+ * Larger than the batch a search uses, because a burst of entries is larger: a
+ * subscription resumed from zero replays every post a hub has ever accepted on the
+ * board, in the order it accepted them, as fast as the socket will carry them. The
+ * interval is the same, so a live board still shows a post as it arrives.
+ */
+constexpr int ENTRY_BATCH = 256;
+constexpr int ENTRY_BATCH_MS = 50;
 
 /**
  * Whether a network status means the session is over.
@@ -155,6 +167,50 @@ Qdc::UserInfo convert(const QuickDC::User* user)
 }
 
 /**
+ * A board descriptor, copied out of what the core lent us.
+ *
+ * Every string here is remote text a hub chose and lands in a dense list a user
+ * scans rather than reads, so whatever draws it strips control characters and bounds
+ * its length. The timestamps stay the integers they arrived as: a cursor is made of
+ * one, and a value that looks implausible is declined rather than corrected.
+ */
+Qdc::BoardInfo convert(const QuickDC::Board& board)
+{
+	Qdc::BoardInfo info;
+
+	info.name         = QString::fromUtf8(board.name.c_str());
+	info.title        = QString::fromUtf8(board.title.c_str());
+	info.description  = QString::fromUtf8(board.description.c_str());
+	info.permissions  = static_cast<quint32>(board.permissions);
+	info.maxSize      = board.maxSize;
+	info.newest       = board.newest;
+	info.oldest       = board.oldest;
+	info.posts        = board.posts;
+	info.removed      = board.removed;
+
+	return info;
+}
+
+/** One index entry, likewise: a copy, because the session owns the original. */
+Qdc::BoardEntry convert(const QuickDC::BoardEntry& entry)
+{
+	Qdc::BoardEntry copied;
+
+	copied.tth        = QString::fromUtf8(entry.tth.c_str());
+	copied.size       = entry.size;
+	copied.board      = QString::fromUtf8(entry.board.c_str());
+	copied.cid        = QString::fromUtf8(entry.cid.c_str());
+	copied.nick       = QString::fromUtf8(entry.nick.c_str());
+	copied.parent     = QString::fromUtf8(entry.parent.c_str());
+	copied.thread     = QString::fromUtf8(entry.thread.c_str());
+	copied.subject    = QString::fromUtf8(entry.subject.c_str());
+	copied.timestamp  = entry.timestamp;
+	copied.removed    = entry.removed;
+
+	return copied;
+}
+
+/**
  * Fill in what the core needs but a user is unlikely to type: a scheme, because
  * the core dispatches on it and has no default, and a port, because a URL
  * without one never resolves. dchub and 411 are what the reference client
@@ -282,6 +338,16 @@ public:
 				emit bridge->richTextSupportChanged(false);
 			}
 
+			/*
+			 * A connection ending cancels every subscription on it and says nothing
+			 * at all, so this side has to stop believing it holds one.
+			 */
+			if (session_ended(status) && bridge->m_bulletins)
+			{
+				bridge->m_bulletins = false;
+				bridge->bulletinsLost();
+			}
+
 			emit bridge->netStatusChanged(status);
 		});
 	}
@@ -316,6 +382,71 @@ public:
 
 			bridge->m_richText = rich;
 			emit bridge->richTextSupportChanged(rich);
+		});
+	}
+
+	/**
+	 * The current answer rather than a change, said after every SUP the hub sends -
+	 * so it is compared here against what was last reported, exactly as the markdown
+	 * extension is above.
+	 *
+	 * False is not only "no boards". It is also the whole of what says that every
+	 * subscription on this connection has been cancelled, because a hub that
+	 * withdraws the feature takes them with it and nothing else reports that.
+	 */
+	void EventBoardsAvailable(bool available) override
+	{
+		report([available](HubBridge* bridge) {
+			if (available == bridge->m_bulletins) return;
+
+			bridge->m_bulletins = available;
+
+			if (!available)
+			{
+				bridge->bulletinsLost();
+				return;
+			}
+
+			emit bridge->bulletinSupportChanged(true);
+		});
+	}
+
+	void EventBoardDescribed(const QuickDC::Board& board) override
+	{
+		const BoardInfo info = convert(board);
+
+		report([info](HubBridge* bridge) {
+			emit bridge->boardDescribed(info);
+		});
+	}
+
+	/**
+	 * Copied and batched. The reference belongs to the session and is gone on the
+	 * next line, and a resumed subscription delivers thousands of these in a burst.
+	 */
+	void EventBoardEntry(const QuickDC::BoardEntry& entry) override
+	{
+		const BoardEntry copied = convert(entry);
+
+		report([copied](HubBridge* bridge) {
+			bridge->collect(copied);
+		});
+	}
+
+	/**
+	 * A refusal names the board or the hash rather than a token, and never passes a
+	 * null: an absent field arrives as an empty string, which is what a caller
+	 * matching on one has to expect.
+	 */
+	void EventBoardRefused(int code, const char* message, const char* board,
+	                       const char* tth) override
+	{
+		const QString text = from_utf8(message);
+		const QString name = from_utf8(board);
+		const QString hash = from_utf8(tth);
+
+		report([code, text, name, hash](HubBridge* bridge) {
+			emit bridge->boardRefused(code, text, name, hash);
 		});
 	}
 
@@ -760,6 +891,24 @@ bool Qdc::HubBridge::supportsRichText() const
 	return m_richText;
 }
 
+bool Qdc::HubBridge::supportsBulletins() const
+{
+	return m_bulletins;
+}
+
+QStringList Qdc::HubBridge::subscribedBoards() const
+{
+	QStringList boards(m_subscribed.constBegin(), m_subscribed.constEnd());
+	boards.sort();
+
+	return boards;
+}
+
+bool Qdc::HubBridge::isSubscribed(const QString& board) const
+{
+	return m_subscribed.contains(board);
+}
+
 void Qdc::HubBridge::setFollowRedirects(bool follow)
 {
 	m_holder->followRedirects.store(follow, std::memory_order_relaxed);
@@ -884,6 +1033,100 @@ void Qdc::HubBridge::sendPassword(const QString& password)
 	});
 }
 
+void Qdc::HubBridge::subscribeBoard(const QString& board, quint64 timestamp)
+{
+	if (!m_thread || board.isEmpty()) return;
+
+	const QByteArray name = board.toUtf8();
+
+	/*
+	 * Recorded here rather than when the hub answers, because a subscription is not
+	 * acknowledged: entries simply start arriving, and on an empty board none do.
+	 * What this holds is therefore what was asked for, which is also what has to be
+	 * asked for again after a reconnection.
+	 */
+	m_subscribed.insert(board);
+
+	m_thread->post([holder = m_holder, name, timestamp] {
+		if (holder->session) holder->session->subscribeBoard(name.constData(),
+		                                                     timestamp);
+	});
+}
+
+void Qdc::HubBridge::unsubscribeBoard(const QString& board)
+{
+	if (!m_thread || board.isEmpty()) return;
+
+	const QByteArray name = board.toUtf8();
+
+	m_subscribed.remove(board);
+
+	m_thread->post([holder = m_holder, name] {
+		if (holder->session) holder->session->unsubscribeBoard(name.constData());
+	});
+}
+
+void Qdc::HubBridge::requestBoardEntry(const QString& board, const QString& tth)
+{
+	if (!m_thread || board.isEmpty() || tth.isEmpty()) return;
+
+	const QByteArray name = board.toUtf8();
+	const QByteArray hash = tth.toUtf8();
+
+	m_thread->post([holder = m_holder, name, hash] {
+		if (holder->session)
+			holder->session->requestEntry(name.constData(), hash.constData());
+	});
+}
+
+void Qdc::HubBridge::submitPost(const QString& tth, quint64 size,
+                                const QString& board, const QString& subject,
+                                const QString& parent)
+{
+	if (!m_thread || tth.isEmpty() || board.isEmpty()) return;
+
+	const QByteArray hash = tth.toUtf8();
+	const QByteArray name = board.toUtf8();
+	const QByteArray line = subject.toUtf8();
+	const QByteArray replyTo = parent.toUtf8();
+
+	m_thread->post([holder = m_holder, hash, size, name, line, replyTo] {
+		if (!holder->session) return;
+
+		holder->session->submitPost(hash.constData(), size, name.constData(),
+		                            line.isEmpty() ? nullptr : line.constData(),
+		                            replyTo.isEmpty() ? nullptr
+		                                              : replyTo.constData());
+	});
+}
+
+void Qdc::HubBridge::withdrawPost(const QString& tth, const QString& board)
+{
+	if (!m_thread || tth.isEmpty() || board.isEmpty()) return;
+
+	const QByteArray hash = tth.toUtf8();
+	const QByteArray name = board.toUtf8();
+
+	m_thread->post([holder = m_holder, hash, name] {
+		if (holder->session)
+			holder->session->withdrawPost(hash.constData(), name.constData());
+	});
+}
+
+void Qdc::HubBridge::bulletinsLost()
+{
+	/*
+	 * Whatever has arrived and not yet been handed over is handed over first. Those
+	 * entries were sent and are as real as any other; the subscription being gone
+	 * says nothing about them.
+	 */
+	deliverBoardEntries();
+
+	m_subscribed.clear();
+
+	emit bulletinSupportChanged(false);
+}
+
 void Qdc::HubBridge::collect(const SearchHit& hit)
 {
 	m_pendingHits.append(hit);
@@ -925,4 +1168,47 @@ void Qdc::HubBridge::deliverSearchResults()
 	going.swap(m_pendingHits);
 
 	emit searchResultsReceived(going);
+}
+
+void Qdc::HubBridge::collect(const BoardEntry& entry)
+{
+	m_pendingEntries.append(entry);
+
+	/*
+	 * Enough of them to be worth handing over now. The rest of a replay follows in
+	 * the next batch; what matters is that a board is not laid out once per entry in
+	 * it, not that any batch is exactly full.
+	 */
+	if (m_pendingEntries.size() >= ENTRY_BATCH)
+	{
+		deliverBoardEntries();
+		return;
+	}
+
+	if (!m_entryTimer)
+	{
+		m_entryTimer = new QTimer(this);
+		m_entryTimer->setSingleShot(true);
+		m_entryTimer->setInterval(ENTRY_BATCH_MS);
+
+		connect(m_entryTimer, &QTimer::timeout, this,
+		        &HubBridge::deliverBoardEntries);
+	}
+
+	/*
+	 * Started rather than restarted, so that a replay which keeps arriving is still
+	 * handed over regularly instead of being held back for as long as it lasts.
+	 */
+	if (!m_entryTimer->isActive()) m_entryTimer->start();
+}
+
+void Qdc::HubBridge::deliverBoardEntries()
+{
+	if (m_entryTimer) m_entryTimer->stop();
+	if (m_pendingEntries.isEmpty()) return;
+
+	QVector<BoardEntry> going;
+	going.swap(m_pendingEntries);
+
+	emit boardEntriesReceived(going);
 }

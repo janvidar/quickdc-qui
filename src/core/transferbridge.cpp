@@ -331,9 +331,53 @@ QVector<Qdc::TransferInfo> Qdc::TransferBridge::activeTransfers() const
 	return m_active;
 }
 
+void Qdc::TransferBridge::hidePath(const QString& prefix)
+{
+	if (prefix.isEmpty() || m_hidden.contains(prefix)) return;
+
+	m_hidden.append(prefix);
+
+	/*
+	 * The rows already gathered are dropped here rather than left to age out, so
+	 * that a caller which hides a directory before fetching into it and one which
+	 * hides it afterwards see the same list.
+	 */
+	m_active = foldByFile({}, m_queue, m_active, 0, m_hidden);
+	m_queue = markTransferring(m_queue, m_active);
+}
+
+QStringList Qdc::TransferBridge::hiddenPaths() const
+{
+	return m_hidden;
+}
+
+bool Qdc::TransferBridge::isUnder(const QString& filename,
+                                  const QStringList& prefixes)
+{
+	if (filename.isEmpty() || prefixes.isEmpty()) return false;
+
+	for (const QString& prefix : prefixes)
+	{
+		if (prefix.isEmpty()) continue;
+		if (filename == prefix) return true;
+
+		/*
+		 * The separator is what makes this a directory rather than a string: without
+		 * it "…/posts" would hide "…/postscript.pdf" as well, which is a file
+		 * somebody chose and must not vanish out of their transfer list.
+		 */
+		const QString within = prefix.endsWith(QLatin1Char('/'))
+			? prefix : prefix + QLatin1Char('/');
+
+		if (filename.startsWith(within)) return true;
+	}
+
+	return false;
+}
+
 QVector<Qdc::TransferInfo> Qdc::TransferBridge::foldByFile(
 	const QVector<TransferInfo>& chunks, const QVector<QueueEntry>& queued,
-	const QVector<TransferInfo>& previous, int sinceMs)
+	const QVector<TransferInfo>& previous, int sinceMs, const QStringList& hidden)
 {
 	QVector<TransferInfo> folded;
 	folded.reserve(chunks.size());
@@ -347,6 +391,9 @@ QVector<Qdc::TransferInfo> Qdc::TransferBridge::foldByFile(
 		/* Only a download has a ".part" to drop; a shared file may be called that. */
 		const QString name =
 			chunk.upload ? chunk.filename : final_name(chunk.filename);
+
+		/* Somebody else's business, and not this list's; see hidePath(). */
+		if (isUnder(name, hidden)) continue;
 
 		/*
 		 * A transfer with no file to name cannot be told from another one, so it
@@ -428,6 +475,9 @@ QVector<Qdc::TransferInfo> Qdc::TransferBridge::foldByFile(
 	for (const TransferInfo& before : previous)
 	{
 		if (placed.contains(before.id)) continue;
+
+		/* A row that has only just become somebody else's business goes now. */
+		if (isUnder(before.filename, hidden)) continue;
 
 		const auto moving = freshById.constFind(before.id);
 
@@ -651,9 +701,32 @@ void Qdc::TransferBridge::refresh()
 
 		if (!m_taken.isValid()) m_taken.start();
 
-		m_active = foldByFile(taken.active, taken.queued, m_active, since);
-		m_queue = markTransferring(taken.queued, m_active);
-		m_activeCount = taken.count;
+		m_active = foldByFile(taken.active, taken.queued, m_active, since, m_hidden);
+
+		QVector<QueueEntry> visible;
+		visible.reserve(taken.queued.size());
+
+		quint32 count = taken.count;
+
+		for (const QueueEntry& entry : taken.queued)
+		{
+			if (!isUnder(entry.filename, m_hidden))
+			{
+				visible.append(entry);
+				continue;
+			}
+
+			/*
+			 * Taken out of the count as well as out of the list. The count is what a
+			 * badge is drawn from, and a badge saying ten downloads is the same
+			 * disclosure as ten rows saying it - the core counts requests, so this
+			 * subtracts them the same way.
+			 */
+			count -= qMin(count, entry.activeSources);
+		}
+
+		m_queue = markTransferring(visible, m_active);
+		m_activeCount = count;
 		m_reading = false;
 
 		emit snapshotChanged();
@@ -735,6 +808,61 @@ void Qdc::TransferBridge::enqueue(const QString& filename, const QString& tth,
 		                 hash.isEmpty() ? nullptr : hash.constData(), size);
 
 		/* The queue's own event reports the new entry, which refreshes the figures. */
+	});
+}
+
+void Qdc::TransferBridge::enqueueForReading(const QString& filename,
+                                            const QString& tth, quint64 size)
+{
+	if (!m_thread || filename.isEmpty() || tth.isEmpty()) return;
+
+	const QByteArray name = filename.toUtf8();
+	const QByteArray hash = tth.toUtf8();
+
+	m_thread->post([this, name, hash, size] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->queue) return;
+
+		core->queue->add(name.constData(), hash.constData(), size);
+
+		/*
+		 * Asked for at once rather than left to the rotation, and the outcome is not
+		 * consulted: a search that was refused for asking too often, or that could
+		 * not go out because no hub is logged in, is one the rotation will make
+		 * eventually. What matters is that the file somebody is waiting on is not at
+		 * the back of a two-minute queue.
+		 */
+		core->queue->requestSourceSearch(hash.constData());
+	});
+}
+
+void Qdc::TransferBridge::addFallbackSource(const QString& tth,
+                                            const QString& hubUrl,
+                                            const QString& cid)
+{
+	if (!m_thread || tth.isEmpty() || hubUrl.isEmpty() || cid.isEmpty()) return;
+
+	const QByteArray hash = tth.toUtf8();
+	const QByteArray hub = hubUrl.toUtf8();
+	const QByteArray user = cid.toUtf8();
+
+	m_thread->post([this, hash, hub, user] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->queue) return;
+
+		QuickDC::QueueFile* file = core->queue->getFileByTTH(hash.constData());
+		if (!file) return;
+
+		/*
+		 * Somebody else has answered, so this source is not needed - and the one
+		 * being held back is the party who would learn most from being asked. The
+		 * question is settled here rather than by the caller because only the queue
+		 * knows whether its search found anybody.
+		 */
+		if (file->countSources() > 0) return;
+
+		core->queue->addKnownSource(hash.constData(), hub.constData(),
+		                            user.constData());
 	});
 }
 

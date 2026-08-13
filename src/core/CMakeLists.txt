@@ -6,6 +6,8 @@
 # Headers are listed as sources so that AUTOMOC scans them: Q_OBJECT lives in
 # every bridge header, and Q_NAMESPACE in coretypes.h.
 add_library(qdcbridge STATIC
+    boardbridge.cpp
+    boardbridge.h
     configbridge.cpp
     configbridge.h
     completed.cpp
