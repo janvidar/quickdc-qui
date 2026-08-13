@@ -628,6 +628,8 @@ void Qdc::BoardPane::setGap(bool gapped)
 
 void Qdc::BoardPane::clear()
 {
+	const bool wasReading = !m_reading.isEmpty();
+
 	m_threads->clear();
 
 	m_reading.clear();
@@ -639,11 +641,16 @@ void Qdc::BoardPane::clear()
 
 	showCompose(Compose::None);
 	refreshReading();
+
+	/* Nothing is being shown any more, which is a change of what is being read. */
+	if (wasReading) emit readingChanged(QString());
 }
 
 void Qdc::BoardPane::read(const QString& tth)
 {
-	if (tth != m_reading)
+	const bool changed = tth != m_reading;
+
+	if (changed)
 	{
 		m_reading = tth;
 
@@ -661,6 +668,13 @@ void Qdc::BoardPane::read(const QString& tth)
 		m_list->setCurrentIndex(row);
 
 	refreshReading();
+
+	/*
+	 * Said after the pane has been drawn, so that whoever acts on it is acting on a post
+	 * that is already on the screen. Only where it moved: a reader clicking the row they
+	 * are already on has opened nothing new.
+	 */
+	if (changed) emit readingChanged(m_reading);
 }
 
 void Qdc::BoardPane::selectionChanged()

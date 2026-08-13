@@ -70,6 +70,7 @@ private slots:
 	void aReplyToAPostWithdrawnWhileWritingIsNotSent();
 	void aDescriptorForAnotherBoardStartsAgain();
 	void rereadingTheBoardIsOffered();
+	void thePaneSaysWhichPostItIsShowing();
 
 private:
 	/** One index entry, with only what a given test cares about spelled out. */
@@ -1093,6 +1094,65 @@ void TestBoards::rereadingTheBoardIsOffered()
 	 * held, which is the whole point of reading the board again.
 	 */
 	QCOMPARE(pane.threads()->postCount(), 1);
+}
+
+/**
+ * The pane says which post the reading pane is showing, and says it when that changes.
+ *
+ * What a client outside the pane needs in order to know a post has been read, and the
+ * reason it is a signal of its own: read means opened by somebody, which is neither the
+ * row that happens to be selected in a list nor the body having been fetched.
+ */
+void TestBoards::thePaneSaysWhichPostItIsShowing()
+{
+	Qdc::BoardPane pane;
+
+	pane.addEntries({entry(QStringLiteral("ROOT"), base()),
+	                 entry(QStringLiteral("NEXT"), base() + 60)});
+
+	QSignalSpy showing(&pane, &Qdc::BoardPane::readingChanged);
+	QVERIFY(showing.isValid());
+
+	pane.read(QStringLiteral("ROOT"));
+
+	QCOMPARE(showing.count(), 1);
+	QCOMPARE(showing.at(0).at(0).toString(), QStringLiteral("ROOT"));
+	QCOMPARE(pane.reading(), QStringLiteral("ROOT"));
+
+	/* The same post again is not another post: nothing new has been opened. */
+	pane.read(QStringLiteral("ROOT"));
+	QCOMPARE(showing.count(), 1);
+
+	pane.read(QStringLiteral("NEXT"));
+
+	QCOMPARE(showing.count(), 2);
+	QCOMPARE(showing.at(1).at(0).toString(), QStringLiteral("NEXT"));
+
+	/*
+	 * And a post chosen in the list rather than asked for by hash arrives the same way,
+	 * which is the point of the pane saying it rather than a caller watching the list.
+	 */
+	QTreeView* list = pane.findChild<QTreeView*>(QStringLiteral("boardThreads"));
+	QVERIFY(list);
+
+	list->setCurrentIndex(pane.threads()->indexOf(QStringLiteral("ROOT")));
+
+	QCOMPARE(showing.count(), 3);
+	QCOMPARE(showing.at(2).at(0).toString(), QStringLiteral("ROOT"));
+
+	/*
+	 * Clearing the board is a change too: nothing is being shown afterwards, and a
+	 * caller left believing the last post is still open would be believing it for as
+	 * long as the pane lives.
+	 */
+	pane.clear();
+
+	QCOMPARE(showing.count(), 4);
+	QVERIFY(showing.at(3).at(0).toString().isEmpty());
+
+	/* Clearing what is already empty says nothing. */
+	pane.clear();
+	QCOMPARE(showing.count(), 4);
 }
 
 QTEST_MAIN(TestBoards)

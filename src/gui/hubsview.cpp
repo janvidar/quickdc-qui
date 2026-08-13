@@ -51,7 +51,6 @@
 #include <QSplitter>
 #include <QTimer>
 #include <QStackedWidget>
-#include <QTreeView>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -1639,14 +1638,12 @@ Qdc::BoardPane* Qdc::HubsView::openBoard(Entry& entry, const QString& board)
 	/*
 	 * Read means opened by somebody in the reading pane, which is not the same as
 	 * fetched: a post whose body nobody could be found for was still read, and one
-	 * fetched ahead of a reader was not. The pane says what is being read and does not
-	 * announce it, so the list it is chosen from is what is listened to.
+	 * fetched ahead of a reader was not. The pane says so itself, however the post came
+	 * to be on the screen - a selection, or a caller asking for one by hash.
 	 */
-	if (QTreeView* list = pane->findChild<QTreeView*>())
-	{
-		connect(list->selectionModel(), &QItemSelectionModel::currentChanged, this,
-		        [this, pane] { markRead(pane, pane->reading()); });
-	}
+	connect(pane, &BoardPane::readingChanged, this, [this, pane](const QString& tth) {
+		markRead(pane, tth);
+	});
 
 	entry.item->setExpanded(true);
 	refreshBoardItem(item, pane);

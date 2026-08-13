@@ -160,6 +160,20 @@ signals:
 	void parentRequested(const QString& tth);
 
 	/**
+	 * The reading pane is showing a different post, by whatever route.
+	 *
+	 * What a client has to hear to know a post has been read, and it is a change of what
+	 * is on the screen rather than a click: a selection, a call to read(), and the board
+	 * being cleared all reach it, while choosing the same post again does not. Empty
+	 * where nothing is being shown any more.
+	 *
+	 * Read means read. This says a post was opened and says nothing about whether its
+	 * document was ever fetched - see bodyRequested(), which is the other half and is a
+	 * request that goes out on the network where this stays here.
+	 */
+	void readingChanged(const QString& tth);
+
+	/**
 	 * A new thread, and a reply to a post.
 	 *
 	 * The subject and the body as they were typed, unreduced: they are about to become
