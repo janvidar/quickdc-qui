@@ -7,7 +7,9 @@
 #include "richtext.h"
 
 #include <QDateTime>
+#include <QFont>
 #include <QLocale>
+#include <QPalette>
 #include <QSet>
 
 #include <algorithm>
@@ -50,14 +52,37 @@ QString Qdc::BoardModel::describeTimestamp(quint64 seconds)
 	                          QLocale::ShortFormat);
 }
 
-const Qdc::BoardEntry* Qdc::BoardModel::live(const QString& tth) const
+bool Qdc::BoardModel::listable(const QString& tth) const
 {
-	if (tth.isEmpty()) return nullptr;
+	if (tth.isEmpty()) return false;
 
 	const auto found = m_entries.constFind(tth);
-	if (found == m_entries.constEnd() || found->removed) return nullptr;
+	if (found == m_entries.constEnd() || found->removed) return false;
 
-	return &found.value();
+	return !m_failed.contains(tth);
+}
+
+void Qdc::BoardModel::setVerificationFailed(const QString& tth)
+{
+	if (tth.isEmpty() || m_failed.contains(tth)) return;
+
+	m_failed.insert(tth);
+
+	/*
+	 * A rebuild, because a post leaving takes its replies with it wherever they were
+	 * drawn: they name a parent that is no longer on the board and become orphans of
+	 * the thread, which is the same arrangement as a parent that never arrived.
+	 */
+	beginResetModel();
+	rebuild();
+	endResetModel();
+}
+
+const Qdc::BoardEntry* Qdc::BoardModel::live(const QString& tth) const
+{
+	if (!listable(tth)) return nullptr;
+
+	return &m_entries.constFind(tth).value();
 }
 
 bool Qdc::BoardModel::holds(const QString& tth) const
@@ -156,6 +181,7 @@ void Qdc::BoardModel::clear()
 
 	m_entries.clear();
 	m_states.clear();
+	m_failed.clear();
 	m_nodes.clear();
 	m_nodeByTth.clear();
 	m_roots.clear();
@@ -227,7 +253,7 @@ void Qdc::BoardModel::rebuild()
 	for (auto it = m_entries.constBegin(); it != m_entries.constEnd(); ++it)
 	{
 		const BoardEntry& entry = it.value();
-		if (entry.removed) continue;
+		if (!listable(entry.tth)) continue;
 
 		if (entry.parent.isEmpty())
 		{
@@ -298,7 +324,7 @@ void Qdc::BoardModel::rebuild()
 			 */
 			for (auto it = m_entries.constBegin(); it != m_entries.constEnd(); ++it)
 			{
-				if (it->removed || m_nodeByTth.contains(it.key())) continue;
+				if (!listable(it.key()) || m_nodeByTth.contains(it.key())) continue;
 
 				queue.append(Pending{it.key(), -1, 0, false});
 			}
@@ -472,26 +498,6 @@ QModelIndex Qdc::BoardModel::parent(const QModelIndex& child) const
 	return createIndex(above.row, 0, quintptr(node->parent + 1));
 }
 
-QString Qdc::BoardModel::documentWord(PostState state) const
-{
-	switch (state)
-	{
-		/*
-		 * Not "unread": nobody has read anything, and nothing has been checked. What is
-		 * held is one line of the hub's index and the word says so.
-		 */
-		case PostState::Announced:   return tr("index only");
-
-		case PostState::Fetching:    return tr("fetching");
-		case PostState::Verified:    return tr("verified");
-		case PostState::Disputed:    return tr("disputed author");
-		case PostState::Unavailable: return tr("unavailable");
-		case PostState::Withdrawn:   return tr("withdrawn");
-	}
-
-	return QString();
-}
-
 QString Qdc::BoardModel::documentSentence(PostState state) const
 {
 	switch (state)
@@ -516,14 +522,13 @@ QString Qdc::BoardModel::documentSentence(PostState state) const
 			          "and can be tried again.");
 
 		case PostState::Withdrawn:
-			return tr("The post has been withdrawn from the hub's index.");
+			return tr("The post has been taken out of the hub's index.");
 	}
 
 	return QString();
 }
 
-QVariant Qdc::BoardModel::display(const Node& node, const BoardEntry& entry,
-                                  int column) const
+QVariant Qdc::BoardModel::display(const BoardEntry& entry, int column) const
 {
 	switch (column)
 	{
@@ -561,21 +566,6 @@ QVariant Qdc::BoardModel::display(const Node& node, const BoardEntry& entry,
 
 		case WhenColumn:
 			return describeTimestamp(entry.timestamp);
-
-		case ParentColumn:
-		{
-			/* Our words about the row, in a column of ours; see the enumerator. */
-			QStringList notes;
-
-			if (node.missingParent)   notes.append(tr("parent missing"));
-			if (node.withdrawnParent) notes.append(tr("parent withdrawn"));
-			if (node.flattened)       notes.append(tr("nesting bounded"));
-
-			return notes.join(QStringLiteral(", "));
-		}
-
-		case DocumentColumn:
-			return documentWord(stateOf(node.tth));
 
 		default:
 			break;
@@ -625,12 +615,12 @@ QString Qdc::BoardModel::tooltip(const Node& node, const BoardEntry& entry) cons
 	if (node.missingParent)
 	{
 		lines.append(tr("This reply names a parent that is not held here, which is "
-		                "ordinary: it may be withdrawn, on a board this session cannot "
-		                "read, or from another hub."));
+		                "ordinary: it may be gone from the index, on a board this "
+		                "session cannot read, or from another hub."));
 	}
 
 	if (node.withdrawnParent)
-		lines.append(tr("The post this replies to has been withdrawn."));
+		lines.append(tr("The post this replies to is no longer on the board."));
 
 	if (node.flattened)
 	{
@@ -665,7 +655,37 @@ QVariant Qdc::BoardModel::data(const QModelIndex& index, int role) const
 		/* Escaped once, over the finished text, because Qt draws a tooltip as markup. */
 		case Qt::ToolTipRole:       return RichText::literalHtml(tooltip(*node, entry));
 
-		case Qt::DisplayRole:       return display(*node, entry, index.column());
+		case Qt::ForegroundRole:
+		{
+			/*
+			 * A post nobody could be found for is dimmed rather than labelled. The
+			 * entry is the hub's and stands; what is missing is the document, which
+			 * may be on a machine that is merely switched off today - so the row
+			 * stays where it is, says what it always said, and is drawn quieter than
+			 * the posts that can be read.
+			 */
+			if (stateOf(node->tth) != PostState::Unavailable) return QVariant();
+
+			return QPalette().color(QPalette::PlaceholderText);
+		}
+
+		case Qt::FontRole:
+		{
+			/*
+			 * A reply drawn somewhere other than under the post it names is slanted,
+			 * which is a mark on the row rather than a word in it: the subject beside
+			 * it is a stranger's text, and one of our own words placed there could be
+			 * read as part of it. What is odd about the row is in the tooltip.
+			 */
+			if (!node->missingParent && !node->withdrawnParent) return QVariant();
+
+			QFont slanted;
+			slanted.setItalic(true);
+
+			return slanted;
+		}
+
+		case Qt::DisplayRole:       return display(entry, index.column());
 
 		default:                    break;
 	}
@@ -684,8 +704,6 @@ QVariant Qdc::BoardModel::headerData(int section, Qt::Orientation orientation,
 		case SubjectColumn:  return tr("Subject");
 		case AuthorColumn:   return tr("Author");
 		case WhenColumn:     return tr("Accepted");
-		case ParentColumn:   return tr("Parent");
-		case DocumentColumn: return tr("Document");
 
 		default:             break;
 	}

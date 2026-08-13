@@ -10,6 +10,7 @@
 #include <QAbstractItemModel>
 #include <QHash>
 #include <QList>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -28,9 +29,9 @@ namespace Qdc {
  * copied by the hub out of a document it has never read, so they are hints until the
  * document has been fetched and hashed; the board, the CID, the nickname, the thread
  * root and the timestamp are the hub's own and can be checked against nothing at all.
- * The model therefore says how much is known about each row - see StateRole and
- * DocumentColumn - and never lets a subject drawn before the document arrives look
- * like one that was read out of it.
+ * The model therefore says how much is known about each row - see StateRole, and the
+ * marks the rows carry rather than words - and never lets a subject drawn before the
+ * document arrives look like one that was read out of it.
  *
  * Three rules decide the shape of the tree, and each of them is the specification's
  * rather than a preference:
@@ -66,18 +67,6 @@ public:
 
 		/** When the hub says it accepted the post. */
 		WhenColumn,
-
-		/**
-		 * This client's own word about the row's parent: missing, withdrawn, or nothing.
-		 *
-		 * A column of ours rather than a marker stuck to the subject, because the
-		 * subject is a stranger's text and our words must not be mistaken for part of
-		 * it - which is exactly what BBS0 asks of a board's untrusted strings.
-		 */
-		ParentColumn,
-
-		/** How much of the document is actually known; PostState in a word. */
-		DocumentColumn,
 
 		ColumnCount
 	};
@@ -177,6 +166,36 @@ public:
 	 * since the entry that named it is gone.
 	 */
 	Qdc::PostState stateOf(const QString& tth) const;
+
+	/**
+	 * Remember that the document is here and is not the post the entry named.
+	 *
+	 * The bytes did not hash to the name they were asked for, or they did and the
+	 * header did not parse. Either way there is nothing true left to draw and no later
+	 * copy can differ, since every copy of a document named by its hash is these same
+	 * bytes - so the post leaves the board rather than sitting in it as one nobody
+	 * could read.
+	 */
+	void setVerificationFailed(const QString& tth);
+
+	/**
+	 * Whether a post is one this board will show at all.
+	 *
+	 * The single place that decides. Three things are not shown: a root nothing is
+	 * held for, a tombstone - a withdrawal takes the post out of the index and the
+	 * replies to it are separate posts that stay - and a document this client read and
+	 * found was not the post its entry named.
+	 *
+	 * A disputed post is deliberately not in here and is listed like any other. Its
+	 * bytes hashed to the name they were asked for and its header parsed; all that
+	 * disagrees is the author the document claims and the author the hub claims, and
+	 * the honest case of that is a post relayed to a second hub by somebody who did not
+	 * write it. Since that is indistinguishable from a forgery, hiding it would empty
+	 * every relayed board on the network to catch the forger who relays one post. It is
+	 * shown, attributed to the hub's claim and never to the document's, which is what
+	 * BoardPane::attribution() draws.
+	 */
+	bool listable(const QString& tth) const;
 
 	/** Whether an entry is held for this root, tombstone or not. */
 	bool holds(const QString& tth) const;
@@ -300,11 +319,8 @@ private:
 
 	const Node* nodeAt(const QModelIndex& index) const;
 
-	QVariant display(const Node& node, const Qdc::BoardEntry& entry, int column) const;
+	QVariant display(const Qdc::BoardEntry& entry, int column) const;
 	QString tooltip(const Node& node, const Qdc::BoardEntry& entry) const;
-
-	/** What this client would call the row's state, in its own words. */
-	QString documentWord(Qdc::PostState state) const;
 
 	/** The sentence a tooltip carries about that state. */
 	QString documentSentence(Qdc::PostState state) const;
@@ -316,6 +332,15 @@ private:
 
 	/** What was found out about each document, keyed by root. Outlives a rebuild. */
 	QHash<QString, Qdc::PostState> m_states;
+
+	/**
+	 * The documents that were read and were not the post they claimed to be.
+	 *
+	 * Beside the entries for the same reason the states are: it is what this client
+	 * found out about a document rather than anything a hub said, and it holds for
+	 * every board that indexes the same hash. See listable().
+	 */
+	QSet<QString> m_failed;
 
 	/**
 	 * The drawn tree. An index carries a node's position here plus one, so that zero
