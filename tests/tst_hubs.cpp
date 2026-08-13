@@ -46,6 +46,7 @@
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QTextBlock>
+#include <QTextBrowser>
 #include <QTextEdit>
 #include <QTextList>
 #include <QToolButton>
@@ -181,6 +182,7 @@ private slots:
 	void theBoardsOpenOnAHubComeBackWithIt();
 	void closingAHubLeavesNoBoardRowBehind();
 	void aComposedPostIsTheDocumentItsHashCovers();
+	void aPostWhoseDocumentIsHereIsReadWithoutAFetchPress();
 	void whatWasTypedSurvivesLeavingTheSettings();
 	void aDoctoredHubNameCannotReverseItsRow();
 	void aNicknameIsReducedInItsRowAndItsTooltip();
@@ -4130,6 +4132,144 @@ void TestHubs::aComposedPostIsTheDocumentItsHashCovers()
 	 * in the document as it was typed.
 	 */
 	QCOMPARE(bytes.mid(newline + 1), body.toUtf8());
+}
+
+/**
+ * A post whose document is on this machine appears when it is opened, with nothing
+ * pressed.
+ *
+ * This is the case a client gets wrong most easily and most visibly: the document is
+ * here - it may well be one this user wrote and the hub has just handed back - and the
+ * board still says the post has not been fetched and offers to fetch it. A body is never
+ * fetched without a reader asking because the request tells whoever answers that the post
+ * has been read; reading a file off this disk tells nobody anything, so the rule does not
+ * reach it.
+ *
+ * The board is reopened on the same directory before the post is read, so what is being
+ * checked is what the disk answers rather than what this session happened to remember.
+ */
+void TestHubs::aPostWhoseDocumentIsHereIsReadWithoutAFetchPress()
+{
+	Qdc::ConfigBridge config(m_thread);
+
+	const QString url = QStringLiteral("adc://192.0.2.57:412");
+	const QString directory = boardScratch(QStringLiteral("held"));
+	const QString key = Qdc::BoardBridge::hubKey(url);
+
+	/*
+	 * A post document, written out here rather than composed through the pane: one ADC
+	 * header, the newline that ends it, and a body. The author is the CID the entries
+	 * below carry, so the two claims agree and the post is plainly verified.
+	 */
+	const QByteArray document =
+		"IBB0 IDIPJJWEPPPLCA3PF2ZCRRYO4F2ZX2EV2JMW2KC3I SJUpgrade\n"
+		"The hub will be offline on Saturday.\n";
+
+	const QString file = QDir(m_dir.path()).filePath(QStringLiteral("post-document"));
+
+	QFile bytes(file);
+	QVERIFY(bytes.open(QIODevice::WriteOnly));
+	bytes.write(document);
+	bytes.close();
+
+	/*
+	 * The root those bytes hash to, written out rather than computed: this suite may not
+	 * reach a core header, which is part of what it is here to check, and the document
+	 * above is a constant so its root is one too. Getting it wrong is not a silent
+	 * failure - the document would not be the post the entry names, and the pane would
+	 * say so instead of showing a body.
+	 */
+	const QString tth = QStringLiteral("U6UM6DUUAR3TSK5HNKQUTP2RMD5NFLCWEFQYQHI");
+
+	const QString absent = QStringLiteral("ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6PLQ7");
+
+	{
+		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+		hubs.setBoardDirectory(directory);
+
+		QVERIFY(hubs.openHub(url));
+
+		Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+		QVERIFY(hub && hub->hub());
+
+		emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+		QVERIFY(boardPane(hubs));
+
+		emit hub->hub()->boardEntriesReceived({entry(tth, 6000),
+		                                       entry(absent, 6001)});
+
+		QSignalSpy ready(hubs.bulletins(), &Qdc::BoardBridge::postReady);
+		QVERIFY(ready.isValid());
+
+		/*
+		 * The document arrives the way one written on this machine does: it is adopted,
+		 * which takes the file it is handed into the store.
+		 */
+		hubs.bulletins()->adopt(key, entry(tth, 6000), file);
+
+		QTRY_COMPARE(ready.count(), 1);
+	}
+
+	/* The board is opened again, and the only thing that remembers is the disk. */
+	Qdc::HubsView reopened(m_thread, nullptr, m_filelists, nullptr, &config);
+	reopened.setBoardDirectory(directory);
+
+	QVERIFY(reopened.openHub(url));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(reopened.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	Qdc::BoardPane* pane = boardPane(reopened);
+	QVERIFY(pane);
+
+	QTRY_COMPARE(pane->threads()->postCount(), 2);
+	QTRY_VERIFY(reopened.bulletins()->isHeld(tth));
+
+	/* And being held is not being verified: what it came to is decided by reading it. */
+	QCOMPARE(pane->threads()->stateOf(tth), Qdc::PostState::Announced);
+
+	QSignalSpy asked(pane, &Qdc::BoardPane::bodyRequested);
+	QSignalSpy refused(reopened.bulletins(), &Qdc::BoardBridge::postUnavailable);
+
+	QVERIFY(asked.isValid());
+
+	/* Opening it is enough. Nothing is pressed and nothing is asked of anybody. */
+	pane->read(tth);
+
+	QTextBrowser* body = pane->findChild<QTextBrowser*>(QStringLiteral("boardBody"));
+	QVERIFY(body);
+
+	QTRY_VERIFY(!body->isHidden());
+	QVERIFY(body->toPlainText().contains(QStringLiteral("offline on Saturday")));
+
+	QCOMPARE(pane->threads()->stateOf(tth), Qdc::PostState::Verified);
+	QCOMPARE(asked.count(), 0);
+	QCOMPARE(refused.count(), 0);
+
+	/*
+	 * The other post's document is not here, and opening it reads nothing: a fetch is
+	 * what tells its author that somebody has read it, so that one waits to be asked
+	 * for.
+	 */
+	QVERIFY(!reopened.bulletins()->isHeld(absent));
+
+	pane->read(absent);
+
+	QTRY_VERIFY(body->isHidden());
+	QCoreApplication::processEvents();
+
+	QCOMPARE(pane->threads()->stateOf(absent), Qdc::PostState::Announced);
+	QCOMPARE(asked.count(), 0);
+	QCOMPARE(refused.count(), 0);
+
+	QLabel* state = pane->findChild<QLabel*>(QStringLiteral("boardState"));
+	QVERIFY(state);
+
+	QVERIFY2(state->text().contains(QStringLiteral("Not fetched")),
+	         qPrintable(state->text()));
 }
 
 void TestHubs::whatWasTypedSurvivesLeavingTheSettings()

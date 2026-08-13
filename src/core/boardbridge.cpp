@@ -149,12 +149,25 @@ struct Stored {
 	QVector<ReadState> boards;
 };
 
-/** What a board read back as: its entries, and what has been read of them. */
+/**
+ * What a board read back as: its entries, what has been read of them, and which of
+ * their documents are here.
+ *
+ * The documents come back with the entries because it is one walk over the same board
+ * and because the two answers belong together: a state derived from what is held has
+ * to be derived from the entries it will be shown beside.
+ */
 struct Loaded {
 	QVector<Qdc::BoardEntry> entries;
 
 	int unread = 0;
 	QVector<QString> read;
+
+	/** The documents on this disk, whatever verifying them came to. */
+	QVector<QString> held;
+
+	/** Those of them already known not to be the post they claim to be. */
+	QVector<QString> failed;
 };
 
 /** What the store already knows about a post somebody has asked to read. */
@@ -172,6 +185,16 @@ struct Verdict {
 
 	/** Empty where the post can be read, and a sentence for a person otherwise. */
 	QString reason;
+
+	/**
+	 * Whether the store holds the document now.
+	 *
+	 * Separate from the state, because the two part company in both directions: bytes
+	 * that are not the post their hash names are thrown away and leave nothing held,
+	 * while a document that hashes to its name and does not parse is kept for ever
+	 * precisely because it can never be read.
+	 */
+	bool held = false;
 };
 
 QString from_std(const std::string& text)
@@ -183,6 +206,25 @@ std::string to_std(const QString& text)
 {
 	const QByteArray utf8 = text.toUtf8();
 	return std::string(utf8.constData(), static_cast<size_t>(utf8.size()));
+}
+
+/**
+ * What the store already knows about one post.
+ *
+ * The same question whether somebody asked for a body or merely opened the post: is the
+ * document here, and is it already known not to be the post it claims to be. Where the
+ * two callers part company is in what they do when the answer is no - one asks a peer
+ * for the bytes and the other asks nobody at all.
+ */
+Known what_is_known(QuickDC::PostStore& posts, const std::string& tth)
+{
+	Known known;
+
+	known.failed = posts.verification(tth) == QuickDC::PostStore::Verification::Failed;
+
+	if (!known.failed && posts.has(tth)) known.path = from_std(posts.pathFor(tth));
+
+	return known;
 }
 
 /**
@@ -697,12 +739,26 @@ void Qdc::BoardBridge::loadEntries(const QString& hubUrl, const QString& board)
 			 * anyway. This is where the copy on the other side is filled: everything
 			 * after it is a change to a board that has been read back once.
 			 */
+			QuickDC::PostStore& posts = holder->store->posts;
+
 			for (const QuickDC::BoardEntry& entry : held)
 			{
 				loaded.entries.append(from_core(entry));
 
 				if (holder->store->index.isRead(hub, name, entry.tth))
 					loaded.read.append(from_std(entry.tth));
+
+				/*
+				 * And whether the document is here, in the same walk. Nothing else on
+				 * this side ever asks, so without this a post whose document is on the
+				 * disk reads as unfetched from the moment a board is reopened - which
+				 * it does for one written on this machine as readily as for any other.
+				 */
+				if (posts.verification(entry.tth)
+				    == QuickDC::PostStore::Verification::Failed)
+					loaded.failed.append(from_std(entry.tth));
+				else if (posts.has(entry.tth))
+					loaded.held.append(from_std(entry.tth));
 			}
 
 			loaded.unread = static_cast<int>(holder->store->index.unread(hub, name));
@@ -712,7 +768,30 @@ void Qdc::BoardBridge::loadEntries(const QString& hubUrl, const QString& board)
 		[this, hubUrl, board](const Loaded& loaded) {
 			noteRead(hubUrl, board, loaded.unread, loaded.read, true);
 
+			/*
+			 * Before the entries, so that a view told about an entry can ask whether
+			 * its document is here and get the answer that goes with it. No state is
+			 * derived from being held: what is recorded of a document is the outcome of
+			 * verification, and the author the document claims was compared against the
+			 * entry's when it was read and written down nowhere - so calling a held
+			 * document verified would draw a post the hub and the document disagree
+			 * about as one they agreed on. What happens instead is that opening the post
+			 * reads it, off this disk, and the state comes back out of the document.
+			 */
+			for (const QString& tth : loaded.held) m_held.insert(tth);
+			for (const QString& tth : loaded.failed) m_held.insert(tth);
+
 			emit entriesLoaded(hubUrl, board, loaded.entries);
+
+			/*
+			 * After them, because this is a state and a state is about a post the view
+			 * has been told about. A document that is here and is not the post it claims
+			 * to be is not an unfetched one: every copy of it is these same bytes, so
+			 * there is nothing to fetch and nothing a reader could do by asking. Said
+			 * now rather than left to a press this bridge would only refuse.
+			 */
+			for (const QString& tth : loaded.failed)
+				setState(tth, PostState::Unavailable);
 		});
 }
 
@@ -768,6 +847,11 @@ void Qdc::BoardBridge::resume(HubBridge* hub, const QString& board)
 Qdc::PostState Qdc::BoardBridge::postState(const QString& tth) const
 {
 	return m_state.value(tth, PostState::Announced);
+}
+
+bool Qdc::BoardBridge::isHeld(const QString& tth) const
+{
+	return m_held.contains(tth);
 }
 
 QString Qdc::BoardBridge::attribution(const QString& tth) const
@@ -1047,25 +1131,17 @@ void Qdc::BoardBridge::fetch(const QString& hubUrl, const BoardEntry& entry)
 	 */
 	m_thread->call(m_relay,
 		[holder = m_stores, tth = to_std(entry.tth)] {
-			Known known;
+			if (!holder->store) return Known();
 
-			if (!holder->store) return known;
-
-			QuickDC::PostStore& posts = holder->store->posts;
-
-			known.failed =
-				posts.verification(tth) == QuickDC::PostStore::Verification::Failed;
-
-			if (!known.failed && posts.has(tth))
-				known.path = from_std(posts.pathFor(tth));
-
-			return known;
+			return what_is_known(holder->store->posts, tth);
 		},
 		[this, hubUrl, entry](const Known& known) {
 			m_asking.remove(entry.tth);
 
 			if (known.failed)
 			{
+				m_held.insert(entry.tth);
+
 				giveUp(entry.tth,
 				       tr("The document behind this post is not the post it claims "
 				          "to be, and every copy of it is these same bytes."));
@@ -1080,11 +1156,100 @@ void Qdc::BoardBridge::fetch(const QString& hubUrl, const BoardEntry& entry)
 			 */
 			if (!known.path.isEmpty())
 			{
+				m_held.insert(entry.tth);
+
 				adopt(hubUrl, entry, known.path);
 				return;
 			}
 
+			m_held.remove(entry.tth);
+
 			startFetch(hubUrl, entry);
+		});
+}
+
+void Qdc::BoardBridge::readHeld(const QString& hubUrl, const BoardEntry& entry)
+{
+	if (!m_thread || !is_tiger_root(entry.tth)) return;
+
+	/*
+	 * A tombstone says more about a post than any document could, and it is what a
+	 * withdrawn post is drawn as. Nothing is read for one, and nothing is said either:
+	 * this was nobody asking for anything.
+	 */
+	if (entry.removed) return;
+
+	/* On its way already, or already being asked about: two selections are one read. */
+	if (m_byTth.contains(entry.tth) || m_asking.contains(entry.tth)) return;
+
+	/*
+	 * What this side believes, which is what a view acted on in deciding to call this,
+	 * and what the post said before - because if the document has gone since, nothing
+	 * has happened and the post has to be left saying what it said.
+	 */
+	const bool believed = isHeld(entry.tth);
+	const PostState before = postState(entry.tth);
+
+	m_asking.insert(entry.tth);
+
+	/*
+	 * Said before the store is asked rather than after it answers. Reading a document
+	 * off this disk still crosses to the core thread and back, and for that moment the
+	 * post must not go on telling the reader that nothing about it has been verified,
+	 * with a button offering to fetch a document that is on the disk in front of them.
+	 */
+	if (believed) setState(entry.tth, PostState::Fetching);
+
+	m_thread->call(m_relay,
+		[holder = m_stores, tth = to_std(entry.tth)] {
+			if (!holder->store) return Known();
+
+			return what_is_known(holder->store->posts, tth);
+		},
+		[this, hubUrl, entry, believed, before](const Known& known) {
+			m_asking.remove(entry.tth);
+
+			if (known.failed)
+			{
+				m_held.insert(entry.tth);
+
+				/*
+				 * Here, and unreadable for ever: these bytes hash to the name the entry
+				 * gave and are not a post document, so every copy of it is these same
+				 * bytes. Saying so is the whole answer - there is nothing to ask anybody
+				 * for.
+				 */
+				giveUp(entry.tth,
+				       tr("The document behind this post is not the post it claims to "
+				          "be, and every copy of it is these same bytes."));
+				return;
+			}
+
+			if (known.path.isEmpty())
+			{
+				/*
+				 * Gone after all - evicted, or released since this side last heard of
+				 * it - so nothing is asked of anybody. Falling through to a fetch here
+				 * would put a request on the network that no reader made, which is the
+				 * one thing this path exists to avoid.
+				 */
+				m_held.remove(entry.tth);
+
+				if (believed && postState(entry.tth) == PostState::Fetching)
+					setState(entry.tth, before);
+
+				return;
+			}
+
+			m_held.insert(entry.tth);
+
+			/*
+			 * Read and checked again rather than taken on trust, exactly as a fetched
+			 * document is: what the store remembers is the outcome of verification and
+			 * not the reading of it, and the author the document claims has to be
+			 * compared against the entry's again before anything is drawn.
+			 */
+			adopt(hubUrl, entry, known.path);
 		});
 }
 
@@ -1375,6 +1540,12 @@ void Qdc::BoardBridge::adopt(const QString& hubUrl, const BoardEntry& entry,
 			const bool held = posts.has(wanted.tth)
 				&& !file.empty() && posts.pathFor(wanted.tth) == file;
 
+			/*
+			 * What is here before anything is decided, so that a document already in the
+			 * store is still reported as held when it cannot even be opened.
+			 */
+			verdict.held = held;
+
 			QFile document(from_std(file));
 
 			if (!document.open(QIODevice::ReadOnly))
@@ -1438,7 +1609,7 @@ void Qdc::BoardBridge::adopt(const QString& hubUrl, const BoardEntry& entry,
 				 * is unreadable for ever: kept and remembered as failed, so that it
 				 * is not fetched and refused again, and offered to nobody.
 				 */
-				if (!held) posts.adopt(wanted.tth, file);
+				if (!held) verdict.held = posts.adopt(wanted.tth, file);
 
 				posts.record(wanted.tth, QuickDC::PostStore::Verification::Failed);
 
@@ -1476,7 +1647,7 @@ void Qdc::BoardBridge::adopt(const QString& hubUrl, const BoardEntry& entry,
 			verdict.post.state = parsed.cid == wanted.cid ? PostState::Verified
 			                                              : PostState::Disputed;
 
-			if (!held) posts.adopt(wanted.tth, file);
+			if (!held) verdict.held = posts.adopt(wanted.tth, file);
 
 			posts.record(wanted.tth, QuickDC::PostStore::Verification::Verified);
 
@@ -1498,6 +1669,15 @@ void Qdc::BoardBridge::adopt(const QString& hubUrl, const BoardEntry& entry,
 			const QString path = m_byTth.take(tth);
 
 			if (!path.isEmpty()) m_fetching.remove(path);
+
+			/*
+			 * Whether the document is here now, which is not the same news as whether
+			 * the post can be read: a document that hashes to its name and does not
+			 * parse is kept for ever precisely because every copy of it is these same
+			 * bytes, and it is answered from the disk rather than fetched again.
+			 */
+			if (verdict.held) m_held.insert(tth);
+			else m_held.remove(tth);
 
 			if (verdict.post.state == PostState::Unavailable)
 			{

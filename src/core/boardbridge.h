@@ -50,7 +50,9 @@ class TransferBridge;
  *                answers - to the author first of all, who is the only source until
  *                somebody else has read it. So a body is fetched when a user asks
  *                for it, and prefetching a thread is off unless a hub has been
- *                told otherwise.
+ *                told otherwise. A document that is already on this disk is not a
+ *                fetch at all and needs no asking - see readHeld(), since what the
+ *                rule protects is what a request tells other people.
  *   capping      independently of what the entry declares. BoardEntry::size is the
  *                author's own claim copied by the hub and bounds nothing at all;
  *                see fetchCap() and abandonOverCap().
@@ -152,6 +154,28 @@ public:
 
 	/** What this bridge last decided about a document; Announced if it knows none. */
 	PostState postState(const QString& tth) const;
+
+	/**
+	 * Whether the document behind a post is on this machine.
+	 *
+	 * Not a verdict on it, and deliberately not turned into one. What the store keeps
+	 * is the outcome of verification, and step 4 of that - the document's own author
+	 * against the one the hub claims - was settled when the document was first read
+	 * and is written down nowhere; so a board read back from disk that called its held
+	 * documents verified would present a post the two disagree about as one they
+	 * agreed on, which is the misrepresentation the six states exist to prevent. What
+	 * being held does say is that the post can be read without asking anybody for
+	 * anything.
+	 *
+	 * True as well for a document that is here and is known not to be the post it
+	 * claims to be: it is here, and it is a post nobody will ever read rather than one
+	 * to fetch. readHeld() is what tells the two apart.
+	 *
+	 * As the store last answered, and answered from memory so a pane may ask while it
+	 * is laying a post out. A document released since is found to be gone by the read
+	 * that asks for it, which is the one place it makes any difference.
+	 */
+	bool isHeld(const QString& tth) const;
 
 	/**
 	 * Who a post is attributed to: the CID of the index entry it was verified
@@ -352,6 +376,26 @@ public slots:
 	 * without asking anybody for anything.
 	 */
 	void fetch(const QString& hubUrl, const Qdc::BoardEntry& entry);
+
+	/**
+	 * Read a post whose document is already here, off this machine's own disk.
+	 *
+	 * The rule that a body is never fetched without somebody asking for it is a privacy
+	 * rule: the request goes to whoever holds the document, which at first is only its
+	 * author, so a fetch nobody asked for is a census of a post's readers. Reading a
+	 * file that is already on this disk is visible to nobody, so it takes no press - a
+	 * post this client holds simply appears when it is opened, including the one this
+	 * user wrote and the hub has just handed back.
+	 *
+	 * Nothing goes on the network whatever the answer, which is the difference between
+	 * this and fetch(). A document that turns out not to be here after all - evicted,
+	 * or released since this side last heard of it - is not asked of anybody: nothing
+	 * happens, and the post goes on waiting to be asked for.
+	 *
+	 * Answered by postReady(), and by postUnavailable() for a document that is here and
+	 * is not the post it claims to be, since every copy of that one is these same bytes.
+	 */
+	void readHeld(const QString& hubUrl, const Qdc::BoardEntry& entry);
 
 	/**
 	 * Fetch the bodies of a thread the user has opened, where the hub allows it.
@@ -625,6 +669,17 @@ private:
 	QSet<QString> m_asking;
 
 	QHash<QString, PostState> m_state;
+
+	/**
+	 * The documents this client holds, as the store last answered for them.
+	 *
+	 * Written down here because the question is asked while a view is drawing: a post
+	 * whose document is on this disk is read from it the moment somebody opens the post,
+	 * and nothing that draws may wait for the core thread to say whether it is. Filled
+	 * where a board is read back and where a document is adopted, which are the two
+	 * moments a job has just looked.
+	 */
+	QSet<QString> m_held;
 
 	/** The CID each verified document was attributed to; see attribution(). */
 	QHash<QString, QString> m_attributed;

@@ -83,6 +83,9 @@ private slots:
 	void aPostOpenedReadsAsReadAndTheBoardsCountFalls();
 	void readStateOutlivesTheBridgeThatWroteIt();
 	void aMarkThatCouldNotBeWrittenLeavesThePostUnread();
+	void aBoardReadBackKnowsWhichDocumentsItHolds();
+	void aHeldDocumentIsReadWithoutAskingAnybody();
+	void aDocumentKnownNotToBeThePostIsNotOfferedAsFetchable();
 
 private:
 	QString path(const QString& name) const;
@@ -1519,6 +1522,302 @@ void TestBridge::aMarkThatCouldNotBeWrittenLeavesThePostUnread()
 
 	QTRY_COMPARE(posts.unread(key, board), 0);
 	QVERIFY(posts.isRead(key, board, ENTRY_TTH));
+}
+
+/**
+ * A board read back off the disk knows which of its documents are here, and does not
+ * pretend to know what they came to.
+ *
+ * Nothing else on this side ever asks the store, so without this every post on a board
+ * that is reopened - or on one that comes back after a restart - reads as though its body
+ * had never been fetched, including a post written on this machine. What must not happen
+ * instead is the opposite mistake: a held document being called verified. Step 4 of
+ * verification compares the author the document claims against the one the hub claims,
+ * that comparison was made when the document was first read, and it is written down
+ * nowhere - so a post the two disagree about would come back drawn as one they agreed on.
+ */
+void TestBridge::aBoardReadBackKnowsWhichDocumentsItHolds()
+{
+
+	const QString board = QStringLiteral("general");
+	const QString directory = boards(QStringLiteral("remembers-documents"));
+	const QString hubUrl = QStringLiteral("adc://192.0.2.54:412");
+
+	Qdc::HubBridge hub(m_thread, hubUrl, this);
+	const QString key = Qdc::BoardBridge::hubKey(hub.url());
+
+	/* One document that is the post it claims to be, and one that is not. */
+	const QByteArray document =
+		post_document(AUTHOR_CID, QStringLiteral("Hub upgrade on Saturday"),
+		              "The hub will be offline on Saturday.\n");
+
+	const QByteArray junk = "this hashes to its name and is not a post document\n";
+
+	const QString readable = tth_of(document);
+	const QString unreadable = tth_of(junk);
+
+	QCOMPARE(readable.size(), 39);
+	QCOMPARE(unreadable.size(), 39);
+
+	{
+		Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
+		posts.follow(&hub);
+
+		QuickDC::HubListener* listener = listenerFor(hub);
+		QVERIFY(listener != nullptr);
+
+		/* Three entries: the two documents, and one whose body nobody ever fetched. */
+		QVERIFY(m_thread->runOnCoreBlocking([listener, board, readable, unreadable] {
+			listener->EventBoardEntry(core_entry(readable, board, AUTHOR_CID,
+			                                     1786439000));
+			listener->EventBoardEntry(core_entry(unreadable, board, AUTHOR_CID,
+			                                     1786439001));
+			listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
+			                                     1786439002));
+		}));
+
+		QTRY_COMPARE(posts.unread(key, board), 3);
+
+		const QString first = QDir(directory).filePath(QStringLiteral("first"));
+		const QString second = QDir(directory).filePath(QStringLiteral("second"));
+
+		QFile bytes(first);
+		QVERIFY(bytes.open(QIODevice::WriteOnly));
+		bytes.write(document);
+		bytes.close();
+
+		QFile other(second);
+		QVERIFY(other.open(QIODevice::WriteOnly));
+		other.write(junk);
+		other.close();
+
+		QSignalSpy ready(&posts, &Qdc::BoardBridge::postReady);
+		QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnavailable);
+
+		posts.adopt(key, bridge_entry(readable, board, AUTHOR_CID,
+		                              static_cast<quint64>(document.size())), first);
+
+		posts.adopt(key, bridge_entry(unreadable, board, AUTHOR_CID,
+		                              static_cast<quint64>(junk.size())), second);
+
+		QTRY_COMPARE(ready.count(), 1);
+		QTRY_COMPARE(refused.count(), 1);
+
+		/* Both are here from the moment they were adopted, whatever they came to. */
+		QVERIFY(posts.isHeld(readable));
+		QVERIFY(posts.isHeld(unreadable));
+		QVERIFY(!posts.isHeld(ENTRY_TTH));
+	}
+
+	/* The store is deleted inside a job, so this is where that job has finished. */
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+
+	Qdc::BoardBridge again(m_thread, nullptr, directory, this);
+
+	/* A bridge that has just been built has heard nothing at all yet. */
+	QVERIFY(!again.isHeld(readable));
+
+	QSignalSpy loaded(&again, &Qdc::BoardBridge::entriesLoaded);
+	QVERIFY(loaded.isValid());
+
+	again.loadEntries(key, board);
+
+	QTRY_COMPARE(loaded.count(), 1);
+	QCOMPARE(loaded.at(0).at(2).value<QVector<Qdc::BoardEntry>>().size(), 3);
+
+	/* What is here is here again, and the entry whose body was never fetched is not. */
+	QVERIFY2(again.isHeld(readable),
+	         "a document on the disk was forgotten when the board was read back");
+
+	QVERIFY(again.isHeld(unreadable));
+	QVERIFY(!again.isHeld(ENTRY_TTH));
+
+	/*
+	 * And being held is not a verdict. The document is read again on being opened and
+	 * the state comes out of that reading; declaring it verified here would present a
+	 * post whose author the hub and the document disagree about as one they agreed on.
+	 */
+	QCOMPARE(again.postState(readable), Qdc::PostState::Announced);
+	QCOMPARE(again.attribution(readable), QString());
+
+	/*
+	 * The one that cannot be read is the exception, because that answer does survive:
+	 * these bytes hash to the name the entry gave and are not a post, so every copy of
+	 * it is these same bytes and there is nothing for a reader to ask anybody for.
+	 */
+	QCOMPARE(again.postState(unreadable), Qdc::PostState::Unavailable);
+	QCOMPARE(again.postState(ENTRY_TTH), Qdc::PostState::Announced);
+}
+
+/**
+ * A post whose document is here is read off this disk, and nobody is asked anything.
+ *
+ * The rule that a body is never fetched without a reader asking is a privacy rule: the
+ * request goes to whoever holds the document, which at first is only its author, so a
+ * fetch nobody asked for is a census of the post's readers. Reading a file that is
+ * already here is visible to nobody, so it needs no press - and it must not be able to
+ * turn into a fetch, however stale this side's idea of what it holds has become.
+ */
+void TestBridge::aHeldDocumentIsReadWithoutAskingAnybody()
+{
+	const QString board = QStringLiteral("general");
+	const QString directory = boards(QStringLiteral("read-from-disk"));
+	const QString hubUrl = QStringLiteral("adc://192.0.2.55:412");
+
+	Qdc::TransferBridge transfers(m_thread, this);
+	Qdc::BoardBridge posts(m_thread, &transfers, directory, this);
+
+	const QByteArray document =
+		post_document(AUTHOR_CID, QStringLiteral("Hub upgrade on Saturday"),
+		              "The hub will be offline on Saturday.\n");
+
+	const QString tth = tth_of(document);
+	const QString file = QDir(directory).filePath(QStringLiteral("composed"));
+
+	QFile bytes(file);
+	QVERIFY(bytes.open(QIODevice::WriteOnly));
+	bytes.write(document);
+	bytes.close();
+
+	const Qdc::BoardEntry entry =
+		bridge_entry(tth, board, AUTHOR_CID, static_cast<quint64>(document.size()));
+
+	QSignalSpy ready(&posts, &Qdc::BoardBridge::postReady);
+	QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnavailable);
+	QVERIFY(ready.isValid());
+
+	posts.adopt(hubUrl, entry, file);
+
+	QTRY_COMPARE(ready.count(), 1);
+	QVERIFY(posts.isHeld(tth));
+
+	/*
+	 * Opened again, as a reader coming back to a post does. Fetching is momentary and is
+	 * said at once rather than when the disk answers: for the moment this takes, the
+	 * post must not go on saying that nothing about it has been verified.
+	 */
+	posts.readHeld(hubUrl, entry);
+	QCOMPARE(posts.postState(tth), Qdc::PostState::Fetching);
+
+	QTRY_COMPARE(ready.count(), 2);
+
+	const Qdc::BoardPost post = ready.at(1).at(1).value<Qdc::BoardPost>();
+
+	QCOMPARE(post.state, Qdc::PostState::Verified);
+	QCOMPARE(posts.postState(tth), Qdc::PostState::Verified);
+	QCOMPARE(post.subject, QStringLiteral("Hub upgrade on Saturday"));
+	QVERIFY(post.body.startsWith(QStringLiteral("The hub will be offline")));
+
+	/* And the document is still where it was: reading it is not adopting it again. */
+	QVERIFY(QFile::exists(QDir(directory).filePath(QStringLiteral("posts/") + tth)));
+
+	/* Nothing went out for it. This is the check that matters: the queue itself. */
+	const QByteArray hash = tth.toUtf8();
+	bool queued = true;
+
+	QVERIFY(m_thread->runOnCoreBlocking([this, hash, &queued] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->queue) return;
+
+		queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
+	}));
+
+	QVERIFY2(!queued, "reading a post that is on this disk asked a peer for it");
+
+	/*
+	 * And a post whose document is not here is left alone entirely. Not refused and not
+	 * fetched: nobody asked for this body, so nothing is said about it and nothing goes
+	 * on the network.
+	 */
+	const Qdc::BoardEntry absent = bridge_entry(OTHER_TTH, board, AUTHOR_CID, 412);
+
+	QVERIFY(!posts.isHeld(OTHER_TTH));
+
+	posts.readHeld(hubUrl, absent);
+
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QCoreApplication::processEvents();
+
+	QCOMPARE(posts.postState(OTHER_TTH), Qdc::PostState::Announced);
+	QCOMPARE(ready.count(), 2);
+	QCOMPARE(refused.count(), 0);
+
+	const QByteArray other = OTHER_TTH.toUtf8();
+	queued = true;
+
+	QVERIFY(m_thread->runOnCoreBlocking([this, other, &queued] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->queue) return;
+
+		queued = core->queue->getFileByTTH(other.constData()) != nullptr;
+	}));
+
+	QVERIFY2(!queued, "opening a post nobody holds fetched it without being asked");
+}
+
+/**
+ * A document that is here and is not the post it claims to be is not offered as
+ * something to fetch.
+ *
+ * These bytes hash to the name the entry gave, so every copy of the post is these same
+ * bytes and it is unreadable for ever. There is nobody to ask and nothing to try again,
+ * so what a reader gets is the reason - not a button that this bridge would only refuse.
+ */
+void TestBridge::aDocumentKnownNotToBeThePostIsNotOfferedAsFetchable()
+{
+	const QString board = QStringLiteral("general");
+	const QString directory = boards(QStringLiteral("never-readable"));
+	const QString hubUrl = QStringLiteral("adc://192.0.2.56:412");
+
+	Qdc::TransferBridge transfers(m_thread, this);
+	Qdc::BoardBridge posts(m_thread, &transfers, directory, this);
+
+	const QByteArray junk = "these bytes are their own name and are not a post\n";
+	const QString tth = tth_of(junk);
+
+	const QString file = QDir(directory).filePath(QStringLiteral("arrived"));
+
+	QFile bytes(file);
+	QVERIFY(bytes.open(QIODevice::WriteOnly));
+	bytes.write(junk);
+	bytes.close();
+
+	const Qdc::BoardEntry entry =
+		bridge_entry(tth, board, AUTHOR_CID, static_cast<quint64>(junk.size()));
+
+	QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnavailable);
+	QVERIFY(refused.isValid());
+
+	posts.adopt(hubUrl, entry, file);
+
+	QTRY_COMPARE(refused.count(), 1);
+
+	/* Kept, and remembered as what it is, so that it is not fetched and refused again. */
+	QVERIFY(posts.isHeld(tth));
+	QCOMPARE(posts.postState(tth), Qdc::PostState::Unavailable);
+
+	posts.readHeld(hubUrl, entry);
+
+	QTRY_COMPARE(refused.count(), 2);
+
+	QVERIFY2(refused.at(1).at(1).toString().contains(
+			QStringLiteral("not the post it claims to be")),
+	         qPrintable(refused.at(1).at(1).toString()));
+
+	QCOMPARE(posts.postState(tth), Qdc::PostState::Unavailable);
+
+	/* And nothing was asked of anybody for it, which is the point of remembering. */
+	const QByteArray hash = tth.toUtf8();
+	bool queued = true;
+
+	QVERIFY(m_thread->runOnCoreBlocking([this, hash, &queued] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->queue) return;
+
+		queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
+	}));
+
+	QVERIFY2(!queued, "a document known not to be its post was fetched again");
 }
 
 QTEST_GUILESS_MAIN(TestBridge)

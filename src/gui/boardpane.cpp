@@ -136,6 +136,20 @@ Qdc::BoardPane::BoardPane(QWidget* parent)
 	connect(m_threads, &QAbstractItemModel::modelReset,
 	        this, &BoardPane::restoreSelection);
 
+	/*
+	 * The reading area follows how much is known about the post it is showing, however
+	 * that arrives. A document that turns out to be on this machine is read the moment
+	 * somebody opens the post, and what says so is a state set while this pane is
+	 * already drawing the entry it had - so without this a reader would be left looking
+	 * at "not fetched", with a button offering to fetch it, over a document that is on
+	 * the disk in front of them.
+	 */
+	connect(m_threads, &QAbstractItemModel::dataChanged, this, [this] {
+		if (m_reading.isEmpty() || stateOfReading() == m_drawn) return;
+
+		refreshReading();
+	});
+
 	refreshBoardHeader();
 	refreshReading();
 }
@@ -734,6 +748,8 @@ void Qdc::BoardPane::refreshReading()
 
 	const BoardEntry entry = m_threads->entryOf(m_reading);
 	const PostState state = stateOfReading();
+
+	m_drawn = state;
 
 	/* Whether what is on the screen came out of a document or out of the hub's index. */
 	const bool fromDocument = m_hasPost

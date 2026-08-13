@@ -58,6 +58,7 @@ private slots:
 
 	void eachStateOfAPostIsDrawnAsADifferentThing();
 	void anAnnouncedPostIsNotDrawnAsThoughItHadBeenRead();
+	void aPostWhoseDocumentIsHereIsNotDrawnAsUnfetched();
 	void aDisputedPostIsAttributedToTheIndexAndNotToTheDocument();
 	void aPlainBodyIsNeverRenderedAsMarkdown();
 	void theWordDeleteAppearsNowhereInThePane();
@@ -717,6 +718,84 @@ void TestBoards::anAnnouncedPostIsNotDrawnAsThoughItHadBeenRead()
 
 	QCOMPARE(asked.count(), 1);
 	QCOMPARE(asked.first().first().toString(), root);
+}
+
+/**
+ * A post whose document is on this machine is not drawn as one nothing is known about.
+ *
+ * A document already here is read the moment somebody opens the post, off the disk and
+ * without asking anybody for anything, and the pane is told that by the state moving to
+ * Fetching while it is already drawing the entry. What must not be left on the screen for
+ * that moment is the unfetched wording with a button in it, over a document that is on
+ * the disk in front of the reader - so the reading area follows the state of the post it
+ * is showing rather than only what it was told at the time it was opened.
+ */
+void TestBoards::aPostWhoseDocumentIsHereIsNotDrawnAsUnfetched()
+{
+	Qdc::BoardPane pane;
+
+	const QString here = QStringLiteral("HELD");
+	const QString elsewhere = QStringLiteral("NOTHELD");
+
+	pane.addEntry(entry(here, base()));
+	pane.addEntry(entry(elsewhere, base() + 10));
+
+	pane.read(here);
+
+	QLabel* state = label(pane, "boardState");
+	QVERIFY(state);
+
+	/* As it stands, nothing has been read of it and the pane says exactly that. */
+	QVERIFY2(state->text().contains(QStringLiteral("Not fetched")),
+	         qPrintable(state->text()));
+
+	/*
+	 * And then the document turns out to be here. Nothing else happens: no post is
+	 * handed over, and the pane is told only that the post is being read.
+	 */
+	pane.threads()->setState(here, Qdc::PostState::Fetching);
+
+	QVERIFY2(!state->text().contains(QStringLiteral("Not fetched")),
+	         qPrintable(state->text()));
+
+	QVERIFY2(!state->text().contains(QStringLiteral("has been verified")),
+	         qPrintable(state->text()));
+
+	QStringList notes;
+	for (QLabel* one : pane.findChildren<QLabel*>()) notes.append(one->text());
+
+	QVERIFY2(!notes.join(QLatin1Char('\n')).contains(
+			QStringLiteral("nothing here has been checked")),
+	         qPrintable(notes.join(QLatin1Char('\n'))));
+
+	/* Nor is a document on this disk something a reader is asked to fetch. */
+	QVERIFY(!button(pane, "boardFetch")->isEnabled());
+
+	/* And the body simply appears, without anything having been pressed. */
+	QSignalSpy asked(&pane, &Qdc::BoardPane::bodyRequested);
+
+	pane.setPost(post(here, QStringLiteral("The hub will be offline on Saturday.")));
+
+	QTextBrowser* body = pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"));
+	QVERIFY(!body->isHidden());
+	QVERIFY(body->toPlainText().contains(QStringLiteral("offline on Saturday")));
+
+	QCOMPARE(asked.count(), 0);
+
+	/*
+	 * A post whose document is not here is drawn exactly as before: nothing about it has
+	 * been verified, and a reader who wants it has to ask - which is the whole of the
+	 * privacy rule this pane is built around.
+	 */
+	pane.read(elsewhere);
+
+	QCOMPARE(pane.threads()->stateOf(elsewhere), Qdc::PostState::Announced);
+
+	QVERIFY2(state->text().contains(QStringLiteral("Not fetched")),
+	         qPrintable(state->text()));
+
+	QVERIFY(button(pane, "boardFetch")->isEnabled());
+	QCOMPARE(asked.count(), 0);
 }
 
 void TestBoards::aDisputedPostIsAttributedToTheIndexAndNotToTheDocument()

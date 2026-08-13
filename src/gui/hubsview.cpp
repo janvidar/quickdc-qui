@@ -1660,8 +1660,17 @@ Qdc::BoardPane* Qdc::HubsView::openBoard(Entry& entry, const QString& board)
 	 * fetched ahead of a reader was not. The pane says so itself, however the post came
 	 * to be on the screen - a selection, or a caller asking for one by hash.
 	 */
-	connect(pane, &BoardPane::readingChanged, this, [this, pane](const QString& tth) {
+	connect(pane, &BoardPane::readingChanged, this,
+	        [this, pane, hubKey](const QString& tth) {
 		markRead(pane, tth);
+
+		/*
+		 * And where the document is already here, it is read straight off the disk. A
+		 * post opened by its reader is where a body would be fetched anyway; the only
+		 * thing being skipped is the press, and it is skipped because reading a local
+		 * file says nothing to anybody.
+		 */
+		readHeldPost(pane, hubKey, tth);
 	});
 
 	entry.item->setExpanded(true);
@@ -1763,6 +1772,24 @@ void Qdc::HubsView::markRead(BoardPane* pane, const QString& tth)
 	 * already read moves nothing.
 	 */
 	bulletins()->markRead(hubKey, pane->board(), tth);
+}
+
+void Qdc::HubsView::readHeldPost(BoardPane* pane, const QString& hubKey,
+                                 const QString& tth)
+{
+	if (!pane || tth.isEmpty()) return;
+
+	/*
+	 * The bridge as it is rather than built to be asked: without one there is nothing
+	 * held, and a post nobody holds is left alone here. Answered from memory, because
+	 * this is reached while the pane is laying the post out.
+	 */
+	if (!m_bulletins || !m_bulletins->isHeld(tth)) return;
+
+	const BoardEntry wanted = pane->threads()->entryOf(tth);
+	if (wanted.tth.isEmpty()) return;
+
+	m_bulletins->readHeld(hubKey, wanted);
 }
 
 int Qdc::HubsView::unreadOn(BoardPane* pane) const

@@ -296,6 +296,15 @@ private:
 	/** Whether m_post is the document of m_reading, rather than a leftover. */
 	bool m_hasPost = false;
 
+	/**
+	 * Which state the reading area was last drawn as.
+	 *
+	 * Kept so that a state arriving for the post being read redraws it, and so that the
+	 * rest of what moves in the list - a row appearing, a subject, a read mark - does
+	 * not. Meaningless while nothing is being read.
+	 */
+	Qdc::PostState m_drawn = Qdc::PostState::Announced;
+
 	QSplitter* m_split;
 
 	QLabel* m_title;

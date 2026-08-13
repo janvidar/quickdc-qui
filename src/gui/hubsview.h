@@ -352,6 +352,22 @@ private:
 	 */
 	void markRead(BoardPane* pane, const QString& tth);
 
+	/**
+	 * Read a post whose document is already on this machine, at once and locally.
+	 *
+	 * A body is never fetched without somebody asking, and that is a rule about what a
+	 * request tells other people: it goes to whoever holds the document, which at first
+	 * is only its author, so a fetch nobody asked for is a census of a post's readers.
+	 * Reading a file off this disk is visible to nobody, so a post that is here simply
+	 * appears when it is opened - including the one this user wrote and the hub has
+	 * handed back, which nothing should have to be pressed to see.
+	 *
+	 * A post whose document is not here is left exactly as it was, waiting to be asked
+	 * for. Asked of the bridge out of memory, because this happens while the pane is
+	 * drawing the post.
+	 */
+	void readHeldPost(BoardPane* pane, const QString& hubKey, const QString& tth);
+
 	/** Posts held on a board that nobody has opened. */
 	int unreadOn(BoardPane* pane) const;
 
