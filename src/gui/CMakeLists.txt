@@ -6,6 +6,10 @@
 # A library rather than part of the executable, so that the shell can be built
 # and driven by a test without a main().
 add_library(qdcgui STATIC
+    boardmodel.cpp
+    boardmodel.h
+    boardpane.cpp
+    boardpane.h
     chatfeed.cpp
     chatfeed.h
     chatmodel.cpp

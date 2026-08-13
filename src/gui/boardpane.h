@@ -1,0 +1,293 @@
+/*
+ * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
+ */
+
+#ifndef HAVE_QUICKDC_QUI_BOARDPANE_H
+#define HAVE_QUICKDC_QUI_BOARDPANE_H
+
+#include <core/coretypes.h>
+
+#include <QString>
+#include <QVector>
+#include <QWidget>
+
+class QLabel;
+class QLineEdit;
+class QPushButton;
+class QSplitter;
+class QTextBrowser;
+class QTreeView;
+class QUrl;
+
+namespace Qdc {
+
+class BoardModel;
+class Composer;
+
+/**
+ * One bulletin board: the threads on the left, the post being read on the right.
+ *
+ * Nothing here talks to a hub. Entries, descriptors, bodies and refusals arrive through
+ * the slots below, and everything a reader asks for leaves as a signal - so the pane can
+ * be driven through its own interface, which is also how each of the six states a post
+ * can be in is put on the screen by a test without a hub, a socket or a thread.
+ *
+ * The pane's one job is to be honest about how much is known. An index entry is the
+ * hub's description of a document that may not exist, and until the bytes have been
+ * fetched and hashed the subject on the screen is *the hub's* subject line: so nothing
+ * is fetched merely because an entry arrived, the reading pane says where each field
+ * came from, and a post that has not been read is not drawn as though it had been. The
+ * six states of PostState are six different things and each is drawn as the thing it is;
+ * collapsing any two of them would present a claim as a fact.
+ *
+ * Three further rules are the specification's and are visible in what this draws:
+ *
+ * - The word is "withdraw". Withdrawing takes an entry out of the hub's index and can
+ *   promise nothing about the document, which by then may be held by everyone who has
+ *   read it, so an interface offering to delete a post makes a promise the extension
+ *   cannot keep. "Delete" appears nowhere.
+ * - Nothing is published until its entry comes back. There is no success message in this
+ *   protocol - the entry is the acknowledgement - so a submitted post is described as
+ *   handed to the hub and nothing more, and what was typed is kept in case it is refused.
+ * - A CID is never presented as a verified identity and a nickname is never used to
+ *   attribute a post. Where the document's author and the hub's disagree, the post is
+ *   attributed to the hub's with the disagreement shown; the honest case is a post
+ *   relayed to a second hub by somebody who did not write it, and it looks exactly like
+ *   a forgery.
+ */
+class BoardPane final : public QWidget {
+	Q_OBJECT
+
+public:
+	explicit BoardPane(QWidget* parent = nullptr);
+
+	/** The index behind the thread list. */
+	BoardModel* threads() const;
+
+	/** The descriptor last given, whose permissions decide what is offered. */
+	const Qdc::BoardInfo& boardInfo() const;
+
+	QString board() const;
+
+	/** The root of the post the reading pane is showing, or empty. */
+	QString reading() const;
+
+public slots:
+	/**
+	 * What the hub says this board is.
+	 *
+	 * The permissions are what to offer a reader and not a boundary: the hub re-checks
+	 * every operation as it arrives, and one that this appeared to allow may still come
+	 * back refused - which is what reportRefusal() is for.
+	 */
+	void setBoard(const Qdc::BoardInfo& board);
+
+	void addEntry(const Qdc::BoardEntry& entry);
+	void addEntries(const QVector<Qdc::BoardEntry>& entries);
+
+	/**
+	 * A document that was fetched, hashed and read.
+	 *
+	 * The state on the post is the caller's finding, with one exception: where the
+	 * document's author disagrees with the index entry's, the post is drawn as disputed
+	 * whatever it arrived as. The pane holds both halves and can see the disagreement
+	 * itself, and drawing it as plainly verified would attribute the post to the
+	 * document's claim - which is the one thing that must not be done with it.
+	 */
+	void setPost(const Qdc::BoardPost& post);
+
+	/**
+	 * Nobody who has the document could be reached.
+	 *
+	 * Not an error and not an empty post, and never a reason to drop the entry: the
+	 * document may be on a machine that is switched off today, so the entry is kept with
+	 * its subject, its author and its date, and can be asked for again.
+	 */
+	void setPostUnavailable(const QString& tth, const QString& reason);
+
+	/**
+	 * The hub refused something.
+	 *
+	 * This extension has no token, so a refusal is matched to what it refuses by the
+	 * hash or the board it names. It is reported in the pane either way: a refusal that
+	 * names nothing recognisable is still the hub declining to do what somebody asked,
+	 * and swallowing it would leave them watching for an entry that will never arrive.
+	 *
+	 * @param code the status code, drawn as itself so that a reader can look it up.
+	 * @param description the hub's own words, which are a stranger's text.
+	 */
+	void reportRefusal(int code, const QString& description,
+	                   const QString& tth = QString(), const QString& board = QString());
+
+	/**
+	 * This view of the board has a gap that cannot be closed.
+	 *
+	 * What a hub that will not replay from far enough back leaves behind. The board is
+	 * still usable and is still shown; it is not complete, and only saying so keeps it
+	 * from looking as though it is.
+	 */
+	void setGap(bool gapped);
+
+	/** Show a post in the reading pane, selecting its row if it has one. */
+	void read(const QString& tth);
+
+	/** Forget the board: every entry, and whatever was being read. */
+	void clear();
+
+signals:
+	/**
+	 * Somebody asked to read a post, so its document has to be fetched.
+	 *
+	 * Never emitted on an entry arriving. A body is fetched on a reader's action
+	 * because fetching one tells whoever serves it that it has been read, and on a
+	 * board that census is systematic rather than incidental.
+	 */
+	void bodyRequested(const QString& tth);
+
+	/** Somebody asked for the parent of an orphaned reply, by its hash. */
+	void parentRequested(const QString& tth);
+
+	/**
+	 * A new thread, and a reply to a post.
+	 *
+	 * The subject and the body as they were typed, unreduced: they are about to become
+	 * the bytes of a document and the hash of those bytes is the post's name, so nothing
+	 * on the way out may be tidied. @a richText says the body is the markdown subset and
+	 * that the document must say so.
+	 */
+	void threadSubmitted(const QString& subject, const QString& body, bool richText);
+	void replySubmitted(const QString& parent, const QString& subject,
+	                    const QString& body, bool richText);
+
+	/** Take a post out of the hub's index. Never called deletion; see the class note. */
+	void withdrawRequested(const QString& tth);
+
+	/**
+	 * Read the whole board again from the beginning rather than from the cursor.
+	 *
+	 * Offered as an action because it is the only way a hub that reordered or removed
+	 * entries in violation of the extension becomes visible at all, and a client that
+	 * never does it has no detection whatever. What arrives is reconciled against what
+	 * is held rather than replacing it, so nothing here is thrown away first.
+	 */
+	void rereadRequested();
+
+	/** A link in a body was activated; the pane follows nothing itself. */
+	void linkActivated(const QUrl& url);
+
+private:
+	/** Which of the two things the composer is being used for, or neither. */
+	enum class Compose {
+		None,
+		Thread,
+		Reply
+	};
+
+	QWidget* buildBoardHeader();
+	QWidget* buildThreadList();
+	QWidget* buildReader();
+	QWidget* buildComposer();
+
+	/** The title, the description and what may be done here. */
+	void refreshBoardHeader();
+
+	/**
+	 * Draw the post being read, as whichever of the six states it is in.
+	 *
+	 * The one function where the honesty of this pane lives, so it decides everything
+	 * from one state rather than leaving pieces of the last post on the screen.
+	 */
+	void refreshReading();
+
+	/** Which buttons make sense for the post being read, and for this board's permissions. */
+	void refreshActions();
+
+	/** Put the selection back on the post being read, after the model rebuilt itself. */
+	void restoreSelection();
+
+	void selectionChanged();
+
+	/** The fetch button: ask for the body, or ask again after it could not be had. */
+	void fetch();
+
+	void requestParent();
+	void withdraw();
+
+	void showCompose(Compose mode);
+
+	/** The composer's send button, for a new thread or for a reply. */
+	void submit(const QString& message, bool richText);
+
+	/** What the reading pane should show about @a tth, tombstone included. */
+	Qdc::PostState stateOfReading() const;
+
+	BoardModel* m_threads;
+
+	Qdc::BoardInfo m_board;
+
+	/** The post being read, and the document for it once one has arrived. */
+	QString m_reading;
+	Qdc::BoardPost m_post;
+
+	/** Whether m_post is the document of m_reading, rather than a leftover. */
+	bool m_hasPost = false;
+
+	QSplitter* m_split;
+
+	QLabel* m_title;
+	QLabel* m_description;
+	QLabel* m_permissions;
+
+	/**
+	 * The two bands across the top: a gap that cannot be closed, and a refusal.
+	 *
+	 * Each is a label inside a widget, because a stylesheet colours the band and the ink
+	 * on it separately. They borrow the names the theme already colours for a
+	 * conversation that cannot be used: a board with a hole in it and an operation the
+	 * hub declined are the same kind of statement, and a name of their own would need a
+	 * rule that no theme in this tree has.
+	 */
+	QWidget* m_gapBand;
+	QLabel* m_gap;
+	QWidget* m_refusalBand;
+	QLabel* m_refusal;
+
+	QTreeView* m_list;
+	QPushButton* m_newThread;
+	QPushButton* m_reread;
+
+	QLabel* m_subject;
+	QLabel* m_provenance;
+	QLabel* m_author;
+	QLabel* m_dates;
+	QLabel* m_state;
+	QTextBrowser* m_body;
+
+	QPushButton* m_fetch;
+	QPushButton* m_parent;
+	QPushButton* m_reply;
+	QPushButton* m_withdraw;
+	QLabel* m_withdrawNote;
+
+	QWidget* m_composeBox;
+	QLineEdit* m_composeSubject;
+	Composer* m_composer;
+	QLabel* m_composeNote;
+	QPushButton* m_composeCancel;
+
+	Compose m_compose = Compose::None;
+
+	/**
+	 * Which post a reply being written is a reply to.
+	 *
+	 * Taken when the reply is begun rather than read off the selection when it is sent:
+	 * the list goes on arriving and a reader may well click something else while typing,
+	 * and a reply that quietly changed its parent would be answering a post its author
+	 * never saw.
+	 */
+	QString m_replyTo;
+};
+
+}
+
+#endif // HAVE_QUICKDC_QUI_BOARDPANE_H
