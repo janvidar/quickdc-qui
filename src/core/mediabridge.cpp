@@ -153,7 +153,7 @@ QString Qdc::MediaBridge::pathFor(const QString& tth) const
 	return m_offered.value(tth);
 }
 
-void Qdc::MediaBridge::attach(const QString& path)
+void Qdc::MediaBridge::attach(const QString& path, Offer offer)
 {
 	if (path.isEmpty()) return;
 
@@ -164,19 +164,26 @@ void Qdc::MediaBridge::attach(const QString& path)
 	}
 
 	const QByteArray local = path.toUtf8();
+	const bool post = offer == Offer::Post;
 
 	/*
 	 * Whether there is a listener yet is decided on the core thread rather than
 	 * here: it is built by a job of its own, and one posted before that job has run
 	 * simply queues behind it.
 	 */
-	m_thread->call(m_relay, [thread = m_thread, holder = m_attachers, local, path] {
+	m_thread->call(m_relay, [thread = m_thread, holder = m_attachers, local, path, post] {
 		QuickDC::Core* core = thread->core();
 
 		if (!core || !core->shares || !holder->attacher)
 			return MediaBridge::tr("There is nothing to offer files from.");
 
-		if (core->shares->attach(local.constData(), holder->attacher))
+		using Shares = QuickDC::Share::Manager;
+
+		if (core->shares->attach(local.constData(), holder->attacher,
+		                         post ? Shares::Persistence::Session
+		                              : Shares::Persistence::Remembered,
+		                         post ? Shares::SlotCost::Free
+		                              : Shares::SlotCost::Counted))
 			return QString();
 
 		return MediaBridge::tr("'%1' cannot be offered: it is not a file that can "

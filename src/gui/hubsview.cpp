@@ -2016,7 +2016,14 @@ void Qdc::HubsView::submitPost(Entry& entry, BoardPane* pane, const QString& par
 		pending->deleteLater();
 	});
 
-	m_media->attach(path);
+	/*
+	 * As a post and not as an attachment. A file picked for a message is remembered so
+	 * that a magnet URI in it still works next year; this one must not be, because
+	 * whether a post is served at all is worked out again at every start-up from what
+	 * the post store holds and what the user said about this hub - and a copy left in
+	 * the configuration would go on being offered underneath that.
+	 */
+	m_media->attach(path, MediaBridge::Offer::Post);
 }
 
 void Qdc::HubsView::setPasswordPrompt(PasswordPrompt prompt)
