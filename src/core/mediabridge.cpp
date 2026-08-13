@@ -109,12 +109,20 @@ Qdc::MediaBridge::~MediaBridge()
 	if (!m_thread) return;
 
 	/*
-	 * Torn down on the core thread, and only after the core has stopped calling it: the
-	 * share manager holds this pointer for as long as a hash job is outstanding. Posted
-	 * rather than waited on, because an event arriving in the meantime is addressed to
-	 * the relay and the relay is detached above.
+	 * Torn down on the core thread, and taken out of the share's books first: a file
+	 * handed to attach() is hashed on the worker thread, the share holds this pointer
+	 * until that finishes, and hashing takes as long as reading the file takes. A
+	 * window closed while a large picture is still being hashed would otherwise leave
+	 * the hash completing into a listener that has been deleted.
+	 *
+	 * Posted rather than waited on, because an event arriving in the meantime is
+	 * addressed to the relay and the relay is detached above.
 	 */
-	m_thread->post([holder = m_attachers] {
+	m_thread->post([thread = m_thread, holder = m_attachers] {
+		QuickDC::Core* core = thread->core();
+
+		if (core && core->shares) core->shares->forgetListener(holder->attacher);
+
 		delete holder->attacher;
 		holder->attacher = nullptr;
 	});

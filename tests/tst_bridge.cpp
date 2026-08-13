@@ -60,6 +60,7 @@ private slots:
 	void aBlockingCallDoesNotWaitForThePollInterval();
 	void snapshotsDoNotWaitForABusyCore();
 	void anOfferedFileIsRecognisedAfterARestart();
+	void aPostIsOfferedForTheSessionAndWithoutASlot();
 	void configRoundTripsThroughTheStore();
 	void aGroupIsReadInOneTrip();
 	void configWritesTheFileItWasGiven();
@@ -393,6 +394,88 @@ void TestBridge::anOfferedFileIsRecognisedAfterARestart()
 	              QStringLiteral("File 0"));
 	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Attachments"),
 	                 QStringLiteral("Total"), 0);
+}
+
+/**
+ * A post document and a picture reach the share by the same call and must not be
+ * offered on the same terms.
+ *
+ * Both halves matter and both were wrong. A post remembered in the configuration goes
+ * on being offered at the next start-up whatever the user said about the hub it came
+ * from; a post that takes an upload slot is turned away at the one moment its author is
+ * its only source.
+ */
+void TestBridge::aPostIsOfferedForTheSessionAndWithoutASlot()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::MediaBridge media(m_thread, &config);
+
+	const auto write = [this](const char* name, const QByteArray& content) {
+		const QString path = QDir(m_dir.path()).filePath(QLatin1String(name));
+
+		QFile file(path);
+		if (!file.open(QIODevice::WriteOnly)) return QString();
+
+		file.write(content);
+		file.close();
+
+		return path;
+	};
+
+	const QString post = write("post-document", "IBB0 IDSOMEBODY\nthe words\n");
+	const QString picture = write("holiday.jpg", "not really a picture");
+
+	QVERIFY(!post.isEmpty() && !picture.isEmpty());
+
+	QSignalSpy attached(&media, &Qdc::MediaBridge::attached);
+	QSignalSpy refused(&media, &Qdc::MediaBridge::attachFailed);
+
+	media.attach(post, Qdc::MediaBridge::Offer::Post);
+	media.attach(picture, Qdc::MediaBridge::Offer::Attachment);
+
+	QTRY_VERIFY(attached.count() + refused.count() == 2);
+
+	QVERIFY2(refused.isEmpty(),
+	         qPrintable(refused.isEmpty() ? QString()
+	                                      : refused.first().at(1).toString()));
+
+	QHash<QString, QString> hashes;
+
+	for (const QList<QVariant>& one : attached)
+		hashes.insert(one.at(0).toString(), one.at(1).toString());
+
+	const QByteArray postTth = hashes.value(post).toUtf8();
+	const QByteArray pictureTth = hashes.value(picture).toUtf8();
+
+	QVERIFY(!postTth.isEmpty() && !pictureTth.isEmpty());
+
+	bool postFree = false;
+	bool pictureFree = false;
+	int remembered = -1;
+
+	QVERIFY(m_thread->runOnCoreBlocking([&] {
+		QuickDC::Core* core = QuickDC::Core::getInstance();
+		if (!core || !core->shares || !core->config) return;
+
+		postFree = core->shares->isSlotFreeByTTH(postTth.constData());
+		pictureFree = core->shares->isSlotFreeByTTH(pictureTth.constData());
+
+		/*
+		 * Detaching the picture is what makes the group be written - nothing else in a
+		 * test's lifetime does, so an assertion on the configuration without it passes
+		 * whatever either attachment asked for - and it is also what makes the answer
+		 * mean something: the picture is remembered and is going, so what is left is
+		 * whatever else was remembered. Nothing, if the post was for the session; the
+		 * post, if it was not.
+		 */
+		core->shares->detach(pictureTth.constData());
+
+		remembered = core->config->peekNumber("Attachments", "Total", -1);
+	}));
+
+	QVERIFY(postFree);
+	QVERIFY(!pictureFree);
+	QCOMPARE(remembered, 0);
 }
 
 void TestBridge::configRoundTripsThroughTheStore()
