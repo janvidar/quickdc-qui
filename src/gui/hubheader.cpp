@@ -66,6 +66,15 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	m_title->setFont(titleFont);
 	m_title->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
+	/*
+	 * Both lines hold a name somebody else chose, and a QLabel left to itself guesses at
+	 * whether what it was given is rich text - so a hub calling itself "<b>Best</b> Hub"
+	 * would be setting the type in the client's own header. Said outright rather than
+	 * guessed, which is the same reason renderMarkdown() exists.
+	 */
+	m_title->setTextFormat(Qt::PlainText);
+	m_subtitle->setTextFormat(Qt::PlainText);
+
 	QFont subtitleFont = m_subtitle->font();
 	subtitleFont.setPointSize(qMax(1, subtitleFont.pointSize() - 1));
 	m_subtitle->setFont(subtitleFont);

@@ -1362,6 +1362,17 @@ QString Qdc::RichText::displayText(const QString& text)
 			continue;
 		}
 
+		/*
+		 * Not control characters by category, but Qt breaks a line on both of them, so a
+		 * name carrying one would be two lines tall in a list of one-line rows. Treated
+		 * as the line breaks they are.
+		 */
+		if (u == 0x2028 || u == 0x2029)
+		{
+			out += QLatin1Char(' ');
+			continue;
+		}
+
 		/* The embeddings and overrides, and the isolates that replaced them. */
 		if ((u >= 0x202a && u <= 0x202e) || (u >= 0x2066 && u <= 0x2069))
 		{
@@ -1392,9 +1403,9 @@ QString Qdc::RichText::displayText(const QString& text)
 	qsizetype cut = DISPLAY_LIMIT - 1;
 
 	/*
-	 * A character outside the BMP is two units here, and cutting between them leaves an
-	 * unpaired surrogate - which is not a character at all, and draws as whatever the
-	 * font database has nothing for. The pair goes whole or not at all.
+	 * A character outside the BMP is two units here, and a cut between them would leave
+	 * an unpaired surrogate - which is not a character at all, and does not survive being
+	 * converted to anything else. The pair goes whole or not at all.
 	 */
 	if (cut > 0 && out.at(cut - 1).isHighSurrogate()) --cut;
 

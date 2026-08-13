@@ -124,11 +124,9 @@ QVariant Qdc::HubListModel::data(const QModelIndex& index, int role) const
 
 		case AddressColumn:
 			/*
-			 * Every one of these four is a field of a hublist entry, which is to say a
-			 * string a stranger wrote and this table draws. The address is disarmed like
-			 * the rest of them - a host name reordered by an override is the whole of
-			 * how one hub is made to look like another - while AddressRole above stays
-			 * verbatim, because that is the one anything connecting goes by.
+			 * Disarmed like the name and the description above it, since a host name
+			 * reordered by an override is how one hub is dressed up as another. What
+			 * connecting and bookmarking go by is AddressRole, which stays verbatim.
 			 */
 			return RichText::displayText(hub.address);
 

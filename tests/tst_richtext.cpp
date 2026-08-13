@@ -1217,6 +1217,12 @@ void TestRichText::aHostileNameIsDisarmedBeforeItIsDrawn()
 	QCOMPARE(displayText(QStringLiteral("two\nlines\there")),
 	         QStringLiteral("two lines here"));
 
+	/* Qt breaks a line on the separators as readily as on a newline. */
+	QCOMPARE(displayText(QStringLiteral("two") + QChar(0x2028)
+	                     + QStringLiteral("lines") + QChar(0x2029)
+	                     + QStringLiteral("here")),
+	         QStringLiteral("two lines here"));
+
 	/* C1 is as invisible as C0 and as little use in a row of a list. */
 	QCOMPARE(displayText(QStringLiteral("a") + QChar(0x0085) + QChar(0x009f)
 	                     + QStringLiteral("b")),

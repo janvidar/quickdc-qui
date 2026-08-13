@@ -299,7 +299,8 @@ QString toPlainText(const QString& markdown);
  *
  * Control characters go. C0 and C1 are nothing a list row wants, and the five whitespace
  * ones become one space each rather than vanishing, so that a description written on two
- * lines reads as one instead of having its words run together.
+ * lines reads as one instead of having its words run together. The line and paragraph
+ * separators are treated the same way, being line breaks in everything Qt draws.
  *
  * The bidirectional embeddings, overrides and isolates are replaced with U+FFFD rather
  * than removed. One unterminated override reverses everything after it - "photo<RLO>gpj.exe"
