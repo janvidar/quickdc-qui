@@ -1418,7 +1418,21 @@ Qdc::BoardBridge* Qdc::HubsView::bulletins()
 
 	connect(m_bulletins, &BoardBridge::postUnavailable, this,
 	        [this](const QString& tth, const QString& reason) {
-		for (BoardPane* pane : panesHolding(tth)) pane->setPostUnavailable(tth, reason);
+		/*
+		 * Which of the two this is, and they are not alike. A document nobody could be
+		 * reached for is an entry to keep and to ask about again - the copy that is
+		 * missing today may be on a client that is switched off. A document that is
+		 * here and still could not be read is one that is not the post its entry named,
+		 * since every copy of a document named by its hash is these same bytes: there
+		 * is nothing true left to show, and the post goes off the board.
+		 */
+		const bool unreadable = m_bulletins->isHeld(tth);
+
+		for (BoardPane* pane : panesHolding(tth))
+		{
+			if (unreadable) pane->setPostUnverifiable(tth);
+			else pane->setPostUnavailable(tth, reason);
+		}
 	});
 
 	connect(m_bulletins, &BoardBridge::postStateChanged, this,
