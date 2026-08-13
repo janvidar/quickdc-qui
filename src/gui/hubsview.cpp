@@ -1804,6 +1804,27 @@ void Qdc::HubsView::submitPost(Entry& entry, BoardPane* pane, const QString& par
 		return;
 	}
 
+	const quint64 composed =
+		static_cast<quint64>(QDateTime::currentSecsSinceEpoch());
+
+	const QByteArray bytes = post_document(cid, parent, oneLine, body, richText,
+	                                       composed);
+
+	/*
+	 * Measured against what the hub said it takes, before anything is written or sent.
+	 * The limit is on the descriptor and the hub enforces it against the size declared
+	 * at submission, so there is no reason to learn it by being refused.
+	 */
+	const quint64 allowed = pane->boardInfo().maxSize;
+
+	if (allowed > 0 && static_cast<quint64>(bytes.size()) > allowed)
+	{
+		QMessageBox::information(this, tr("Post"),
+			tr("This post is %1 bytes and this board takes at most %2, so it would be "
+			   "refused. It has to be shorter.").arg(bytes.size()).arg(allowed));
+		return;
+	}
+
 	const QString folder = composed_post_folder();
 
 	if (!QDir().mkpath(folder))
@@ -1813,9 +1834,6 @@ void Qdc::HubsView::submitPost(Entry& entry, BoardPane* pane, const QString& par
 			   "can send is not published.").arg(folder));
 		return;
 	}
-
-	const quint64 composed =
-		static_cast<quint64>(QDateTime::currentSecsSinceEpoch());
 
 	/*
 	 * Named for when it was written, because its own name is its hash and that is not
@@ -1833,9 +1851,6 @@ void Qdc::HubsView::submitPost(Entry& entry, BoardPane* pane, const QString& par
 			tr("This post could not be written to '%1'.").arg(path));
 		return;
 	}
-
-	const QByteArray bytes = post_document(cid, parent, oneLine, body, richText,
-	                                       composed);
 
 	if (document.write(bytes) != bytes.size())
 	{
