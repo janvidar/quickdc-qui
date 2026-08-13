@@ -176,6 +176,8 @@ private slots:
 	void openingABoardIsWhatSubscribesToIt();
 	void aHubWithoutBoardsForgetsWhatWasSubscribed();
 	void postsNobodyHasOpenedReachTheRailBadge();
+	void theBadgeStillCountsWhatWasUnreadAfterARestore();
+	void markingABoardReadFromItsRowClearsTheCount();
 	void theBoardsOpenOnAHubComeBackWithIt();
 	void closingAHubLeavesNoBoardRowBehind();
 	void aComposedPostIsTheDocumentItsHashCovers();
@@ -3769,6 +3771,170 @@ void TestHubs::postsNobodyHasOpenedReachTheRailBadge()
 	/* And a post read twice is not read twice. */
 	pane->read(first);
 	QCOMPARE(hubs.badgeCount(), 0);
+}
+
+/**
+ * The badge still counts what nobody has read after the client has been restarted.
+ *
+ * Read state lives in the index on disk, so a post opened in one session is still read
+ * in the next and a board nobody has looked at for a week still says so. A read set that
+ * lasted as long as the window would count both posts here.
+ */
+void TestHubs::theBadgeStillCountsWhatWasUnreadAfterARestore()
+{
+	using Qdc::ConfigStore;
+
+	Qdc::ConfigBridge config(m_thread);
+
+	const QString url = QStringLiteral("adc://192.0.2.51:412");
+	const QString directory = boardScratch(QStringLiteral("restored"));
+
+	const QString first = QStringLiteral("N6PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAV");
+	const QString second = QStringLiteral("6PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN");
+
+	{
+		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+		hubs.setBoardDirectory(directory);
+
+		QVERIFY(hubs.openHub(url));
+
+		Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+		QVERIFY(hub && hub->hub());
+
+		emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+		Qdc::BoardPane* pane = boardPane(hubs);
+		QVERIFY(pane);
+
+		emit hub->hub()->boardEntriesReceived({entry(first, 4000),
+		                                       entry(second, 4001)});
+
+		QTRY_COMPARE(hubs.badgeCount(), 2);
+
+		/* One of the two opened in the reading pane, which is what reads it. */
+		pane->read(first);
+		QTRY_COMPARE(hubs.badgeCount(), 1);
+	}
+
+	/*
+	 * The list of windows is narrowed to this one hub, as the session test above does
+	 * it: what is being checked is what a hub comes back saying, not which hubs come
+	 * back.
+	 */
+	config.setNumber(ConfigStore::Application, QStringLiteral("Windows"),
+	                 QStringLiteral("Total"), 1);
+	config.setString(ConfigStore::Application, QStringLiteral("Windows"),
+	                 QStringLiteral("Hub 0"), url);
+	config.save(ConfigStore::Application);
+
+	Qdc::HubsView reopened(m_thread, nullptr, m_filelists, nullptr, &config);
+	reopened.setBoardDirectory(directory);
+
+	QVERIFY(reopened.restoreSession());
+
+	/*
+	 * The row is back with what was cached in it, and it counts the post nobody opened
+	 * and only that one. Nothing has asked the hub for anything: this is the disk
+	 * answering.
+	 */
+	QTRY_COMPARE(reopened.badgeCount(), 1);
+
+	Qdc::BoardPane* pane = boardPane(reopened);
+	QVERIFY(pane);
+	QCOMPARE(pane->threads()->postCount(), 2);
+
+	QTreeWidget* rows = hubTree(reopened);
+	QVERIFY(rows->topLevelItem(0)->child(0)->text(0)
+		.endsWith(QStringLiteral("(1)")));
+
+	/* And reading the other one leaves nothing to count, in this session or the next. */
+	pane->read(second);
+	QTRY_COMPARE(reopened.badgeCount(), 0);
+}
+
+/**
+ * "Mark everything read" on a board's row clears the count for the whole board.
+ *
+ * One statement about the board rather than one about each post on it - see
+ * BoardBridge::markAllRead() - and the row and the badge follow it without anybody
+ * having opened a post.
+ */
+void TestHubs::markingABoardReadFromItsRowClearsTheCount()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("dismissed")));
+
+	hubs.resize(900, 600);
+	hubs.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&hubs));
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.50:412")));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	const QString first = QStringLiteral("PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6");
+	const QString second = QStringLiteral("LQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6P");
+
+	emit hub->hub()->boardEntriesReceived({entry(first, 5000), entry(second, 5001)});
+
+	QTRY_COMPARE(hubs.badgeCount(), 2);
+
+	QTreeWidget* rows = hubTree(hubs);
+	QTreeWidgetItem* boardRow = rows->topLevelItem(0)->child(0);
+	QVERIFY(boardRow);
+
+	bool wasEnabled = false;
+
+	/*
+	 * The menu runs an event loop of its own, so the choosing happens inside it - and
+	 * repeatedly, because a single shot scheduled before the menu is asked for is
+	 * answered before there is a menu to choose from.
+	 */
+	QTimer watcher;
+	watcher.setInterval(20);
+
+	QObject::connect(&watcher, &QTimer::timeout, [&wasEnabled] {
+		for (QWidget* top : QApplication::topLevelWidgets())
+		{
+			QMenu* menu = qobject_cast<QMenu*>(top);
+			if (!menu || !menu->isVisible()) continue;
+
+			for (QAction* action : menu->actions())
+			{
+				if (action->text() != QStringLiteral("Mark everything read")) continue;
+
+				wasEnabled = action->isEnabled();
+
+				/*
+				 * Chosen the way a person chooses one. A menu is exec()'d and answers
+				 * with the action that was activated, which triggering one from the
+				 * outside is not - so the choice is made on the menu itself.
+				 */
+				menu->setActiveAction(action);
+				QTest::keyClick(menu, Qt::Key_Return);
+
+				return;
+			}
+
+			menu->close();
+			return;
+		}
+	});
+
+	watcher.start();
+
+	emit rows->customContextMenuRequested(rows->visualItemRect(boardRow).center());
+
+	watcher.stop();
+
+	QVERIFY2(wasEnabled, "a board with unread posts did not offer to dismiss them");
+
+	QTRY_COMPARE(hubs.badgeCount(), 0);
+	QCOMPARE(boardRow->text(0), QStringLiteral("General discussion"));
 }
 
 void TestHubs::theBoardsOpenOnAHubComeBackWithIt()

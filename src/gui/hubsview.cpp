@@ -1084,7 +1084,6 @@ void Qdc::HubsView::closeHub(const QString& url)
 	{
 		m_stack->removeWidget(board);
 		m_boards.remove(m_boardItems.take(board));
-		m_read.remove(board);
 	}
 
 	m_stack->removeWidget(entry->pane);
@@ -1389,6 +1388,21 @@ Qdc::BoardBridge* Qdc::HubsView::bulletins()
 			pane->setGap(view == BoardBridge::View::Gap);
 	});
 
+	/*
+	 * What a board counts is the index's answer and not this side's, so the row and the
+	 * rail badge follow the bridge saying it moved. That is what makes a post read in
+	 * one session still read in the next: nothing here remembers it, and the count is
+	 * asked for again as soon as the board has been read back off the disk.
+	 */
+	connect(m_bulletins, &BoardBridge::readStateChanged, this,
+	        [this](const QString& hubKey, const QString& board) {
+		BoardPane* pane = boardPaneFor(hubKey, board);
+		if (!pane) return;
+
+		refreshBoardItem(m_boardItems.value(pane, nullptr), pane);
+		refreshBadge();
+	});
+
 	connect(m_bulletins, &BoardBridge::postReady, this,
 	        [this](const QString& tth, const BoardPost& post) {
 		for (BoardPane* pane : panesHolding(tth)) pane->setPost(post);
@@ -1434,6 +1448,23 @@ Qdc::BoardPane* Qdc::HubsView::boardPaneFor(const QString& hubKey,
 	}
 
 	return nullptr;
+}
+
+QString Qdc::HubsView::hubKeyOf(BoardPane* pane) const
+{
+	if (!pane) return QString();
+
+	for (const Entry* entry : m_entries)
+	{
+		if (!entry->bridge) continue;
+
+		for (BoardPane* held : entry->boards)
+		{
+			if (held == pane) return BoardBridge::hubKey(entry->bridge->url());
+		}
+	}
+
+	return QString();
 }
 
 QList<Qdc::BoardPane*> Qdc::HubsView::panesHolding(const QString& tth) const
@@ -1687,7 +1718,6 @@ void Qdc::HubsView::closeBoard(Entry& entry, const QString& board)
 
 	m_stack->removeWidget(pane);
 	m_boards.remove(item);
-	m_read.remove(pane);
 
 	delete item;
 	delete pane;
@@ -1707,36 +1737,30 @@ void Qdc::HubsView::markRead(BoardPane* pane, const QString& tth)
 {
 	if (!pane || tth.isEmpty()) return;
 
-	QSet<QString>& read = m_read[pane];
+	const QString hubKey = hubKeyOf(pane);
+	if (hubKey.isEmpty()) return;
 
-	if (read.contains(tth)) return;
-
-	read.insert(tth);
-
-	refreshBoardItem(m_boardItems.value(pane, nullptr), pane);
-	refreshBadge();
+	/*
+	 * Written down rather than remembered here, because the question outlives the
+	 * window: a board nobody has opened for a week has to still say so after a restart.
+	 * The row is redrawn when the bridge says the count moved, and a post that was
+	 * already read moves nothing.
+	 */
+	bulletins()->markRead(hubKey, pane->board(), tth);
 }
 
 int Qdc::HubsView::unreadOn(BoardPane* pane) const
 {
-	if (!pane) return 0;
-
-	const BoardModel* threads = pane->threads();
+	if (!pane || !m_bulletins) return 0;
 
 	/*
-	 * A count over what is held, which is what keeps it from drifting: a post read and
-	 * later withdrawn leaves the board and stops being counted on either side, and one
-	 * whose entry never arrived was never counted at all. Asked once for a row of the
-	 * tree and never once per post.
+	 * The bridge's own copy of what the index counted, which is answered out of memory:
+	 * this is asked while a row is being painted, once per board, and nothing that
+	 * draws may wait for the core thread. A count over the entries that are held is
+	 * also what keeps it from drifting - a post read and later withdrawn stops being
+	 * counted on either side, and one whose entry never arrived was never counted.
 	 */
-	int read = 0;
-
-	for (const QString& tth : m_read.value(pane))
-	{
-		if (threads->holds(tth) && !threads->isWithdrawn(tth)) ++read;
-	}
-
-	return qMax(0, threads->postCount() - read);
+	return m_bulletins->unread(hubKeyOf(pane), pane->board());
 }
 
 void Qdc::HubsView::keepComposed(const QString& hubKey, const BoardEntry& entry)
@@ -2708,13 +2732,12 @@ void Qdc::HubsView::showBoardMenu(QTreeWidgetItem* item, const QPoint& globalPos
 
 	if (picked == readAll)
 	{
-		QSet<QString>& read = m_read[pane];
-
-		for (const QString& tth : roots_under(pane->threads(), QModelIndex()))
-			read.insert(tth);
-
-		refreshBoardItem(item, pane);
-		refreshBadge();
+		/*
+		 * One statement about the board rather than one about each post on it, written
+		 * down where it survives the window closing: see BoardBridge::markAllRead(),
+		 * which is also where the price of the watermark it writes is set out.
+		 */
+		bulletins()->markAllRead(hubKeyOf(pane), board);
 		return;
 	}
 

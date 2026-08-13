@@ -80,6 +80,9 @@ private slots:
 	void aTransferPastItsCapIsAbandoned();
 	void aPostBeingReadIsNotInSomebodysTransferList();
 	void aDocumentSomebodyIsBeingSentIsNotReleased();
+	void aPostOpenedReadsAsReadAndTheBoardsCountFalls();
+	void readStateOutlivesTheBridgeThatWroteIt();
+	void aMarkThatCouldNotBeWrittenLeavesThePostUnread();
 
 private:
 	QString path(const QString& name) const;
@@ -1316,6 +1319,206 @@ void TestBridge::aDocumentSomebodyIsBeingSentIsNotReleased()
 	unrelated.filename = QStringLiteral("/home/somebody/share/holiday.jpg");
 
 	QCOMPARE(Qdc::BoardBridge::releasable(marked, {unrelated}).size(), 2);
+}
+
+/**
+ * Opening a post reads it, the board's count falls, and dismissing the board reads the
+ * rest of it.
+ *
+ * Read means opened by somebody in the reading pane, which is a different fact from the
+ * document having been fetched: this test never fetches anything. The count is asked of
+ * the bridge rather than worked out here, because answering it while a row is being
+ * drawn is what it is for.
+ */
+void TestBridge::aPostOpenedReadsAsReadAndTheBoardsCountFalls()
+{
+	const QString board = QStringLiteral("general");
+
+	Qdc::BoardBridge posts(m_thread, nullptr, boards(QStringLiteral("opened")), this);
+	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.51:412"), this);
+
+	const QString key = Qdc::BoardBridge::hubKey(hub.url());
+
+	posts.follow(&hub);
+
+	QuickDC::HubListener* listener = listenerFor(hub);
+	QVERIFY(listener != nullptr);
+
+	/* Nothing has been heard of this board, which is not the same as nothing unread. */
+	QCOMPARE(posts.unread(key, board), 0);
+
+	QVERIFY(m_thread->runOnCoreBlocking([listener, board] {
+		listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
+		                                     1786439000));
+		listener->EventBoardEntry(core_entry(OTHER_TTH, board, AUTHOR_CID,
+		                                     1786439662));
+	}));
+
+	QTRY_COMPARE(posts.unread(key, board), 2);
+
+	QVERIFY(!posts.isRead(key, board, ENTRY_TTH));
+	QVERIFY(!posts.isRead(key, board, OTHER_TTH));
+
+	posts.markRead(key, board, ENTRY_TTH);
+
+	QTRY_COMPARE(posts.unread(key, board), 1);
+
+	QVERIFY(posts.isRead(key, board, ENTRY_TTH));
+	QVERIFY2(!posts.isRead(key, board, OTHER_TTH),
+	         "a post nobody opened was marked read beside one that was");
+
+	/* And a post read twice is not read twice: nothing moves and nothing is said. */
+	QSignalSpy moved(&posts, &Qdc::BoardBridge::readStateChanged);
+	QVERIFY(moved.isValid());
+
+	posts.markRead(key, board, ENTRY_TTH);
+
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QCoreApplication::processEvents();
+
+	QCOMPARE(moved.count(), 0);
+	QCOMPARE(posts.unread(key, board), 1);
+
+	/*
+	 * Dismissing the board reads the rest of it - one watermark and a mark for each
+	 * entry standing at its second, rather than a record for every post.
+	 */
+	posts.markAllRead(key, board);
+
+	QTRY_COMPARE(posts.unread(key, board), 0);
+	QVERIFY(posts.isRead(key, board, OTHER_TTH));
+}
+
+/**
+ * Read state survives the bridge being destroyed and built again on the same directory,
+ * which is the whole point of keeping it in the index rather than in a view.
+ *
+ * A board nobody has opened for a week has to still say so after a restart. A read set
+ * held for as long as a window is open cannot answer that, and the answer it gives
+ * instead - every post unread again - is wrong in the direction that makes a badge
+ * useless.
+ */
+void TestBridge::readStateOutlivesTheBridgeThatWroteIt()
+{
+	const QString board = QStringLiteral("general");
+	const QString directory = boards(QStringLiteral("remembered"));
+
+	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.52:412"), this);
+	const QString key = Qdc::BoardBridge::hubKey(hub.url());
+
+	{
+		Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
+		posts.follow(&hub);
+
+		QuickDC::HubListener* listener = listenerFor(hub);
+		QVERIFY(listener != nullptr);
+
+		QVERIFY(m_thread->runOnCoreBlocking([listener, board] {
+			listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
+			                                     1786439000));
+			listener->EventBoardEntry(core_entry(OTHER_TTH, board, AUTHOR_CID,
+			                                     1786439662));
+		}));
+
+		QTRY_COMPARE(posts.unread(key, board), 2);
+
+		posts.markRead(key, board, ENTRY_TTH);
+		QTRY_COMPARE(posts.unread(key, board), 1);
+	}
+
+	/* The store is deleted inside a job, so this is where that job has finished. */
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+
+	Qdc::BoardBridge again(m_thread, nullptr, directory, this);
+
+	QSignalSpy loaded(&again, &Qdc::BoardBridge::entriesLoaded);
+	QVERIFY(loaded.isValid());
+
+	/* A bridge that has just been built has heard nothing at all yet. */
+	QCOMPARE(again.unread(key, board), 0);
+	QVERIFY(!again.isRead(key, board, ENTRY_TTH));
+
+	again.loadEntries(key, board);
+
+	QTRY_COMPARE(loaded.count(), 1);
+	QCOMPARE(loaded.at(0).at(2).value<QVector<Qdc::BoardEntry>>().size(), 2);
+
+	/*
+	 * Both entries came back and one of them is still read, so the board still counts
+	 * the one nobody has opened - which is what the user left it saying.
+	 */
+	QVERIFY2(again.isRead(key, board, ENTRY_TTH),
+	         "a post read before the restart came back unread");
+
+	QVERIFY(!again.isRead(key, board, OTHER_TTH));
+	QCOMPARE(again.unread(key, board), 1);
+}
+
+/**
+ * A mark that could not be written leaves the post unread, deliberately.
+ *
+ * Of the two ways to be wrong about this, a count that overstates asks somebody to look
+ * again at a post they have already read, and one that understates hides a post nobody
+ * has seen. So a read record that did not reach the disk is not pretended to have: the
+ * index is asked what the post reads as afterwards rather than told.
+ */
+void TestBridge::aMarkThatCouldNotBeWrittenLeavesThePostUnread()
+{
+	const QString board = QStringLiteral("general");
+	const QString directory = boards(QStringLiteral("unwritable"));
+
+	Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
+	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.53:412"), this);
+
+	const QString key = Qdc::BoardBridge::hubKey(hub.url());
+
+	posts.follow(&hub);
+
+	QuickDC::HubListener* listener = listenerFor(hub);
+	QVERIFY(listener != nullptr);
+
+	QVERIFY(m_thread->runOnCoreBlocking([listener, board] {
+		listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
+		                                     1786439000));
+	}));
+
+	QTRY_COMPARE(posts.unread(key, board), 1);
+
+	/*
+	 * The board's own index file, which is named after a digest of the hub and the
+	 * board rather than after either of them - so it is found by being the one file
+	 * this board wrote rather than by a name built here.
+	 */
+	const QDir written(QDir(directory).filePath(QStringLiteral("boards")));
+	const QStringList files = written.entryList(QDir::Files);
+
+	QCOMPARE(files.size(), 1);
+
+	const QString index = written.filePath(files.at(0));
+	QVERIFY(QFile::setPermissions(index, QFileDevice::ReadOwner));
+
+	posts.markRead(key, board, ENTRY_TTH);
+
+	/* The mark's job is ordered before this one, and its answer before these lines. */
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QCoreApplication::processEvents();
+
+	QVERIFY2(!posts.isRead(key, board, ENTRY_TTH),
+	         "a mark that could not be written was reported as read");
+
+	QCOMPARE(posts.unread(key, board), 1);
+
+	/*
+	 * And with the file writable again the same mark goes through, which is what says
+	 * the refusal above was the write failing rather than nothing having happened.
+	 */
+	QVERIFY(QFile::setPermissions(index, QFileDevice::ReadOwner
+	                                     | QFileDevice::WriteOwner));
+
+	posts.markRead(key, board, ENTRY_TTH);
+
+	QTRY_COMPARE(posts.unread(key, board), 0);
+	QVERIFY(posts.isRead(key, board, ENTRY_TTH));
 }
 
 QTEST_GUILESS_MAIN(TestBridge)

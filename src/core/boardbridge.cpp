@@ -25,6 +25,7 @@
 #include <QFile>
 #include <QFileInfo>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -119,6 +120,41 @@ constexpr int FETCH_TIMEOUT_MS = 300000;
 struct BoardState {
 	quint64 cursor = 0;
 	Qdc::BoardBridge::View view = Qdc::BoardBridge::View::Unknown;
+};
+
+/**
+ * What a board reads as, as the index answered it.
+ *
+ * Carried back beside whatever the job was really asked to do, because each of those
+ * jobs is already in the index for that board: asking for the count separately would
+ * be another job, another walk over the entries, and a moment in which a badge and the
+ * list it sits beside disagree.
+ *
+ * 'board' is filled in only where one job passed over several of them - see store() -
+ * since everywhere else the caller asked about one board and still holds its name.
+ */
+struct ReadState {
+	QString board;
+	int unread = 0;
+
+	/** Which of the hashes the job looked at are read; see BoardIndex::isRead(). */
+	QVector<QString> read;
+};
+
+/** What storing a batch came to: what was kept, and where each board now stands. */
+struct Stored {
+	/** The entries that were written down, by their position in what was handed over. */
+	QVector<int> kept;
+
+	QVector<ReadState> boards;
+};
+
+/** What a board read back as: its entries, and what has been read of them. */
+struct Loaded {
+	QVector<Qdc::BoardEntry> entries;
+
+	int unread = 0;
+	QVector<QString> read;
 };
 
 /** What the store already knows about a post somebody has asked to read. */
@@ -501,9 +537,12 @@ void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& e
 
 	m_thread->call(m_relay,
 		[holder = m_stores, converted = std::move(converted), hub = to_std(hubUrl)] {
-			QVector<int> kept;
+			Stored stored;
 
-			if (!holder->store) return kept;
+			if (!holder->store) return stored;
+
+			/* Which boards the batch touched, and what was written down on each. */
+			std::map<std::string, std::vector<std::string>> touched;
 
 			for (size_t n = 0; n < converted.size(); ++n)
 			{
@@ -522,7 +561,8 @@ void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& e
 				if (!holder->store->index.append(hub, entry.board, entry))
 					continue;
 
-				kept.append(static_cast<int>(n));
+				stored.kept.append(static_cast<int>(n));
+				touched[entry.board].push_back(entry.tth);
 
 				/*
 				 * A tombstone is a request to stop holding the document, honoured
@@ -533,13 +573,42 @@ void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& e
 				if (entry.removed) holder->store->posts.forget(entry.tth);
 			}
 
-			return kept;
+			/*
+			 * Where each of those boards stands now, in the same job. An entry that has
+			 * only just arrived is not always an unread one: a board somebody dismissed
+			 * carries a watermark, and an entry landing under it arrives read - so the
+			 * index is asked about each of them rather than assumed to say no.
+			 */
+			for (const auto& [board, written] : touched)
+			{
+				ReadState where;
+				where.board = from_std(board);
+				where.unread =
+					static_cast<int>(holder->store->index.unread(hub, board));
+
+				for (const std::string& tth : written)
+				{
+					if (holder->store->index.isRead(hub, board, tth))
+						where.read.append(from_std(tth));
+				}
+
+				stored.boards.append(where);
+			}
+
+			return stored;
 		},
-		[this, hubUrl, entries](const QVector<int>& kept) {
+		[this, hubUrl, entries](const Stored& stored) {
+			/*
+			 * The counts before the entries, so that anything drawing a board on the
+			 * strength of entriesStored() draws it with the count that goes with them.
+			 */
+			for (const ReadState& where : stored.boards)
+				noteRead(hubUrl, where.board, where.unread, where.read, false);
+
 			QHash<QString, QVector<BoardEntry>> byBoard;
 			bool withdrawn = false;
 
-			for (int n : kept)
+			for (int n : stored.kept)
 			{
 				const BoardEntry& entry = entries.at(n);
 				byBoard[entry.board].append(entry);
@@ -614,22 +683,36 @@ void Qdc::BoardBridge::loadEntries(const QString& hubUrl, const QString& board)
 
 	m_thread->call(m_relay,
 		[holder = m_stores, hub = to_std(hubUrl), name = to_std(board)] {
-			QVector<BoardEntry> entries;
+			Loaded loaded;
 
-			if (!holder->store) return entries;
+			if (!holder->store) return loaded;
 
 			const std::vector<QuickDC::BoardEntry> held =
 				holder->store->index.entries(hub, name);
 
-			entries.reserve(static_cast<qsizetype>(held.size()));
+			loaded.entries.reserve(static_cast<qsizetype>(held.size()));
 
+			/*
+			 * What has been read of the board, taken while its entries are being walked
+			 * anyway. This is where the copy on the other side is filled: everything
+			 * after it is a change to a board that has been read back once.
+			 */
 			for (const QuickDC::BoardEntry& entry : held)
-				entries.append(from_core(entry));
+			{
+				loaded.entries.append(from_core(entry));
 
-			return entries;
+				if (holder->store->index.isRead(hub, name, entry.tth))
+					loaded.read.append(from_std(entry.tth));
+			}
+
+			loaded.unread = static_cast<int>(holder->store->index.unread(hub, name));
+
+			return loaded;
 		},
-		[this, hubUrl, board](const QVector<BoardEntry>& entries) {
-			emit entriesLoaded(hubUrl, board, entries);
+		[this, hubUrl, board](const Loaded& loaded) {
+			noteRead(hubUrl, board, loaded.unread, loaded.read, true);
+
+			emit entriesLoaded(hubUrl, board, loaded.entries);
 		});
 }
 
@@ -690,6 +773,121 @@ Qdc::PostState Qdc::BoardBridge::postState(const QString& tth) const
 QString Qdc::BoardBridge::attribution(const QString& tth) const
 {
 	return m_attributed.value(tth);
+}
+
+QString Qdc::BoardBridge::boardKey(const QString& hubUrl, const QString& board)
+{
+	return hubUrl + QLatin1Char('/') + board;
+}
+
+bool Qdc::BoardBridge::isRead(const QString& hubUrl, const QString& board,
+                              const QString& tth) const
+{
+	const auto at = m_read.constFind(boardKey(hubUrl, board));
+
+	return at != m_read.constEnd() && at->read.contains(tth);
+}
+
+int Qdc::BoardBridge::unread(const QString& hubUrl, const QString& board) const
+{
+	const auto at = m_read.constFind(boardKey(hubUrl, board));
+
+	return at == m_read.constEnd() ? 0 : at->unread;
+}
+
+void Qdc::BoardBridge::noteRead(const QString& hubUrl, const QString& board,
+                                int unread, const QVector<QString>& read, bool whole)
+{
+	if (board.isEmpty()) return;
+
+	Read& held = m_read[boardKey(hubUrl, board)];
+
+	/*
+	 * A job that walked the whole board answered for every entry on it, so what it
+	 * says stands on its own. One that passed over a few of them says nothing about
+	 * the rest, and dropping what is held on the strength of it would forget a post
+	 * somebody read a moment ago.
+	 */
+	QSet<QString> marked = whole ? QSet<QString>() : held.read;
+
+	for (const QString& tth : read) marked.insert(tth);
+
+	if (held.unread == unread && held.read == marked) return;
+
+	held.unread = unread;
+	held.read = std::move(marked);
+
+	emit readStateChanged(hubUrl, board);
+}
+
+void Qdc::BoardBridge::markRead(const QString& hubUrl, const QString& board,
+                                const QString& tth)
+{
+	if (!m_thread || board.isEmpty() || tth.isEmpty()) return;
+
+	m_thread->call(m_relay,
+		[holder = m_stores, hub = to_std(hubUrl), name = to_std(board),
+		 post = to_std(tth)] {
+			ReadState where;
+
+			if (!holder->store) return where;
+
+			QuickDC::BoardIndex& index = holder->store->index;
+
+			index.markRead(hub, name, post);
+
+			/*
+			 * What the index says afterwards, rather than what the marking returned.
+			 * markRead() answers false for a post that was already read and false again
+			 * where the record could not be written, and those are not the same news;
+			 * asking makes the second of them leave the post unread and leave the badge
+			 * counting it, which is the failure worth having.
+			 */
+			if (index.isRead(hub, name, post)) where.read.append(from_std(post));
+
+			where.unread = static_cast<int>(index.unread(hub, name));
+
+			return where;
+		},
+		[this, hubUrl, board](const ReadState& where) {
+			noteRead(hubUrl, board, where.unread, where.read, false);
+		});
+}
+
+void Qdc::BoardBridge::markAllRead(const QString& hubUrl, const QString& board)
+{
+	if (!m_thread || board.isEmpty()) return;
+
+	m_thread->call(m_relay,
+		[holder = m_stores, hub = to_std(hubUrl), name = to_std(board)] {
+			ReadState where;
+
+			if (!holder->store) return where;
+
+			QuickDC::BoardIndex& index = holder->store->index;
+
+			index.markAllRead(hub, name);
+
+			where.unread = static_cast<int>(index.unread(hub, name));
+
+			/*
+			 * The whole of what the board reads as, and not what moved. A watermark is
+			 * one record standing for every entry below it, so there is no list of what
+			 * it marked - and the entries it stands for are right here to be asked
+			 * about one at a time. Dismissing a board is one action by one person, so
+			 * this walk happens once rather than per entry that arrives.
+			 */
+			for (const QuickDC::BoardEntry& entry : index.entries(hub, name))
+			{
+				if (index.isRead(hub, name, entry.tth))
+					where.read.append(from_std(entry.tth));
+			}
+
+			return where;
+		},
+		[this, hubUrl, board](const ReadState& where) {
+			noteRead(hubUrl, board, where.unread, where.read, true);
+		});
 }
 
 void Qdc::BoardBridge::setPrefetch(const QString& hubUrl, bool prefetch)
@@ -1046,7 +1244,7 @@ bool Qdc::BoardBridge::withinAllowance(const QString& hubUrl, const QString& boa
 {
 	if (m_allowanceBytes == 0 || m_allowanceSeconds <= 0) return true;
 
-	Allowance& allowance = m_allowances[hubUrl + QLatin1Char('/') + board];
+	Allowance& allowance = m_allowances[boardKey(hubUrl, board)];
 
 	if (!allowance.since.isValid()
 	    || allowance.since.elapsed() > m_allowanceSeconds * 1000LL)

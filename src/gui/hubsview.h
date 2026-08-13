@@ -327,6 +327,14 @@ private:
 	/** The pane for one board on one hub, by the key its entries arrive under. */
 	BoardPane* boardPaneFor(const QString& hubKey, const QString& board) const;
 
+	/**
+	 * The key a board pane's entries and its read state are filed under.
+	 *
+	 * Empty for a pane whose hub has no bridge, which is also the answer that keeps a
+	 * mark from being written under a hub that does not exist.
+	 */
+	QString hubKeyOf(BoardPane* pane) const;
+
 	/** Which panes hold an entry for this hash, wherever it was indexed. */
 	QList<BoardPane*> panesHolding(const QString& tth) const;
 
@@ -335,6 +343,10 @@ private:
 	 *
 	 * Read means read: opened by somebody, not fetched. A post whose body could not
 	 * be had was still read, and one fetched ahead of a reader was not.
+	 *
+	 * Handed to the bridge, which writes it down where it survives a restart. A board
+	 * nobody has opened for a week has to still say so when the client comes back, so
+	 * nothing here keeps a read set of its own.
 	 */
 	void markRead(BoardPane* pane, const QString& tth);
 
@@ -640,15 +652,6 @@ private:
 	 */
 	QHash<QTreeWidgetItem*, BoardPane*> m_boards;
 	QHash<BoardPane*, QTreeWidgetItem*> m_boardItems;
-
-	/**
-	 * Which posts have been opened, per board.
-	 *
-	 * Kept here and only for as long as the board is open, because there is no way to
-	 * ask the bridge: the index on disk records what has been read and nothing this
-	 * side can reach says so. A count over what is held, which is why it cannot drift.
-	 */
-	QHash<BoardPane*, QSet<QString>> m_read;
 
 	/**
 	 * Documents composed here whose entry has not come back, by hash.

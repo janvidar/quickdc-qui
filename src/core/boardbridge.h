@@ -169,6 +169,35 @@ public:
 	QString attribution(const QString& tth) const;
 
 	/**
+	 * Whether somebody has opened this post in the reading pane; see markRead().
+	 *
+	 * Read means read, and never "the document was fetched": those are two facts
+	 * about two events, kept in two places. A post whose body nobody could be found
+	 * for was still read, and one fetched ahead of a reader was not.
+	 *
+	 * Answered from this side's copy of what the index said, so a row may ask while
+	 * it is being drawn.
+	 */
+	bool isRead(const QString& hubUrl, const QString& board,
+	            const QString& tth) const;
+
+	/**
+	 * How many of a board's posts nobody has opened, which is what a badge counts.
+	 *
+	 * The index's own count over the entries it holds, so a tombstone is not counted
+	 * and the number cannot drift out of step with the board however arrivals and
+	 * markings interleave. It is kept on this side and brought up to date whenever a
+	 * job has been through the board, because a badge is asked for while the tree is
+	 * being painted and nothing that draws may wait for the core thread.
+	 *
+	 * Zero for a board this has heard nothing about - and zero as well for one whose
+	 * index could not be written, which holds neither entries nor read state while the
+	 * live entries are still delivered and still shown. That is the one case where
+	 * this says less than a list does, and it is the case where nothing was kept.
+	 */
+	int unread(const QString& hubUrl, const QString& board) const;
+
+	/**
 	 * Whether the bodies of a thread the user opens may be fetched ahead of them,
 	 * per hub.
 	 *
@@ -282,6 +311,33 @@ public slots:
 
 	/** Ask what is held for a board. Answered by boardStateReady(). */
 	void requestState(const QString& hubUrl, const QString& board);
+
+	/**
+	 * Note that somebody has opened a post in the reading pane; see isRead().
+	 *
+	 * Written where it can be read back after a restart, which is the point of it: a
+	 * board nobody has opened for a week has to still say so when the client comes
+	 * back, so this goes to the index rather than into a map that lasts as long as the
+	 * window does.
+	 *
+	 * A mark that could not be written leaves the post unread and leaves the badge
+	 * counting it. That is the better failure of the two: a count that overstates asks
+	 * somebody to look at a post they have already read, and one that understates
+	 * hides a post nobody has seen.
+	 */
+	void markRead(const QString& hubUrl, const QString& board, const QString& tth);
+
+	/**
+	 * Mark everything held for a board read, which is somebody dismissing it.
+	 *
+	 * One watermark and a mark for each entry standing at its second, rather than a
+	 * record per post: dismissing a board of five thousand says one thing about the
+	 * board and must not write five thousand records to say it. The price is that an
+	 * entry turning up afterwards with an older timestamp falls under the line and
+	 * reads as read - which takes a re-subscription from zero filling a hole in this
+	 * client's view, and costs a badge that does not count posts nobody was shown.
+	 */
+	void markAllRead(const QString& hubUrl, const QString& board);
 
 	/**
 	 * Fetch the body of one post, because somebody asked to read it.
@@ -411,6 +467,17 @@ signals:
 	void boardStateReady(const QString& hubUrl, const QString& board,
 	                     quint64 cursor, Qdc::BoardBridge::View view);
 
+	/**
+	 * What unread() and isRead() answer about a board has moved.
+	 *
+	 * Emitted where the copy on this side actually changed and not on every mark, so
+	 * that a reader clicking down a board they have read already does not repaint a row
+	 * for each click. It follows a batch of entries as readily as a mark: an entry
+	 * arriving changes what the board counts, and one arriving under a watermark
+	 * somebody drew arrives read.
+	 */
+	void readStateChanged(const QString& hubUrl, const QString& board);
+
 private:
 	/** One body on its way, and everything deciding when to give up on it. */
 	struct Fetch {
@@ -451,6 +518,39 @@ private:
 		quint64 spent = 0;
 		QElapsedTimer since;
 	};
+
+	/**
+	 * What the index last said about one board's read state; see unread().
+	 *
+	 * A copy and not the record. The record is the file the core thread owns, and this
+	 * is what a badge can be drawn out of without asking it anything.
+	 */
+	struct Read {
+		int unread = 0;
+
+		/**
+		 * The hashes this side has been told are read.
+		 *
+		 * The index's answer for each entry rather than the watermark behind it: a post
+		 * that reads as read because it falls under a line the user drew is in here
+		 * because the index said so, and nothing on this side works that line out
+		 * again.
+		 */
+		QSet<QString> read;
+	};
+
+	/** How a board is filed here, and in the allowances: its hub and its name. */
+	static QString boardKey(const QString& hubUrl, const QString& board);
+
+	/**
+	 * Take in what a job said about a board's read state, and say so where it moved.
+	 *
+	 * @param whole whether 'read' is the whole of what the board reads as, or only the
+	 *        part of it a job looked at on its way past - which is what decides whether
+	 *        what is held is replaced or added to.
+	 */
+	void noteRead(const QString& hubUrl, const QString& board, int unread,
+	              const QVector<QString>& read, bool whole);
 
 	/** Persist a batch of entries as they arrive, and report what was kept. */
 	void store(const QString& hubUrl, const QVector<Qdc::BoardEntry>& entries);
@@ -544,6 +644,9 @@ private:
 
 	/** What each board has been allowed to move, by hub and board. */
 	QHash<QString, Allowance> m_allowances;
+
+	/** What each board reads as, by hub and board; see unread(). */
+	QHash<QString, Read> m_read;
 
 	quint64 m_cap;
 	int m_concurrent;
