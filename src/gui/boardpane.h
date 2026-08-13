@@ -13,6 +13,8 @@
 #include <QVector>
 #include <QWidget>
 
+#include <functional>
+
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -84,7 +86,28 @@ public:
 	 */
 	void insertAttachment(const RichText::Attachment& file);
 
+	/**
+	 * Who to ask whether a picture a body names is on this machine.
+	 *
+	 * Only a file that is already here is ever drawn, exactly as in a conversation:
+	 * nothing is fetched because a post mentions it, and a picture nobody holds stays a
+	 * chip to click. Left unset every attachment is a chip, which is also what a post
+	 * whose attachments can no longer be had must look like - the body still renders and
+	 * the reference is still shown.
+	 */
+	void setMediaResolver(std::function<RichText::LocalMedia(const QString& tth)> media);
+
 public slots:
+	/**
+	 * Something finished downloading, so the post being read may draw differently now.
+	 *
+	 * A conversation needs this because a picture arrives minutes after the message; a
+	 * post needs it more, because an attachment to a post may be fetched years after it
+	 * was written - and until it is asked for again, the post on the screen is the only
+	 * place a reader would see it appear.
+	 */
+	void mediaChanged();
+
 	/**
 	 * What the hub says this board is.
 	 *
@@ -266,6 +289,9 @@ private:
 	/** The post being read, and the document for it once one has arrived. */
 	QString m_reading;
 	Qdc::BoardPost m_post;
+
+	/** Whether a picture a body names is here; see setMediaResolver(). */
+	std::function<RichText::LocalMedia(const QString& tth)> m_media;
 
 	/** Whether m_post is the document of m_reading, rather than a leftover. */
 	bool m_hasPost = false;

@@ -424,6 +424,24 @@ QString Qdc::BoardPane::reading() const
 	return m_reading;
 }
 
+void Qdc::BoardPane::setMediaResolver(
+	std::function<RichText::LocalMedia(const QString& tth)> media)
+{
+	m_media = std::move(media);
+
+	refreshReading();
+}
+
+void Qdc::BoardPane::mediaChanged()
+{
+	/*
+	 * The post being read and nothing else. What a body draws is decided when it is
+	 * drawn, so a post that is not on the screen has nothing to redraw and will ask
+	 * again the next time somebody opens it.
+	 */
+	refreshReading();
+}
+
 void Qdc::BoardPane::insertAttachment(const RichText::Attachment& file)
 {
 	m_composer->insertAttachment(file);
@@ -853,6 +871,14 @@ void Qdc::BoardPane::refreshReading()
 		options.colours = markup_colours();
 		options.fontPointSize = m_body->font().pointSizeF();
 		options.mediaWidth = qMax(0, m_body->viewport()->width() - 24);
+
+		/*
+		 * Asked, and never told: whether a picture can be shown is a question about what
+		 * this machine holds and not about what the document says. A file that is not here
+		 * is a chip to click, which is what an attachment nobody can find any more looks
+		 * like as well - the post is still a post either way.
+		 */
+		options.media = m_media;
 
 		/*
 		 * Only a body that says it is the markdown subset is read as one. Without that

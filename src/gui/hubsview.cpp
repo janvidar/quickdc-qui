@@ -507,6 +507,15 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	{
 		connect(m_completed, &Completed::changed, this, [this] {
 			for (ChatPane* pane : m_panes) pane->mediaChanged();
+
+			/*
+			 * And every board, for the same reason and a longer one: an attachment to a
+			 * post may be asked for years after the post was written, so a reader who
+			 * fetches one is looking at that post at the time. Left to be redrawn when
+			 * the post is next opened, the picture they asked for would arrive to an
+			 * empty pane.
+			 */
+			for (BoardPane* pane : m_boards) pane->mediaChanged();
 		});
 	}
 
@@ -1622,6 +1631,16 @@ Qdc::BoardPane* Qdc::HubsView::openBoard(Entry& entry, const QString& board)
 
 	connect(pane, &BoardPane::linkActivated, this, &HubsView::followLink);
 
+	/*
+	 * The same answer a conversation gets: a picture named in a body is drawn where this
+	 * client already holds the file and is a chip to click otherwise. Nothing is fetched
+	 * because a post mentions it - that would ask a stranger's client for a file the
+	 * moment somebody read a post, which is the disclosure a board is careful about.
+	 */
+	pane->setMediaResolver([this](const QString& tth) {
+		return localMediaFor(tth);
+	});
+
 	connect(pane, &BoardPane::attachRequested, this, [this, pane] {
 		attachFile(pane);
 	});
@@ -2006,20 +2025,25 @@ void Qdc::HubsView::adopt(ChatPane* pane, QTreeWidgetItem* item)
 	 * has finished downloading.
 	 */
 	pane->setMediaResolver([this](const QString& tth) {
-		RichText::LocalMedia here;
-
-		const QString path = localFileFor(tth);
-		if (path.isEmpty()) return here;
-
-		/* The header only, so this stays cheap enough to ask while laying out a row. */
-		const QSize size = QImageReader(path).size();
-		if (!size.isValid()) return here;
-
-		here.path = path;
-		here.size = size;
-
-		return here;
+		return localMediaFor(tth);
 	});
+}
+
+Qdc::RichText::LocalMedia Qdc::HubsView::localMediaFor(const QString& tth) const
+{
+	RichText::LocalMedia here;
+
+	const QString path = localFileFor(tth);
+	if (path.isEmpty()) return here;
+
+	/* The header only, so this stays cheap enough to ask while laying out a row. */
+	const QSize size = QImageReader(path).size();
+	if (!size.isValid()) return here;
+
+	here.path = path;
+	here.size = size;
+
+	return here;
 }
 
 void Qdc::HubsView::tellPane(QWidget* pane, const QString& text)

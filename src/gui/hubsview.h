@@ -7,6 +7,8 @@
 
 #include "view.h"
 
+#include "richtext.h"
+
 #include <core/coretypes.h>
 
 #include <QHash>
@@ -455,6 +457,16 @@ private:
 	 * without checking again.
 	 */
 	QString localFileFor(const QString& tth) const;
+
+	/**
+	 * The same as a picture, where the file is one and is here.
+	 *
+	 * What a conversation and a board both ask while they are drawing, and the reason
+	 * neither of them can answer it: it is a question about what this client holds - what
+	 * was offered from here and what has finished downloading - rather than about
+	 * anything the message or the document said.
+	 */
+	RichText::LocalMedia localMediaFor(const QString& tth) const;
 
 	/**
 	 * Fetch the pictures in an incoming message, where that has been asked for.

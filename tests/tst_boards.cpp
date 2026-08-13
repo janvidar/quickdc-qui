@@ -71,6 +71,7 @@ private slots:
 	void aDescriptorForAnotherBoardStartsAgain();
 	void rereadingTheBoardIsOffered();
 	void thePaneSaysWhichPostItIsShowing();
+	void aPictureInAPostIsDrawnOnceItsFileIsHere();
 
 private:
 	/** One index entry, with only what a given test cares about spelled out. */
@@ -1153,6 +1154,72 @@ void TestBoards::thePaneSaysWhichPostItIsShowing()
 	/* Clearing what is already empty says nothing. */
 	pane.clear();
 	QCOMPARE(showing.count(), 4);
+}
+
+/**
+ * A picture a post names is a chip until this machine holds the file, and is drawn
+ * without the post being opened again once it does.
+ *
+ * An attachment to a chat message is fetched within minutes by the people present; one
+ * attached to a post may be asked for years later by whoever has just read it - and that
+ * reader is looking at the post while it arrives. A post whose attachment can no longer
+ * be had at all is still a post: the body renders and the reference is shown either way.
+ */
+void TestBoards::aPictureInAPostIsDrawnOnceItsFileIsHere()
+{
+	const QString tth = QStringLiteral("BWXFLX5NO4T54FMVTGZ6UXER2QKN6J2IGGL3W7B");
+
+	Qdc::RichText::Attachment picture;
+	picture.tth = tth;
+	picture.name = QStringLiteral("plan.png");
+	picture.size = 524288;
+
+	const QString root = QStringLiteral("ROOT");
+
+	Qdc::BoardPane pane;
+
+	pane.addEntry(entry(root, base()));
+	pane.read(root);
+
+	pane.setPost(post(root, QStringLiteral("the plan is ![the plan](%1)")
+		.arg(Qdc::RichText::writeMagnet(picture)), true));
+
+	QTextBrowser* shown = pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"));
+	QVERIFY(shown);
+
+	/* Nobody has been asked anything yet, so the reference is something to click. */
+	QVERIFY(!shown->isHidden());
+	QVERIFY2(!shown->toHtml().contains(QStringLiteral("<img")),
+	         qPrintable(shown->toHtml()));
+
+	QVERIFY(shown->toPlainText().contains(QStringLiteral("plan.png")));
+	QVERIFY(shown->toPlainText().contains(QStringLiteral("the plan is")));
+
+	bool arrived = false;
+
+	pane.setMediaResolver([&arrived, tth](const QString& asked) {
+		Qdc::RichText::LocalMedia here;
+		if (!arrived || asked != tth) return here;
+
+		here.path = QStringLiteral("/tmp/plan.png");
+		here.size = QSize(800, 600);
+
+		return here;
+	});
+
+	/* Asked, and the answer is that the file is not here. Still a chip. */
+	QVERIFY2(!shown->toHtml().contains(QStringLiteral("<img")),
+	         qPrintable(shown->toHtml()));
+
+	arrived = true;
+	pane.mediaChanged();
+
+	/* And now it is drawn, without the post having been opened again. */
+	QVERIFY2(shown->toHtml().contains(QStringLiteral("/tmp/plan.png")),
+	         qPrintable(shown->toHtml()));
+
+	/* The words around it survive, which is the post still being a post. */
+	QVERIFY(shown->toPlainText().contains(QStringLiteral("the plan is")));
 }
 
 QTEST_MAIN(TestBoards)
