@@ -172,6 +172,17 @@ public:
 	bool acceptsMedia() const;
 
 	void clear();
+
+	/**
+	 * Open the box with these words in it, as plain text, cursor at the end.
+	 *
+	 * For a message that starts from something rather than from nothing - a reply
+	 * quoting what it answers. Plain text and no formatting: what is put here is the
+	 * author's own bytes, and a box opened with markup in it would send markup nobody
+	 * applied.
+	 */
+	void setText(const QString& text);
+
 	void focusInput();
 
 signals:

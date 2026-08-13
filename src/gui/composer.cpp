@@ -693,6 +693,22 @@ void Qdc::Composer::clear()
 	m_edit->clear();
 }
 
+void Qdc::Composer::setText(const QString& text)
+{
+	m_edit->setPlainText(text);
+
+	/*
+	 * At the end, which is where somebody who was given something to write under starts
+	 * writing. Set explicitly because setPlainText() leaves the cursor at the top of the
+	 * document, over the text rather than after it.
+	 */
+	QTextCursor cursor = m_edit->textCursor();
+	cursor.movePosition(QTextCursor::End);
+	m_edit->setTextCursor(cursor);
+
+	refreshFormatState();
+}
+
 void Qdc::Composer::focusInput()
 {
 	m_edit->setFocus(Qt::OtherFocusReason);
