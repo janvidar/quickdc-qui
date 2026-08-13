@@ -45,6 +45,7 @@
 #include <QTextEdit>
 #include <QTextList>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QFileDialog>
 #include <QMenu>
 #include <QTimer>
@@ -160,6 +161,8 @@ private slots:
 	void aNameThatHasLeftStillResolvesToWhatItWas();
 	void theHubsOwnSettingsHideBehindTheGears();
 	void aConversationShowsThePersonWhereAHubShowsItsStar();
+	void everyRowIsNamedByTheKindOfThingItStandsFor();
+	void theBoardGlyphIsAThirdFigureInTheSameSpace();
 	void whatWasTypedSurvivesLeavingTheSettings();
 
 private:
@@ -3188,6 +3191,131 @@ void TestHubs::aConversationShowsThePersonWhereAHubShowsItsStar()
 	QHBoxLayout* row = pane->header()->findChild<QHBoxLayout*>();
 	QVERIFY(row);
 	QVERIFY(row->indexOf(lock) < row->indexOf(gears));
+}
+
+void TestHubs::everyRowIsNamedByTheKindOfThingItStandsFor()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.27:412")));
+
+	Qdc::HubPane* pane = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(pane);
+
+	Qdc::UserInfo alice = user(QStringLiteral("alice"));
+	pane->users()->upsert(alice);
+
+	emit pane->directMessageRequested(alice);
+
+	QTreeWidget* tree = hubs.findChild<QTreeWidget*>(QStringLiteral("hubTree"));
+	QVERIFY(tree);
+	QCOMPARE(tree->topLevelItemCount(), 1);
+
+	QTreeWidgetItem* hubRow = tree->topLevelItem(0);
+	QCOMPARE(hubRow->childCount(), 1);
+
+	QTreeWidgetItem* conversationRow = hubRow->child(0);
+
+	/*
+	 * The size the row was drawn at, asked of the icon rather than assumed, so this
+	 * pins which glyph a row carries and not how large the tree draws one.
+	 */
+	const qreal ratio = hubs.devicePixelRatioF();
+	const QList<QSize> stored = hubRow->icon(0).availableSizes();
+	QVERIFY(!stored.isEmpty());
+
+	const int size = qRound(stored.first().width() / ratio);
+	QVERIFY(size > 0);
+
+	const auto rowGlyph = [ratio, size](const QIcon& icon) {
+		return icon.pixmap(QSize(size, size), ratio, QIcon::Normal).toImage();
+	};
+
+	/*
+	 * Built the same way the tree builds one, in the ink a row is drawn in, because
+	 * the row keeps a picture rather than the name of a glyph.
+	 */
+	const auto expected = [ratio, size](Qdc::Glyph glyph) {
+		return Qdc::glyph_icon(glyph, Qdc::theme().sidebarText, ratio, size)
+			.pixmap(QSize(size, size), ratio, QIcon::Normal).toImage();
+	};
+
+	QVERIFY(!rowGlyph(hubRow->icon(0)).isNull());
+
+	QCOMPARE(rowGlyph(hubRow->icon(0)), expected(Qdc::Glyph::Hubs));
+	QCOMPARE(rowGlyph(conversationRow->icon(0)), expected(Qdc::Glyph::People));
+
+	/*
+	 * And the two comparisons discriminate: a hub and a conversation are not the same
+	 * picture, so matching one of them was not matching anything at all.
+	 */
+	QVERIFY(expected(Qdc::Glyph::Hubs) != expected(Qdc::Glyph::People));
+	QVERIFY(expected(Qdc::Glyph::Board) != expected(Qdc::Glyph::Hubs));
+	QVERIFY(expected(Qdc::Glyph::Board) != expected(Qdc::Glyph::People));
+}
+
+void TestHubs::theBoardGlyphIsAThirdFigureInTheSameSpace()
+{
+	/*
+	 * Painted into a box with margin all round it, because nothing clips a glyph: one
+	 * drawn outside the grid its neighbours share would overrun the row beside it, and
+	 * ink on the margin here is what says it does.
+	 */
+	constexpr int BOX = 48;
+	constexpr int MARGIN = 8;
+
+	QPixmap sheet(BOX + MARGIN * 2, BOX + MARGIN * 2);
+	sheet.fill(Qt::transparent);
+
+	QPainter painter(&sheet);
+	Qdc::paint_glyph(painter, Qdc::Glyph::Board,
+	                 QRectF(MARGIN, MARGIN, BOX, BOX), Qt::black);
+	painter.end();
+
+	const QImage drawn = sheet.toImage();
+
+	int ink = 0;
+
+	for (int y = 0; y < drawn.height(); ++y)
+	{
+		for (int x = 0; x < drawn.width(); ++x)
+		{
+			if (qAlpha(drawn.pixel(x, y)) == 0) continue;
+
+			++ink;
+
+			QVERIFY(x >= MARGIN && x < MARGIN + BOX);
+			QVERIFY(y >= MARGIN && y < MARGIN + BOX);
+		}
+	}
+
+	/* Enough of it to be a figure at the weight of the bubbles beside it. */
+	QVERIFY(ink > BOX * BOX / 5);
+
+	/*
+	 * The writing is cut out of the sheet rather than drawn over it, which is only
+	 * true while the path is filled odd-even - so the middle of the figure has a hole
+	 * in it, with ink on both sides.
+	 */
+	const int middle = MARGIN + BOX / 2;
+
+	int first = -1;
+	int last = -1;
+	int hole = 0;
+
+	for (int x = 0; x < drawn.width(); ++x)
+	{
+		if (qAlpha(drawn.pixel(x, middle)) == 0) continue;
+
+		if (first < 0) first = x;
+		last = x;
+	}
+
+	QVERIFY(first >= 0 && last > first);
+
+	for (int x = first; x <= last; ++x)
+		if (qAlpha(drawn.pixel(x, middle)) == 0) ++hole;
+
+	QVERIFY(hole > 0);
 }
 
 void TestHubs::whatWasTypedSurvivesLeavingTheSettings()

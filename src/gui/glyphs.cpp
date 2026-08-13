@@ -346,6 +346,37 @@ QPainterPath person_outline_path()
 	return stroker.createStroke(person_path());
 }
 
+/**
+ * A notice with a pin through the top of it, for a bulletin board.
+ *
+ * The head of the pin stands above the sheet and overlaps it, so the two read as one
+ * object pinned up rather than as a disc resting on a box. Two lines of writing, the
+ * second of them short, because a single line reads as a label and two say prose.
+ *
+ * The writing is cut out of the sheet rather than drawn over it, so the glyph is one
+ * shape in one ink like its neighbours. That is a subpath filled odd-even, as with
+ * the gear's centre, which is why the caller must not switch to a winding fill.
+ */
+QPainterPath board_path()
+{
+	QPainterPath sheet;
+	sheet.addRoundedRect(QRectF(4.0, 5.0, 16.0, 16.0), 2.5, 2.5);
+
+	QPainterPath pin;
+	pin.addEllipse(QPointF(12.0, 3.6), 2.3, 2.3);
+
+	QPainterPath writing;
+	writing.addRoundedRect(QRectF(7.5, 11.0, 9.0, 2.0), 1.0, 1.0);
+	writing.addRoundedRect(QRectF(7.5, 15.2, 6.0, 2.0), 1.0, 1.0);
+
+	QPainterPath path;
+	path.addPath(sheet.united(pin));
+	path.addPath(writing);
+	path.setFillRule(Qt::OddEvenFill);
+
+	return path;
+}
+
 /** A cross, for leaving a conversation. */
 QPainterPath close_path()
 {
@@ -377,6 +408,7 @@ QPainterPath glyph_path(Qdc::Glyph glyph)
 		case Qdc::Glyph::LockOpen:    return lock_path(false);
 		case Qdc::Glyph::People:      return people_path();
 		case Qdc::Glyph::Close:       return close_path();
+		case Qdc::Glyph::Board:       return board_path();
 		case Qdc::Glyph::Person:      return person_path();
 		case Qdc::Glyph::PersonOutline: return person_outline_path();
 	}

@@ -107,13 +107,53 @@ QString pasted_media_folder()
 constexpr int TREE_WIDTH = 220;
 constexpr int TREE_MINIMUM = 150;
 
-/** Marks a tree row as a hub rather than a conversation. */
-constexpr int HubRole = Qt::UserRole + 1;
-
 constexpr int NameColumn = 0;
+
+/** Carries a row's kind; see RowKind and row_kind(). */
+constexpr int KindRole = Qt::UserRole + 1;
 
 /** Carries the padlock for a row, for HubRowDelegate to draw; see refreshItem(). */
 constexpr int LockRole = Qt::UserRole + 2;
+
+/**
+ * What a row of the tree stands for.
+ *
+ * Asked wherever a row is drawn or right-clicked, because each kind carries its own
+ * glyph and offers its own menu, and none of them is simply the absence of the
+ * others - a board is not a conversation that happens to be with nobody.
+ */
+enum class RowKind {
+	Hub,
+	Conversation,
+
+	/**
+	 * A bulletin board on a hub.
+	 *
+	 * Nothing puts one of these in the tree yet; the rows and the pane behind them
+	 * arrive with the board view. Named here so that every site asking what a row is
+	 * has to say which kind it means, and a board row cannot be taken for a
+	 * conversation the moment one is added.
+	 */
+	Board
+};
+
+/**
+ * What 'item' stands for.
+ *
+ * A row carrying nothing under the role is read as a conversation. Every row is given
+ * its kind where it is built, so there should be none; and of the three that is the
+ * one which asks nothing of the hub, so an unexpected row draws a figure and offers a
+ * person's menu rather than reaching for a bridge that is not there.
+ */
+RowKind row_kind(const QTreeWidgetItem* item)
+{
+	if (!item) return RowKind::Conversation;
+
+	const QVariant stored = item->data(NameColumn, KindRole);
+	if (!stored.isValid()) return RowKind::Conversation;
+
+	return stored.value<RowKind>();
+}
 
 /** The glyph beside a row, and the padlock after it, in logical pixels. */
 constexpr int ROW_GLYPH = 15;
@@ -121,6 +161,19 @@ constexpr int LOCK_GLYPH = 12;
 
 /** How far the padlock sits in from the end of the row. */
 constexpr int LOCK_MARGIN = 6;
+
+/** The glyph that names each kind of row. */
+Qdc::Glyph kind_glyph(RowKind kind)
+{
+	switch (kind)
+	{
+		case RowKind::Hub:          return Qdc::Glyph::Hubs;
+		case RowKind::Conversation: return Qdc::Glyph::People;
+		case RowKind::Board:        return Qdc::Glyph::Board;
+	}
+
+	return Qdc::Glyph::People;
+}
 
 /**
  * A glyph for a tree row, in the two inks a row is ever drawn in.
@@ -438,7 +491,7 @@ bool Qdc::HubsView::openHub(const QString& url)
 	entry->pane = new HubPane(bridge, m_config);
 
 	entry->item = new QTreeWidgetItem(m_tree);
-	entry->item->setData(0, HubRole, true);
+	entry->item->setData(NameColumn, KindRole, QVariant::fromValue(RowKind::Hub));
 	entry->item->setExpanded(true);
 
 	m_entries.append(entry);
@@ -919,7 +972,7 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 	});
 
 	QTreeWidgetItem* item = new QTreeWidgetItem(entry.item);
-	item->setData(0, HubRole, false);
+	item->setData(NameColumn, KindRole, QVariant::fromValue(RowKind::Conversation));
 
 	entry.dms.insert(context, pane);
 	adopt(pane, item);
@@ -1360,13 +1413,12 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 	face.setBold(pane->unreadCount() > 0);
 	item->setFont(NameColumn, face);
 
-	const bool isHub = item->data(0, HubRole).toBool();
+	const RowKind kind = row_kind(item);
 	const qreal ratio = devicePixelRatioF();
 
-	item->setIcon(NameColumn, row_icon(isHub ? Glyph::Hubs : Glyph::People,
-	                                   ROW_GLYPH, ratio));
+	item->setIcon(NameColumn, row_icon(kind_glyph(kind), ROW_GLYPH, ratio));
 
-	HubBridge* bridge = isHub ? pane->hub() : nullptr;
+	HubBridge* bridge = kind == RowKind::Hub ? pane->hub() : nullptr;
 
 	/*
 	 * A padlock only while the connection is up, and it says what is true of that
@@ -1484,12 +1536,22 @@ void Qdc::HubsView::showHubMenu(const QPoint& at)
 	QTreeWidgetItem* item = m_tree->itemAt(at);
 	if (!item) return;
 
+	const RowKind kind = row_kind(item);
+
 	/* A conversation is about a person; only a hub row is about the hub. */
-	if (!item->data(0, HubRole).toBool())
+	if (kind == RowKind::Conversation)
 	{
 		showDmMenu(item, m_tree->viewport()->mapToGlobal(at));
 		return;
 	}
+
+	/*
+	 * A board has no menu of its own to offer yet, and nothing puts a board row in the
+	 * tree so far - see RowKind::Board. Answering with the hub's menu would offer the
+	 * hub's choices from a row that is not the hub, so this row says nothing at all
+	 * until there is something for it to say.
+	 */
+	if (kind != RowKind::Hub) return;
 
 	if (!m_config) return;
 

@@ -39,6 +39,15 @@ enum class Glyph {
 	Close,
 
 	/**
+	 * A bulletin board, in the list of what is open on a hub.
+	 *
+	 * A notice with a pin through it, and filled rather than outlined: it is listed
+	 * beside a hub's bubbles and a conversation's figures, and a lighter shape among
+	 * those two would read as a row that cannot be opened.
+	 */
+	Board,
+
+	/**
 	 * One user, in a list of them.
 	 *
 	 * Two forms rather than two colours, as with the star: filled for somebody who
