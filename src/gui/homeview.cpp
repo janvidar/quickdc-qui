@@ -5,6 +5,7 @@
 #include "homeview.h"
 
 #include "hubbrowser.h"
+#include "richtext.h"
 
 #include <core/completed.h>
 #include <core/configbridge.h>
@@ -173,6 +174,14 @@ QWidget* Qdc::HomeView::buildGreeting()
 	muted(m_identity);
 	m_identity->setWordWrap(true);
 
+	/*
+	 * Both lines are this user's own nickname and description rather than a stranger's,
+	 * but a QLabel left to itself guesses at whether what it was given is rich text, and
+	 * a name with an angle bracket in it should read as it was typed.
+	 */
+	m_greeting->setTextFormat(Qt::PlainText);
+	m_identity->setTextFormat(Qt::PlainText);
+
 	m_address->setPlaceholderText(
 		tr("dchub://hub.example.org:411 or adcs://hub.example.org:412"));
 	m_address->setClearButtonEnabled(true);
@@ -201,6 +210,10 @@ QWidget* Qdc::HomeView::buildGreeting()
 QWidget* Qdc::HomeView::buildActivity()
 {
 	QWidget* page = new QWidget(this);
+
+	/* Named, because a test looking for a list here would otherwise find one of the
+	   browser's three first. */
+	m_recentList->setObjectName(QStringLiteral("recentDownloads"));
 
 	m_recentList->setSelectionMode(QAbstractItemView::NoSelection);
 
@@ -316,12 +329,18 @@ void Qdc::HomeView::refreshActivity()
 	{
 		const CompletedDownload& entry = recent.at(n);
 
+		/*
+		 * The leaf is the name a stranger's share gave the file, so the row is labelled
+		 * with it disarmed. The tooltip is the whole path and is not: a user reads one in
+		 * order to go and find the file with it, and a path cut short is no use for that.
+		 */
 		QListWidgetItem* item = new QListWidgetItem(
 			QStringLiteral("%1  —  %2")
-				.arg(QFileInfo(entry.filename).fileName(), format_size(entry.size)),
+				.arg(RichText::displayText(QFileInfo(entry.filename).fileName()),
+				     format_size(entry.size)),
 			m_recentList);
 
-		item->setToolTip(entry.filename);
+		item->setToolTip(RichText::literalHtml(entry.filename));
 	}
 
 	fit_list(m_recentList, RECENT_SHOWN);

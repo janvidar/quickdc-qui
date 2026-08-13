@@ -71,6 +71,10 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 	 * whether what it was given is rich text - so a hub calling itself "<b>Best</b> Hub"
 	 * would be setting the type in the client's own header. Said outright rather than
 	 * guessed, which is the same reason renderMarkdown() exists.
+	 *
+	 * This says nothing about the tooltip on either of them. QToolTip draws in a label of
+	 * its own, which nothing here can reach, so a tooltip has to say what it is itself -
+	 * see RichText::literalHtml().
 	 */
 	m_title->setTextFormat(Qt::PlainText);
 	m_subtitle->setTextFormat(Qt::PlainText);
@@ -179,7 +183,8 @@ void Qdc::HubHeader::setTitle(const QString& title, const QString& tooltip)
 	 * not be able to be mistaken for.
 	 */
 	m_title->setText(RichText::displayText(title));
-	m_title->setToolTip(RichText::displayText(tooltip.isEmpty() ? title : tooltip));
+	m_title->setToolTip(RichText::literalHtml(
+		RichText::displayText(tooltip.isEmpty() ? title : tooltip)));
 }
 
 void Qdc::HubHeader::setHubIdentity(const QString& name,
@@ -208,7 +213,7 @@ void Qdc::HubHeader::setSubtitle(const QString& subtitle)
 	const QString shown = RichText::displayText(subtitle);
 
 	m_subtitle->setText(shown);
-	m_subtitle->setToolTip(shown);
+	m_subtitle->setToolTip(RichText::literalHtml(shown));
 
 	/* A description that came to nothing hides the line rather than leaving a blank. */
 	m_subtitle->setVisible(!shown.isEmpty());

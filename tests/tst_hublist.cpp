@@ -2,6 +2,7 @@
  * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
  */
 
+#include <core/completed.h>
 #include <core/configbridge.h>
 #include <core/corethread.h>
 #include <core/favourites.h>
@@ -11,12 +12,14 @@
 #include <gui/homeview.h>
 #include <gui/hubbrowser.h>
 #include <gui/favouritedelegate.h>
+#include <gui/hubheader.h>
 #include <gui/hublistmodel.h>
 
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
@@ -26,6 +29,8 @@
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableView>
+#include <QTextBlock>
+#include <QTextDocument>
 #include <QHeaderView>
 #include <QTemporaryDir>
 #include <QTest>
@@ -39,6 +44,10 @@
  * put into the cache directly, which is what HubDirectory::cacheFileFor() is public
  * for. The one thing that cannot be tested without a server - a hublist coming off
  * a socket - is the core's own, and the core tests it.
+ *
+ * What a list says is a stranger's text, so how it is drawn belongs here too: the
+ * status line under the table, the rows of the two other tabs, and the header of a
+ * hub opened from one of them.
  */
 class TestHubList : public QObject {
 	Q_OBJECT
@@ -73,7 +82,32 @@ private slots:
 	void theVisitedListShowsAndTogglesTheStar();
 	void theExplanationRowHasNoStar();
 
+	void theStatusLineDrawsWhatASourceSaidAsText();
+	void aVisitedRowIsPlainWhereItsTooltipIsMarkup();
+	void theHeaderDrawsAHubsDescriptionAsText();
+	void aFinishedDownloadShowsItsWholePathAsText();
+
 private:
+	/**
+	 * What a tooltip is drawn as.
+	 *
+	 * The two steps a QLabel left on Qt::AutoText takes, which is where QToolTip leaves
+	 * the label it draws in: ask Qt::mightBeRichText(), and parse the string as HTML if
+	 * the answer is yes. Whether a hub's description is drawn as markup is Qt's decision
+	 * about a string rather than something the string looks like, so Qt is what is asked.
+	 */
+	static QString asShown(const QString& tooltip);
+
+	/**
+	 * Whether anything in 'tooltip' survived being parsed as markup.
+	 *
+	 * Asked of the parsed document rather than of the text, since an escaped "&lt;b&gt;"
+	 * is exactly the right output and still contains "b". A picture is a resource the
+	 * document goes and fetches and a link is somewhere the reader can be sent; emphasis
+	 * is milder but is still the hub setting the type in the client's own chrome.
+	 */
+	static bool drawsMarkup(const QString& tooltip);
+
 	/** Put a list where a source's cache goes, as if it had been fetched. */
 	void cache(const Qdc::HubDirectory& directory, const QString& url,
 	           const QVector<Qdc::HubListEntry>& hubs,
@@ -112,6 +146,37 @@ void TestHubList::cleanupTestCase()
 	m_config = nullptr;
 
 	if (m_thread) m_thread->shutdown();
+}
+
+QString TestHubList::asShown(const QString& tooltip)
+{
+	QTextDocument document;
+
+	if (Qt::mightBeRichText(tooltip))
+		document.setHtml(tooltip);
+	else
+		document.setPlainText(tooltip);
+
+	return document.toPlainText();
+}
+
+bool TestHubList::drawsMarkup(const QString& tooltip)
+{
+	QTextDocument document;
+	document.setHtml(tooltip);
+
+	for (QTextBlock block = document.begin(); block.isValid(); block = block.next())
+	{
+		for (QTextBlock::iterator it = block.begin(); !it.atEnd(); ++it)
+		{
+			const QTextCharFormat format = it.fragment().charFormat();
+
+			if (format.isImageFormat() || format.isAnchor()) return true;
+			if (format.fontItalic() || format.fontWeight() > QFont::Normal) return true;
+		}
+	}
+
+	return false;
 }
 
 QString TestHubList::cacheDir() const
@@ -927,6 +992,149 @@ void TestHubList::theExplanationRowHasNoStar()
 	                  QPoint(row.left() + 10, row.center().y()));
 
 	QCOMPARE(changed.count(), 0);
+}
+
+void TestHubList::theStatusLineDrawsWhatASourceSaidAsText()
+{
+	/*
+	 * Two lists, one of them named in a way that is markup to the label QToolTip draws
+	 * in. Which source said what is the one place where the wording between the fields
+	 * is ours and has to survive as structure while none of the fields may add to it.
+	 */
+	const QString doctored =
+		QStringLiteral("http://lists.example.org/<b>hublist</b>.xml");
+	const QString plain = QStringLiteral("http://other.example.org/hublist.xml");
+
+	configureSources({doctored, plain});
+
+	Qdc::HubListEntry hub;
+	hub.name = QStringLiteral("Listed");
+	hub.address = QStringLiteral("adcs://listed.example.org:412");
+
+	Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
+	cache(seed, plain, {hub});
+
+	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+	Qdc::HubBrowser browser(&directory, nullptr, nullptr);
+
+	/* The one muted label in the browser; see HubBrowser's constructor. */
+	QLabel* status = browser.findChild<QLabel*>(QStringLiteral("mutedText"));
+	QVERIFY(status);
+
+	const QString tooltip = status->toolTip();
+
+	/* Said outright to be markup, once. Twice and a reader sees "&lt;b&gt;". */
+	QCOMPARE(tooltip.count(QStringLiteral("<html>")), 1);
+	QVERIFY2(!drawsMarkup(tooltip), qPrintable(tooltip));
+
+	/* One line per source, in the order they are configured, and the address each was
+	   asked for read back exactly as it was written. */
+	const QStringList lines = asShown(tooltip).split(QLatin1Char('\n'));
+
+	QCOMPARE(tooltip.count(QStringLiteral("<br>")), 1);
+	QCOMPARE(lines.size(), 2);
+	QCOMPARE(lines.at(0), QStringLiteral("%1 — not fetched yet").arg(doctored));
+	QVERIFY2(lines.at(1).startsWith(plain), qPrintable(lines.at(1)));
+}
+
+void TestHubList::aVisitedRowIsPlainWhereItsTooltipIsMarkup()
+{
+	Qdc::RecentHubs recent(nullptr);
+	recent.note(QStringLiteral("dchub://visited.example.org:411"),
+	            QStringLiteral("<b>Best</b> Hub"));
+
+	Qdc::HubBrowser browser(nullptr, nullptr, &recent);
+
+	QListWidget* list = browser.findChild<QListWidget*>(QStringLiteral("recentHubs"));
+	QVERIFY(list);
+	QCOMPARE(list->count(), 1);
+
+	/*
+	 * The label is drawn by a delegate as the plain text it is, so the name a hub chose
+	 * is left spelled as it arrived. Escaping it here would put "&lt;b&gt;" in the row,
+	 * which is the fault the wrapping of a tooltip exists to avoid.
+	 */
+	QVERIFY2(list->item(0)->text().contains(QStringLiteral("<b>Best</b> Hub")),
+	         qPrintable(list->item(0)->text()));
+
+	/* The tooltip is the other way about, being drawn in a label of Qt's making. */
+	const QString tooltip = list->item(0)->toolTip();
+
+	QCOMPARE(tooltip.count(QStringLiteral("<html>")), 1);
+	QCOMPARE(asShown(tooltip), QStringLiteral("dchub://visited.example.org:411"));
+}
+
+void TestHubList::theHeaderDrawsAHubsDescriptionAsText()
+{
+	Qdc::HubHeader header;
+
+	const QString url = QStringLiteral("adcs://hub.example.org:412");
+	const QString description = QStringLiteral("films & <i>arguments</i> about them");
+
+	header.setHubIdentity(QStringLiteral("<b>Best</b> Hub"), description, url);
+
+	/*
+	 * The hole itself, asserted first, so that what follows is a test of Qt's behaviour
+	 * rather than of an assumption about it: a description of this shape is markup to the
+	 * label a tooltip is drawn in, whatever the two lines of the header are set to.
+	 */
+	QVERIFY(Qt::mightBeRichText(description));
+
+	QLabel* title = nullptr;
+	QLabel* subtitle = nullptr;
+
+	for (QLabel* line : header.findChildren<QLabel*>())
+	{
+		if (line->text() == header.title()) title = line;
+		if (line->text() == header.subtitle()) subtitle = line;
+	}
+
+	QVERIFY(title);
+	QVERIFY(subtitle);
+
+	for (const QLabel* line : {title, subtitle})
+	{
+		QCOMPARE(line->toolTip().count(QStringLiteral("<html>")), 1);
+		QVERIFY2(!drawsMarkup(line->toolTip()), qPrintable(line->toolTip()));
+	}
+
+	/* The address is still reachable from the title, and the description still reads as
+	   the hub sent it. */
+	QCOMPARE(asShown(title->toolTip()), url);
+	QCOMPARE(asShown(subtitle->toolTip()), description);
+}
+
+void TestHubList::aFinishedDownloadShowsItsWholePathAsText()
+{
+	Qdc::Completed completed(nullptr);
+
+	/* Long enough that a bound meant for a name would cut it, and with the leaf named
+	   the way a stranger's share might name it. */
+	Qdc::CompletedDownload entry;
+	entry.filename = QStringLiteral("/Users/somebody/Downloads/")
+		+ QString(200, QLatin1Char('m'))
+		+ QStringLiteral("/films & <b>arguments</b>.iso");
+	entry.size = 1024;
+
+	completed.add(entry);
+
+	Qdc::HomeView home(nullptr, nullptr, nullptr, nullptr, &completed, nullptr);
+	QCOMPARE(home.completedCount(), 1);
+
+	QListWidget* list =
+		home.findChild<QListWidget*>(QStringLiteral("recentDownloads"));
+
+	QVERIFY(list);
+	QCOMPARE(list->count(), 1);
+
+	const QString tooltip = list->item(0)->toolTip();
+
+	QCOMPARE(tooltip.count(QStringLiteral("<html>")), 1);
+	QVERIFY2(!drawsMarkup(tooltip), qPrintable(tooltip));
+
+	/* Whole, because a path is read in order to go and find the file with it: escaped
+	   and not reduced, so nothing of it is cut and no ellipsis stands in for the rest. */
+	QCOMPARE(asShown(tooltip), entry.filename);
 }
 
 QTEST_MAIN(TestHubList)

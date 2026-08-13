@@ -620,27 +620,33 @@ void Qdc::HubBrowser::refreshStatus()
 
 	for (const HubListSource& source : sources)
 	{
+		/* One field at a time and before the join, which is where displayText() has to
+		   go: reduced afterwards, the line breaks below would go with it. */
+		const QString where = RichText::displayText(source.url);
+
 		if (!source.error.isEmpty())
 		{
 			failed++;
-			detail.append(tr("%1 — %2").arg(source.url, source.error));
+			detail.append(tr("%1 — %2")
+				.arg(where, RichText::displayText(source.error)));
 			continue;
 		}
 
 		if (source.fetching)
 		{
-			detail.append(tr("%1 — fetching").arg(source.url));
+			detail.append(tr("%1 — fetching").arg(where));
 			continue;
 		}
 
 		detail.append(source.fetched.isValid()
 			? tr("%1 — %n hub(s), %2", nullptr, source.hubs)
-				.arg(source.url, format_when(source.fetched))
-			: tr("%1 — not fetched yet").arg(source.url));
+				.arg(where, format_when(source.fetched))
+			: tr("%1 — not fetched yet").arg(where));
 	}
 
-	/* Which lists said what, for somebody wondering why a hub is missing. */
-	m_status->setToolTip(detail.join(QStringLiteral("\n")));
+	/* Which lists said what, for somebody wondering why a hub is missing. The lines and
+	   the wording between them are ours, and stay structure; the fields in them do not. */
+	m_status->setToolTip(RichText::literalHtml(detail.join(QStringLiteral("\n"))));
 
 	if (sources.isEmpty())
 	{
@@ -709,20 +715,23 @@ void Qdc::HubBrowser::refreshFavourites()
 	for (const QString& url : urls)
 	{
 		/*
-		 * The name is what the hub called itself, so it is disarmed before it is put
-		 * beside an address in a row of ours. AddressRole below keeps the address as it
-		 * is, since that is what connecting and unbookmarking go by.
+		 * The name is what the hub called itself and the address is what a list said it
+		 * was at, so both are disarmed before they are put in a row of ours. AddressRole
+		 * below keeps the address as it is, since that is what connecting and
+		 * unbookmarking go by.
 		 */
 		const QString name = RichText::displayText(names.value(url));
+		const QString where = RichText::displayText(url);
 
 		QListWidgetItem* item = new QListWidgetItem(
-			name.isEmpty() ? url : tr("%1  —  %2").arg(name, url), m_favouriteList);
+			name.isEmpty() ? where : tr("%1  —  %2").arg(name, where),
+			m_favouriteList);
 
 		item->setData(AddressRole, url);
 
 		/* Everything on this tab is one, so the star is the way off it. */
 		item->setData(FavouriteRole, true);
-		item->setToolTip(url);
+		item->setToolTip(RichText::literalHtml(where));
 
 		if (url == selected) m_favouriteList->setCurrentItem(item);
 	}
@@ -749,15 +758,16 @@ void Qdc::HubBrowser::refreshRecent()
 	for (const RecentHub& entry : entries)
 	{
 		const QString name = RichText::displayText(entry.name);
+		const QString where = RichText::displayText(entry.url);
 
 		const QString label = name.isEmpty()
-			? entry.url : tr("%1  —  %2").arg(name, entry.url);
+			? where : tr("%1  —  %2").arg(name, where);
 
 		QListWidgetItem* item = new QListWidgetItem(
 			tr("%1  ·  %2").arg(label, format_when(entry.visited)), m_recentList);
 
 		item->setData(AddressRole, entry.url);
-		item->setToolTip(entry.url);
+		item->setToolTip(RichText::literalHtml(where));
 
 		if (entry.url == selected) m_recentList->setCurrentItem(item);
 	}

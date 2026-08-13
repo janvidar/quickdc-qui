@@ -4,6 +4,7 @@
 
 #include "settingsview.h"
 
+#include "richtext.h"
 #include "theme.h"
 #include "widgets.h"
 
@@ -614,8 +615,13 @@ void Qdc::SettingsView::refreshShareList()
 		QListWidgetItem* item = new QListWidgetItem(
 			QStringLiteral("%1  —  %2").arg(folder.name, folder.path), m_shareList);
 
-		item->setToolTip(tr("Shown to others as '%1'\n%2")
-			.arg(folder.name, folder.path));
+		/*
+		 * Both fields are this user's own, so there is nobody else's text here to
+		 * disarm - but a tooltip is drawn as markup whoever wrote it, and a folder named
+		 * with an angle bracket in it should read as it was typed.
+		 */
+		item->setToolTip(RichText::literalHtml(tr("Shown to others as '%1'\n%2")
+			.arg(folder.name, folder.path)));
 	}
 }
 
