@@ -2,6 +2,7 @@
  * Copyright (C) 2026 Jan Vidar Krey, janvidar@extatic.org
  */
 
+#include <core/boardbridge.h>
 #include <core/configbridge.h>
 #include <core/corethread.h>
 #include <core/favourites.h>
@@ -9,6 +10,8 @@
 #include <core/transferbridge.h>
 #include <core/hubbridge.h>
 #include <core/recenthubs.h>
+#include <gui/boardmodel.h>
+#include <gui/boardpane.h>
 #include <gui/chatfeed.h>
 #include <gui/chatmodel.h>
 #include <gui/chatpane.h>
@@ -40,6 +43,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QStackedWidget>
 #include <QTabWidget>
 #include <QTextBlock>
 #include <QTextEdit>
@@ -164,6 +168,17 @@ private slots:
 	void aConversationShowsThePersonWhereAHubShowsItsStar();
 	void everyRowIsNamedByTheKindOfThingItStandsFor();
 	void theBoardGlyphIsAThirdFigureInTheSameSpace();
+
+	void aDescribedBoardBecomesARowUnderItsHub();
+	void aBoardRowShowsItsOwnPane();
+	void aBoardThatIsGoneTakesItsRowWithIt();
+	void aBoardRowOffersTheBoardsOwnMenu();
+	void openingABoardIsWhatSubscribesToIt();
+	void aHubWithoutBoardsForgetsWhatWasSubscribed();
+	void postsNobodyHasOpenedReachTheRailBadge();
+	void theBoardsOpenOnAHubComeBackWithIt();
+	void closingAHubLeavesNoBoardRowBehind();
+	void aComposedPostIsTheDocumentItsHashCovers();
 	void whatWasTypedSurvivesLeavingTheSettings();
 	void aDoctoredHubNameCannotReverseItsRow();
 	void aNicknameIsReducedInItsRowAndItsTooltip();
@@ -173,6 +188,27 @@ private slots:
 
 private:
 	Qdc::UserInfo user(const QString& nick, bool op = false) const;
+
+	/** A descriptor as a hub sends one: every permission but withdrawing another's. */
+	static Qdc::BoardInfo board(const QString& name);
+
+	/** One index entry, with a hash a tiger root can be told from. */
+	static Qdc::BoardEntry entry(const QString& tth, quint64 timestamp,
+	                             const QString& board = QStringLiteral("general"));
+
+	/**
+	 * A directory of this test's own for the boards.
+	 *
+	 * The bridge writes under "~/.quickdc" unless it is told otherwise, and that is the
+	 * user's own directory rather than somewhere a test may leave an index behind.
+	 */
+	QString boardScratch(const QString& name) const;
+
+	static QTreeWidget* hubTree(Qdc::HubsView& hubs);
+
+	/** The board pane, and the stack it was put in, which is what showing one moves. */
+	static Qdc::BoardPane* boardPane(Qdc::HubsView& hubs);
+	static QStackedWidget* stackOf(QWidget* pane);
 
 	/** The formatting button whose accessible name is 'name', or nullptr. */
 	static QToolButton* formatButton(Qdc::Composer* composer, const QString& name);
@@ -215,6 +251,57 @@ Qdc::UserInfo TestHubs::user(const QString& nick, bool op) const
 	info.sourceId = nick;
 	info.op = op;
 	return info;
+}
+
+Qdc::BoardInfo TestHubs::board(const QString& name)
+{
+	Qdc::BoardInfo described;
+	described.name = name;
+	described.title = QStringLiteral("General discussion");
+	described.description = QStringLiteral("Anything about this hub");
+	described.permissions = 1 + 2 + 4 + 8;
+	described.maxSize = 262144;
+	described.newest = 1786439662;
+	described.oldest = 0;
+	described.posts = 2;
+
+	return described;
+}
+
+Qdc::BoardEntry TestHubs::entry(const QString& tth, quint64 timestamp,
+                                const QString& board)
+{
+	Qdc::BoardEntry held;
+	held.tth = tth;
+	held.size = 412;
+	held.board = board;
+	held.cid = QStringLiteral("IPJJWEPPPLCA3PF2ZCRRYO4F2ZX2EV2JMW2KC3I");
+	held.nick = QStringLiteral("janvidar");
+	held.thread = tth;
+	held.subject = QStringLiteral("Hub upgrade on Saturday");
+	held.timestamp = timestamp;
+
+	return held;
+}
+
+QString TestHubs::boardScratch(const QString& name) const
+{
+	return QDir(m_dir.path()).filePath(QStringLiteral("boards-") + name);
+}
+
+QTreeWidget* TestHubs::hubTree(Qdc::HubsView& hubs)
+{
+	return hubs.findChild<QTreeWidget*>(QStringLiteral("hubTree"));
+}
+
+Qdc::BoardPane* TestHubs::boardPane(Qdc::HubsView& hubs)
+{
+	return hubs.findChildren<Qdc::BoardPane*>().value(0);
+}
+
+QStackedWidget* TestHubs::stackOf(QWidget* pane)
+{
+	return pane ? qobject_cast<QStackedWidget*>(pane->parentWidget()) : nullptr;
 }
 
 QToolButton* TestHubs::formatButton(Qdc::Composer* composer, const QString& name)
@@ -3326,6 +3413,557 @@ void TestHubs::theBoardGlyphIsAThirdFigureInTheSameSpace()
 		if (qAlpha(drawn.pixel(x, middle)) == 0) ++hole;
 
 	QVERIFY(hole > 0);
+}
+
+void TestHubs::aDescribedBoardBecomesARowUnderItsHub()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("described")));
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.40:412")));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	QTreeWidget* rows = hubTree(hubs);
+	QVERIFY(rows);
+
+	QTreeWidgetItem* hubRow = rows->topLevelItem(0);
+	QVERIFY(hubRow);
+	QCOMPARE(hubRow->childCount(), 0);
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	QCOMPARE(hubRow->childCount(), 1);
+
+	QTreeWidgetItem* boardRow = hubRow->child(0);
+
+	/* The hub's title for it, and not the name on the wire, where there is one. */
+	QCOMPARE(boardRow->text(0), QStringLiteral("General discussion"));
+
+	/*
+	 * And the figure is the board's. Built the way the tree builds one and at the size
+	 * the row was drawn at, because a row keeps a picture rather than the name of a
+	 * glyph.
+	 */
+	const qreal ratio = hubs.devicePixelRatioF();
+	const QList<QSize> stored = boardRow->icon(0).availableSizes();
+	QVERIFY(!stored.isEmpty());
+
+	const int size = qRound(stored.first().width() / ratio);
+	QVERIFY(size > 0);
+
+	const auto expected = [ratio, size](Qdc::Glyph glyph) {
+		return Qdc::glyph_icon(glyph, Qdc::theme().sidebarText, ratio, size)
+			.pixmap(QSize(size, size), ratio, QIcon::Normal).toImage();
+	};
+
+	const QImage drawn =
+		boardRow->icon(0).pixmap(QSize(size, size), ratio, QIcon::Normal).toImage();
+
+	QCOMPARE(drawn, expected(Qdc::Glyph::Board));
+
+	/* A board is not a person, and the comparison above says which of the two it is. */
+	QVERIFY(drawn != expected(Qdc::Glyph::People));
+	QVERIFY(drawn != expected(Qdc::Glyph::Hubs));
+
+	/*
+	 * The pane exists and the conversation maps have not been widened to hold it: what
+	 * counts panes counts the chat panes, which is the hub's own and nothing else here.
+	 */
+	QVERIFY(boardPane(hubs));
+	QCOMPARE(hubs.paneCount(), 1);
+}
+
+void TestHubs::aBoardRowShowsItsOwnPane()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("shown")));
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.41:412")));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	Qdc::BoardPane* pane = boardPane(hubs);
+	QVERIFY(pane);
+
+	QStackedWidget* stack = stackOf(pane);
+	QVERIFY(stack);
+	QVERIFY(stack->currentWidget() != pane);
+
+	QTreeWidget* rows = hubTree(hubs);
+	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
+
+	/*
+	 * Selecting a board row shows the board. A row that is not in the conversation map
+	 * used to leave whatever was there before it on the screen, which reads as a row
+	 * that cannot be opened.
+	 */
+	QCOMPARE(stack->currentWidget(), pane);
+
+	/* And what the board says it is reached it. */
+	QCOMPARE(pane->board(), QStringLiteral("general"));
+	QCOMPARE(pane->boardInfo().maxSize, quint64(262144));
+}
+
+void TestHubs::aBoardThatIsGoneTakesItsRowWithIt()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("removed")));
+
+	const QString url = QStringLiteral("adc://192.0.2.42:412");
+	QVERIFY(hubs.openHub(url));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	QTreeWidget* rows = hubTree(hubs);
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 1);
+
+	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
+	QCOMPARE(hubs.openBoards(url), QStringList{QStringLiteral("general")});
+
+	Qdc::BoardInfo gone;
+	gone.name = QStringLiteral("general");
+	gone.removed = true;
+
+	emit hub->hub()->boardDescribed(gone);
+
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 0);
+	QVERIFY(!boardPane(hubs));
+	QVERIFY(hubs.openBoards(url).isEmpty());
+
+	/* The hub's own pane is what is left showing, rather than an empty stack. */
+	QCOMPARE(hubs.currentPane(), static_cast<Qdc::ChatPane*>(hub));
+}
+
+void TestHubs::aBoardRowOffersTheBoardsOwnMenu()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("menu")));
+
+	hubs.resize(900, 600);
+	hubs.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&hubs));
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.43:412")));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	QTreeWidget* rows = hubTree(hubs);
+	QTreeWidgetItem* boardRow = rows->topLevelItem(0)->child(0);
+	QVERIFY(boardRow);
+
+	QStringList offered;
+
+	/*
+	 * The menu runs an event loop of its own, so the looking happens inside it - and
+	 * repeatedly, because a single shot scheduled before the menu is asked for is
+	 * answered before there is a menu to look at.
+	 */
+	QTimer watcher;
+	watcher.setInterval(20);
+
+	QObject::connect(&watcher, &QTimer::timeout, [&offered] {
+		for (QWidget* top : QApplication::topLevelWidgets())
+		{
+			QMenu* menu = qobject_cast<QMenu*>(top);
+			if (!menu || !menu->isVisible()) continue;
+
+			for (const QAction* action : menu->actions())
+				if (!action->isSeparator()) offered.append(action->text());
+
+			menu->close();
+			return;
+		}
+	});
+
+	watcher.start();
+
+	emit rows->customContextMenuRequested(rows->visualItemRect(boardRow).center());
+
+	watcher.stop();
+
+	QVERIFY2(!offered.isEmpty(), "the board row offered no menu at all");
+
+	/* What can be decided about a board. */
+	QVERIFY(offered.contains(QStringLiteral("Mark everything read")));
+	QVERIFY(offered.contains(
+		QStringLiteral("Read the board again from the beginning")));
+	QVERIFY(offered.contains(QStringLiteral("Leave this board")));
+
+	/*
+	 * And not the hub's, which is the row above. Answering with that from here would
+	 * offer the hub's choices from something that is not the hub.
+	 */
+	QVERIFY(!offered.contains(QStringLiteral("Fetch pictures on this hub")));
+	QVERIFY(!offered.contains(QStringLiteral("Follow the general setting")));
+}
+
+void TestHubs::openingABoardIsWhatSubscribesToIt()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("resume")));
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.44:412")));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	Qdc::BoardBridge* bulletins = hubs.bulletins();
+	QVERIFY(bulletins);
+
+	QSignalSpy stored(bulletins, &Qdc::BoardBridge::entriesStored);
+	QSignalSpy states(bulletins, &Qdc::BoardBridge::boardStateReady);
+
+	const QString first = QStringLiteral("KX3TQ7ZVN5PLQGKD3NDBK6ZTZG5PYQXSNMFYVJH");
+	const QString second = QStringLiteral("7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6PLQ");
+
+	emit hub->hub()->boardEntriesReceived(
+		{entry(first, 1000), entry(second, 2000)});
+
+	QTRY_COMPARE(stored.count(), 1);
+
+	/*
+	 * Nothing has been subscribed to at this point and nothing has been asked of the
+	 * hub: entries were written down, which is all that follows from them arriving.
+	 */
+	QCOMPARE(states.count(), 0);
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	/*
+	 * The descriptor puts a row in the tree and reports where the board stands - a
+	 * descriptor is the one thing that can turn a complete view into one with a hole
+	 * in it - and subscribes to nothing.
+	 */
+	QTRY_COMPARE(states.count(), 1);
+
+	Qdc::BoardPane* pane = boardPane(hubs);
+	QVERIFY(pane);
+
+	/* What was cached is read back into the pane without the hub being asked. */
+	QTRY_COMPARE(pane->threads()->postCount(), 2);
+
+	QTreeWidget* rows = hubTree(hubs);
+	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
+
+	QTRY_COMPARE(states.count(), 2);
+
+	/*
+	 * From the highest timestamp held and never from one past it. Timestamps are
+	 * seconds and are not unique, so a post the hub accepted in the same second as the
+	 * last entry received would fall behind a cursor advanced past it and reach nobody.
+	 */
+	QCOMPARE(states.last().at(1).toString(), QStringLiteral("general"));
+	QCOMPARE(states.last().at(2).toULongLong(), quint64(2000));
+
+	/* And a second look at a board already subscribed to asks for nothing again. */
+	rows->setCurrentItem(rows->topLevelItem(0));
+	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
+
+	QCOMPARE(states.count(), 2);
+}
+
+void TestHubs::aHubWithoutBoardsForgetsWhatWasSubscribed()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("withdrawn")));
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.45:412")));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	QSignalSpy states(hubs.bulletins(), &Qdc::BoardBridge::boardStateReady);
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	QTRY_COMPARE(states.count(), 1);
+
+	QTreeWidget* rows = hubTree(hubs);
+	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
+
+	QTRY_COMPARE(states.count(), 2);
+
+	/*
+	 * The hub saying it has no boards cancels every subscription on the connection and
+	 * is the only thing that says so, so what this side believes it holds goes with it.
+	 */
+	emit hub->hub()->bulletinSupportChanged(false);
+	QCOMPARE(states.count(), 2);
+
+	/* Which is why looking at the board again asks for it again. */
+	rows->setCurrentItem(rows->topLevelItem(0));
+	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
+
+	QTRY_COMPARE(states.count(), 3);
+
+	/*
+	 * And a session that has just found the feature holds none either, so a board
+	 * somebody had open is asked for rather than assumed to be still arriving.
+	 */
+	emit hub->hub()->bulletinSupportChanged(true);
+
+	QTRY_COMPARE(states.count(), 4);
+	QCOMPARE(states.last().at(1).toString(), QStringLiteral("general"));
+}
+
+void TestHubs::postsNobodyHasOpenedReachTheRailBadge()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("unread")));
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.46:412")));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	Qdc::BoardPane* pane = boardPane(hubs);
+	QVERIFY(pane);
+
+	QCOMPARE(hubs.badgeCount(), 0);
+
+	const QString first = QStringLiteral("VN6PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXA");
+	const QString second = QStringLiteral("XSNMFYVJH4TXAVN6PLQ7ZQGKD3NDBK6ZTZG5PYQ");
+
+	emit hub->hub()->boardEntriesReceived({entry(first, 3000), entry(second, 3001)});
+
+	QTRY_COMPARE(hubs.badgeCount(), 2);
+
+	QTreeWidget* rows = hubTree(hubs);
+	QTreeWidgetItem* boardRow = rows->topLevelItem(0)->child(0);
+
+	/* The count is on the row as well, where the hub's own name carries one. */
+	QVERIFY(boardRow->text(0).endsWith(QStringLiteral("(2)")));
+
+	/*
+	 * Opening a post in the reading pane is what reads it. Not fetching it: a post
+	 * whose body nobody could be found for was still read, and one fetched ahead of a
+	 * reader was not.
+	 */
+	pane->read(first);
+	QTRY_COMPARE(hubs.badgeCount(), 1);
+
+	pane->read(second);
+	QTRY_COMPARE(hubs.badgeCount(), 0);
+
+	QCOMPARE(boardRow->text(0), QStringLiteral("General discussion"));
+
+	/* And a post read twice is not read twice. */
+	pane->read(first);
+	QCOMPARE(hubs.badgeCount(), 0);
+}
+
+void TestHubs::theBoardsOpenOnAHubComeBackWithIt()
+{
+	using Qdc::ConfigStore;
+
+	Qdc::ConfigBridge config(m_thread);
+
+	const QString url = QStringLiteral("adc://192.0.2.47:412");
+	const QString directory = boardScratch(QStringLiteral("session"));
+
+	{
+		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+		hubs.setBoardDirectory(directory);
+
+		QVERIFY(hubs.openHub(url));
+
+		Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+		QVERIFY(hub && hub->hub());
+
+		emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+		emit hub->hub()->boardDescribed(board(QStringLiteral("dev.adc")));
+
+		QCOMPARE(hubs.openBoards(url).size(), 2);
+	}
+
+	/* Written under the hub's address, beside the conversations, in the same shape. */
+	QCOMPARE(config.getNumber(ConfigStore::Session, url, QStringLiteral("Boards")), 2);
+	QCOMPARE(config.getString(ConfigStore::Session, url, QStringLiteral("Board 0")),
+	         QStringLiteral("general"));
+
+	/*
+	 * The list of windows is narrowed to this one hub first. Every test that opens a
+	 * hub with a configuration writes to that list, and restoring it whole here would
+	 * open all of them - what is being tested is what comes back with a hub, not which
+	 * hubs come back.
+	 */
+	config.setNumber(ConfigStore::Application, QStringLiteral("Windows"),
+	                 QStringLiteral("Total"), 1);
+	config.setString(ConfigStore::Application, QStringLiteral("Windows"),
+	                 QStringLiteral("Hub 0"), url);
+	config.save(ConfigStore::Application);
+
+	Qdc::HubsView reopened(m_thread, nullptr, m_filelists, nullptr, &config);
+	reopened.setBoardDirectory(directory);
+
+	QVERIFY(reopened.restoreSession());
+
+	QCOMPARE(reopened.openHubs(), QStringList{url});
+
+	/*
+	 * The rows are back, in the order they were listed, and neither of them has asked
+	 * the hub for anything: what was kept is where somebody was reading, and reading is
+	 * what asks a hub to go on sending.
+	 */
+	QCOMPARE(reopened.openBoards(url),
+	         (QStringList{QStringLiteral("general"), QStringLiteral("dev.adc")}));
+
+	QTreeWidget* rows = hubTree(reopened);
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 2);
+
+	/* The name on the wire until the hub describes it, which it has not yet done. */
+	QCOMPARE(rows->topLevelItem(0)->child(0)->text(0), QStringLiteral("general"));
+}
+
+void TestHubs::closingAHubLeavesNoBoardRowBehind()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("closed")));
+
+	const QString url = QStringLiteral("adc://192.0.2.48:412");
+	QVERIFY(hubs.openHub(url));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	QTreeWidget* rows = hubTree(hubs);
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 1);
+
+	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
+
+	const QString first = QStringLiteral("QGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6PLQ7Z");
+	emit hub->hub()->boardEntriesReceived({entry(first, 4000)});
+
+	QTRY_COMPARE(hubs.badgeCount(), 1);
+
+	hubs.closeHub(url);
+
+	QCOMPARE(rows->topLevelItemCount(), 0);
+	QVERIFY(!boardPane(hubs));
+	QCOMPARE(hubs.badgeCount(), 0);
+	QCOMPARE(hubs.paneCount(), 0);
+
+	/*
+	 * Closing a hub deletes its row, and deleting a row deletes the rows under it - so
+	 * anything still keyed on one of those is keyed on a row that has gone. A colour
+	 * change walks every row there is and draws it, which is where that would be found.
+	 */
+	QEvent palette(QEvent::PaletteChange);
+	QApplication::sendEvent(&hubs, &palette);
+
+	/* And the view still works: the same hub opens again with a board of its own. */
+	QVERIFY(hubs.openHub(url));
+
+	Qdc::HubPane* again = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(again && again->hub());
+
+	emit again->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 1);
+	QVERIFY(boardPane(hubs));
+
+	hubs.closeHub(url);
+}
+
+void TestHubs::aComposedPostIsTheDocumentItsHashCovers()
+{
+	Qdc::ConfigBridge config(m_thread);
+
+	const QString cid = QStringLiteral("IPJJWEPPPLCA3PF2ZCRRYO4F2ZX2EV2JMW2KC3I");
+
+	config.setString(Qdc::ConfigStore::Application, QStringLiteral("User"),
+	                 QStringLiteral("Client ID"), cid);
+
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("composed")));
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.49:412")));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	Qdc::BoardPane* pane = boardPane(hubs);
+	QVERIFY(pane);
+
+	const QString body =
+		QStringLiteral("The hub will be **offline** on Saturday.\n\nSee you then.");
+
+	/*
+	 * A post is kept beside the rest of QuickDC's own files, so the home directory is
+	 * pointed at the temporary one for the length of this test rather than writing into
+	 * the home of whoever is running it.
+	 */
+	const QByteArray realHome = qgetenv("HOME");
+	qputenv("HOME", m_dir.path().toUtf8());
+
+	emit pane->threadSubmitted(QStringLiteral("Hub upgrade on Saturday"), body, true);
+
+	qputenv("HOME", realHome);
+
+	/*
+	 * Written down before the hub is told anything, because until the first reader has
+	 * fetched it the author is the post's only source - and an author who submits a post
+	 * and then cannot send it has published nothing.
+	 */
+	const QString folder = m_dir.path() + QStringLiteral("/.quickdc/outbox");
+
+	const QStringList written = QDir(folder).entryList({QStringLiteral("post-*")},
+	                                                   QDir::Files);
+	QCOMPARE(written.size(), 1);
+
+	QFile document(folder + QLatin1Char('/') + written.first());
+	QVERIFY(document.open(QIODevice::ReadOnly));
+
+	const QByteArray bytes = document.readAll();
+	document.close();
+
+	const int newline = bytes.indexOf('\n');
+	QVERIFY(newline > 0);
+
+	/*
+	 * One ADC message, and the escaping the grammar asks for and no more: the hash is
+	 * taken over every byte of this, so a document written any other way is a different
+	 * post - and one a reader is required to refuse rather than repair.
+	 */
+	const QByteArray header = bytes.left(newline);
+
+	QVERIFY2(header.startsWith(QByteArray("IBB0 ID") + cid.toUtf8()
+	                           + " SJHub\\supgrade\\son\\sSaturday DA"),
+	         qPrintable(QString::fromUtf8(header)));
+
+	/* And the flag that says the body is the markdown subset, last as it is listed. */
+	QVERIFY(header.endsWith(" RT1"));
+
+	/*
+	 * The body is everything after the first newline, raw: only the header is ADC, and
+	 * the first newline is where ADC stops. So the blank line between the paragraphs is
+	 * in the document as it was typed.
+	 */
+	QCOMPARE(bytes.mid(newline + 1), body.toUtf8());
 }
 
 void TestHubs::whatWasTypedSurvivesLeavingTheSettings()

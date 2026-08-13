@@ -37,6 +37,19 @@ const QString DOWNLOADS = QStringLiteral("Downloads");
 const QString CHAT_MEDIA = QStringLiteral("Chat media");
 
 /**
+ * The bulletin board settings, matching HubsView, which is what acts on them.
+ *
+ * The first two are the ones a hub may answer for itself, under the same names in its
+ * own group of the session store; the page says as much, because a general setting
+ * that a hub can override is only half an answer to what will happen.
+ */
+const QString BOARDS = QStringLiteral("Boards");
+const QString BOARD_PREFETCH = QStringLiteral("Fetch a thread ahead");
+const QString BOARD_SERVE = QStringLiteral("Offer what I have read");
+const QString BOARD_KEEP = QStringLiteral("Keep posts for days");
+const QString BOARD_CACHE = QStringLiteral("Cache size");
+
+/**
  * The one group here that the core does not read.
  *
  * It stores a key outside the list above faithfully and then ignores it, which is
@@ -52,6 +65,20 @@ constexpr int MIB = 1024 * 1024;
 
 /** About six months, matching HubsView. Zero keeps them for ever. */
 constexpr int MEDIA_KEEP_DAYS = 180;
+
+/**
+ * What the board settings say when nothing has been written, matching HubsView.
+ *
+ * Fetching a thread ahead is off, and that one is not a preference this page invented:
+ * a post is fetched from whoever holds it, which at first is only the person who wrote
+ * it, so anything fetched without being asked for tells an author who read their post
+ * and when. The bounds are generous - an index entry is a few hundred bytes and a board
+ * without its entries is not a board, so only the documents are bounded at all.
+ */
+constexpr bool BOARD_PREFETCH_DEFAULT = false;
+constexpr bool BOARD_SERVE_DEFAULT = true;
+constexpr int BOARD_KEEP_DAYS = 90;
+constexpr int BOARD_CACHE_MIB = 256;
 
 /** The core's own defaults, so an unset field shows what is really in force. */
 constexpr int DEFAULT_PORT = 1411;
@@ -98,6 +125,7 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 	m_tabs->addTab(makePage(buildTransfers()), tr("Transfers"));
 	m_tabs->addTab(makePage(buildSharing()), tr("Sharing"));
 	m_tabs->addTab(makePage(buildChat()), tr("Chat"));
+	m_tabs->addTab(makePage(buildBoards()), tr("Boards"));
 	m_tabs->addTab(makePage(buildAppearance()), tr("Appearance"));
 
 	m_status->setContentsMargins(4, 0, 4, 0);
@@ -400,6 +428,74 @@ QWidget* Qdc::SettingsView::buildChat()
 	return page;
 }
 
+QWidget* Qdc::SettingsView::buildBoards()
+{
+	QWidget* page = new QWidget(this);
+
+	m_prefetchPosts = new QCheckBox(
+		tr("Fetch the rest of a thread when I open a post"), page);
+	m_prefetchPosts->setToolTip(tr("Ask for the replies before they are read, so that "
+	                               "they are there when you get to them"));
+	connect(m_prefetchPosts, &QCheckBox::toggled, this, &SettingsView::markModified);
+
+	m_servePosts = new QCheckBox(tr("Offer posts I have read to other people"), page);
+	m_servePosts->setToolTip(tr("Answer for a post by its hash, so that somebody else "
+	                            "can read it from here"));
+	connect(m_servePosts, &QCheckBox::toggled, this, &SettingsView::markModified);
+
+	m_postKeep = new QSpinBox(page);
+	m_postKeep->setRange(0, 3650);
+	m_postKeep->setSuffix(tr(" days"));
+	m_postKeep->setSpecialValueText(tr("keep for ever"));
+	m_postKeep->setToolTip(tr("Posts read longer ago than this are thrown away"));
+	connect(m_postKeep, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+
+	m_postCache = new QSpinBox(page);
+
+	/*
+	 * Shown in mebibytes and stored in bytes, so the top of the range is what the store
+	 * can hold rather than a figure about boards: a preference is a number, and two
+	 * gibibytes of posts is more than anything this will be asked to keep.
+	 */
+	m_postCache->setRange(0, 2047);
+	m_postCache->setSuffix(tr(" MiB"));
+	m_postCache->setSpecialValueText(tr("no limit"));
+	m_postCache->setToolTip(tr("The most this will hold of the posts themselves"));
+	connect(m_postCache, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+
+	QFormLayout* form = new QFormLayout(page);
+	form->addRow(QString(), m_prefetchPosts);
+	form->addRow(QString(), m_servePosts);
+	form->addRow(tr("Keep posts for"), m_postKeep);
+	form->addRow(tr("Keep at most"), m_postCache);
+
+	/*
+	 * Said first and said plainly, because it is the thing about a board that somebody
+	 * would not think of and cannot find out afterwards. A subscription is answered by
+	 * the hub, but a post is a file fetched from whoever holds it - and until somebody
+	 * else has read it, the only person who holds it is its author.
+	 */
+	form->addRow(makeNote(tr(
+		"Reading a post fetches it from somebody, and to begin with the only person "
+		"who has it is whoever wrote it. So opening a post may tell its author that "
+		"you have read it, and when. Nothing is fetched until you open it, and "
+		"fetching the rest of a thread is off until you turn it on.")));
+
+	form->addRow(makeNote(tr(
+		"Offering a post says the same thing to anybody who asks for it: that you "
+		"have read it. It is also what keeps a board readable after the person who "
+		"wrote it has gone, since a post ends up held by everyone who read it. A hub "
+		"you have not bookmarked offers nothing until you say so on that hub.")));
+
+	form->addRow(makeNote(tr(
+		"Both of these can be answered by a single hub for itself, from its own row "
+		"in the hub list, whatever is chosen here. The limits apply to the posts "
+		"themselves and not to the list of them, which is small and is what makes a "
+		"board a board.")));
+
+	return page;
+}
+
 QWidget* Qdc::SettingsView::buildAppearance()
 {
 	QWidget* page = new QWidget(this);
@@ -508,6 +604,18 @@ void Qdc::SettingsView::load()
 	m_mediaKeep->setValue(
 		qMax(0, media.value(QStringLiteral("Keep pasted for days")).toInt()));
 
+	const QVariantHash boards = m_config->readGroup(ConfigStore::Application, BOARDS, {
+		{BOARD_PREFETCH, BOARD_PREFETCH_DEFAULT},
+		{BOARD_SERVE, BOARD_SERVE_DEFAULT},
+		{BOARD_KEEP, BOARD_KEEP_DAYS},
+		{BOARD_CACHE, BOARD_CACHE_MIB * MIB}
+	});
+
+	m_prefetchPosts->setChecked(boards.value(BOARD_PREFETCH).toBool());
+	m_servePosts->setChecked(boards.value(BOARD_SERVE).toBool());
+	m_postKeep->setValue(qMax(0, boards.value(BOARD_KEEP).toInt()));
+	m_postCache->setValue(qMax(0, boards.value(BOARD_CACHE).toInt() / MIB));
+
 	/*
 	 * Read afresh each time rather than once when the form was built, so that a theme
 	 * file written while the window was open is on the list after a Revert.
@@ -570,6 +678,15 @@ bool Qdc::SettingsView::save()
 	                    QStringLiteral("Maximum size"), m_mediaLimit->value() * MIB);
 	m_config->setNumber(ConfigStore::Application, CHAT_MEDIA,
 	                    QStringLiteral("Keep pasted for days"), m_mediaKeep->value());
+
+	m_config->setBool(ConfigStore::Application, BOARDS, BOARD_PREFETCH,
+	                  m_prefetchPosts->isChecked());
+	m_config->setBool(ConfigStore::Application, BOARDS, BOARD_SERVE,
+	                  m_servePosts->isChecked());
+	m_config->setNumber(ConfigStore::Application, BOARDS, BOARD_KEEP,
+	                    m_postKeep->value());
+	m_config->setNumber(ConfigStore::Application, BOARDS, BOARD_CACHE,
+	                    m_postCache->value() * MIB);
 
 	m_config->setString(ConfigStore::Application, INTERFACE, THEME_KEY,
 	                    m_theme->currentData().toString());

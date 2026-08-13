@@ -11,10 +11,12 @@
 
 #include <QHash>
 #include <QList>
+#include <QSet>
 
 #include <functional>
 #include <optional>
 
+class QMenu;
 class QPushButton;
 class QSplitter;
 class QStackedWidget;
@@ -23,6 +25,8 @@ class QTreeWidgetItem;
 
 namespace Qdc {
 
+class BoardBridge;
+class BoardPane;
 class ChatPane;
 class Composer;
 class ConfigBridge;
@@ -38,16 +42,21 @@ class RecentHubs;
 class TransferBridge;
 
 /**
- * Hub chat and direct messages.
+ * Hub chat, direct messages and bulletin boards.
  *
  * Two panels: a tree of what is open on the left, and the current conversation on
- * the right. Each hub is a top level row with its direct messages beneath it, so
- * collapsing a hub hides its conversations without closing them.
+ * the right. Each hub is a top level row with its direct messages and its boards
+ * beneath it, so collapsing a hub hides them without closing them.
  *
  * This view also routes chat. A hub bridge reports every line the hub sends,
  * public and private together, and only something that can see all the panes can
  * decide which one a line belongs to - a private message may even be the first
  * sight of a conversation, and opens one.
+ *
+ * A board is routed the same way and for the same reason, with one rule of its own:
+ * a hub describing a board puts a row in the tree and subscribes to nothing. A
+ * subscription is a standing instruction to send data, so it is taken out when
+ * somebody opens the board and not when the hub mentions it.
  */
 class HubsView final : public View {
 	Q_OBJECT
@@ -119,6 +128,30 @@ public:
 	 */
 	QStringList openConversations(const QString& hubUrl) const;
 
+	/** The boards open on a hub, in the order their rows are listed. */
+	QStringList openBoards(const QString& hubUrl) const;
+
+	/**
+	 * What this client holds of the boards it has been told about, built the first
+	 * time a hub is opened.
+	 *
+	 * Owned here rather than handed in, as the media bridge is, because a board's
+	 * rows hang off the hubs in this tree and nothing else in the window has any use
+	 * for one. Every answer it gives arrives as a signal, so a caller watches it
+	 * rather than asking it.
+	 */
+	BoardBridge* bulletins();
+
+	/**
+	 * Where the index and the documents are kept; "~/.quickdc" unless this says
+	 * otherwise.
+	 *
+	 * A seam, and only a test has any use for it: the user's own directory is not
+	 * somewhere a test may leave a board behind. Has to be called before a hub is
+	 * opened, since that is what builds the bridge.
+	 */
+	void setBoardDirectory(const QString& directory);
+
 	/**
 	 * How a hub password is asked for: given the hub's address, return the
 	 * password, or nothing if the user declines.
@@ -178,6 +211,30 @@ private:
 		/** Conversations on this hub, by the context they are keyed on. */
 		QHash<QString, DmPane*> dms;
 
+		/** Boards on this hub, by the name the hub gave them. */
+		QHash<QString, BoardPane*> boards;
+
+		/**
+		 * The boards somebody has opened here, which is what asks for a subscription.
+		 *
+		 * The wish rather than the state, and it outlives a connection - a
+		 * subscription ends with the session and has to be asked for again, and this
+		 * is what remembers which ones to ask for. A board whose row was closed is
+		 * not in here: leaving a board is how somebody says they have finished with
+		 * it.
+		 */
+		QSet<QString> joined;
+
+		/**
+		 * The boards a subscription has been asked for on this connection.
+		 *
+		 * Dropped when the hub says it has no boards, because that cancels every
+		 * subscription on the connection and is the only thing that says so - and
+		 * dropped again when it says it has them, since a session that has just
+		 * begun holds none either.
+		 */
+		QSet<QString> subscribed;
+
 		/**
 		 * A password is being asked for.
 		 *
@@ -216,6 +273,106 @@ private:
 	/** Ask for this hub's password and send it, or say why login will fail. */
 	void promptForPassword(Entry& entry);
 
+	/**
+	 * What a descriptor says: a board that is new here, one that has changed, or one
+	 * that is gone.
+	 *
+	 * Nothing is subscribed to and nothing is fetched. A descriptor says what there
+	 * is to subscribe to and no more, and a hub sends one for every board a session
+	 * may see - so acting on it would take out a subscription per board on every
+	 * login, for boards nobody has looked at.
+	 */
+	void describeBoard(Entry& entry, const BoardInfo& board);
+
+	/** A row and a pane for a board, and nothing said to the hub. */
+	BoardPane* openBoard(Entry& entry, const QString& board);
+
+	/**
+	 * Open again the boards recorded against this hub, with what is cached in each.
+	 *
+	 * The rows come back and the subscriptions do not: what was open says where
+	 * somebody was reading, and reading is what asks the hub to go on sending.
+	 */
+	void restoreBoards(Entry& entry);
+
+	/**
+	 * Ask the hub for a board's entries, from the cursor the cache holds.
+	 *
+	 * Through the board bridge rather than the hub, because the cursor is on disk
+	 * and the disk belongs to the core thread - and because resuming means from the
+	 * highest timestamp held and never from one past it: timestamps are seconds and
+	 * are not unique, so a post accepted in the same second as the last one received
+	 * would fall behind a cursor advanced past it and reach nobody.
+	 *
+	 * Asked whether or not the hub has answered for its boards yet. The command is
+	 * dropped where it has none, and the feature arriving is what asks again.
+	 */
+	void subscribeBoard(Entry& entry, const QString& board);
+
+	/** Show a board, which is also what asks the hub to start sending it. */
+	void showBoard(BoardPane* pane);
+
+	/**
+	 * Take a board's row and its pane away.
+	 *
+	 * What a descriptor with the removal flag leaves behind, and what leaving a
+	 * board does. The documents are not touched: they are named by hash, they were
+	 * verified against it, and a board being gone from a hub says nothing about them.
+	 */
+	void closeBoard(Entry& entry, const QString& board);
+
+	/** The hub a board pane belongs to, or null. */
+	Entry* entryForBoard(BoardPane* pane);
+
+	/** The pane for one board on one hub, by the key its entries arrive under. */
+	BoardPane* boardPaneFor(const QString& hubKey, const QString& board) const;
+
+	/** Which panes hold an entry for this hash, wherever it was indexed. */
+	QList<BoardPane*> panesHolding(const QString& tth) const;
+
+	/**
+	 * Note that a post has been opened in the reading pane.
+	 *
+	 * Read means read: opened by somebody, not fetched. A post whose body could not
+	 * be had was still read, and one fetched ahead of a reader was not.
+	 */
+	void markRead(BoardPane* pane, const QString& tth);
+
+	/** Posts held on a board that nobody has opened. */
+	int unreadOn(BoardPane* pane) const;
+
+	/**
+	 * The choices that belong to one board rather than to the hub it is on.
+	 *
+	 * Reached by asking a board row for its menu. A board is not a conversation and
+	 * not a hub, so it offers neither of their menus: what can be decided here is
+	 * what has been read, what to read again, and whether to go on receiving it.
+	 */
+	void showBoardMenu(QTreeWidgetItem* item, const QPoint& globalPos);
+
+	/**
+	 * Compose a post document, offer it, and submit it once it has a hash.
+	 *
+	 * In that order, and it cannot be any other: the hash covers the header and the
+	 * body together, so it is not known until the last byte is written - which is
+	 * also why a post names its parent rather than the other way about. The document
+	 * is offered by its hash before the hub is told about it, because until somebody
+	 * has read it the author is its only source and an author who submits a post and
+	 * disconnects has published nothing.
+	 */
+	void submitPost(Entry& entry, BoardPane* pane, const QString& parent,
+	                const QString& subject, const QString& body, bool richText);
+
+	/**
+	 * Keep the document of a post composed here, now that its entry has come back.
+	 *
+	 * The store is what a reader is answered from, and a post nobody could read back
+	 * would be an odd thing to have written. Handed a copy, because adopting a
+	 * document takes the file it was given and this client is still offering the
+	 * original.
+	 */
+	void keepComposed(const QString& hubKey, const BoardEntry& entry);
+
 	/** Add a pane to the stack and a row to the tree, and wire its unread count. */
 	void adopt(ChatPane* pane, QTreeWidgetItem* item);
 
@@ -234,8 +391,12 @@ private:
 	 * The pane is remembered until the hashing finishes, which may be a while for a
 	 * large file, and the link goes into that conversation even if another is on screen
 	 * by then.
+	 *
+	 * A conversation and a board both ask for this and neither is the other's kind of
+	 * widget, so the pane is taken as what they have in common and what to do with the
+	 * answer is decided when it arrives.
 	 */
-	void attachFile(ChatPane* pane);
+	void attachFile(QWidget* pane);
 
 	/**
 	 * Write a pasted picture down and offer it, as if it had been chosen from disk.
@@ -245,7 +406,7 @@ private:
 	 * things QuickDC keeps, under a name that says where they came from, and stay there
 	 * for as long as the link in the message might be followed.
 	 */
-	void offerPastedImage(ChatPane* pane, const QByteArray& data, const QString& suffix);
+	void offerPastedImage(QWidget* pane, const QByteArray& data, const QString& suffix);
 
 	/**
 	 * Offer files that were dropped into a conversation.
@@ -254,16 +415,25 @@ private:
 	 * whether this machine can decode it - which is the same question the picture button
 	 * asks of what it will accept.
 	 */
-	void offerDroppedFiles(ChatPane* pane, const QStringList& paths);
+	void offerDroppedFiles(QWidget* pane, const QStringList& paths);
 
 	/**
-	 * Hash a chosen file, offer it, and put a link to it in the conversation that asked.
+	 * Hash a chosen file, offer it, and put a link to it in whatever asked.
 	 *
 	 * The pane is held weakly: hashing a large file takes a while, and the conversation
-	 * may be closed before it finishes.
+	 * or the board may be closed before it finishes.
 	 */
-	void offerFile(const QPointer<ChatPane>& pane, const QString& path,
+	void offerFile(const QPointer<QWidget>& pane, const QString& path,
 	               bool asMedia);
+
+	/**
+	 * Say something to whoever asked for a file, wherever they asked from.
+	 *
+	 * A conversation has somewhere to put a line like this and a board has not - a
+	 * board's bands are for what the hub said, and a file on this machine that could
+	 * not be hashed is nothing the hub has any part in.
+	 */
+	void tellPane(QWidget* pane, const QString& text);
 
 	/**
 	 * Where a file with this hash is on this machine, or empty.
@@ -321,6 +491,37 @@ private:
 	/** Remember what one hub has decided for itself, if anything. */
 	void loadHubMediaPolicy(const QString& hubUrl);
 
+	/** The same for the boards: read once when something writes the settings. */
+	void reloadBoardPolicy();
+
+	/** Hand one hub's board settings to the bridge that acts on them. */
+	void applyBoardPolicy(const QString& hubUrl);
+
+	/** Whether the rest of a thread is fetched when a post on this hub is opened. */
+	bool prefetchesOn(const QString& hubUrl) const;
+
+	/**
+	 * Whether posts read on this hub are answered for by hash.
+	 *
+	 * What makes a board durable - a popular post ends up held by everyone who has
+	 * read it and outlives its author - and a statement to anybody who asks for one:
+	 * *I have read this*. So a hub nobody has bookmarked answers for nothing until
+	 * somebody says otherwise on that hub. Visiting a hub once is not joining it, and
+	 * the extension asks for the difference to be kept.
+	 */
+	bool servesOn(const QString& hubUrl) const;
+
+	/**
+	 * A per hub choice with three answers: follow the general setting, always, or
+	 * never.
+	 *
+	 * Written into the hub's own group in the session store, where an absent value is
+	 * how a hub says it has no opinion - so "follow the general setting" removes the
+	 * key rather than writing false.
+	 */
+	void addHubChoice(QMenu& menu, const QString& title, const QString& hubUrl,
+	                  const QString& key, const std::function<void()>& applied);
+
 	/**
 	 * Throw away pasted pictures nobody is likely to ask for any more.
 	 *
@@ -341,6 +542,16 @@ private:
 
 	/** Redraw a row's label, which carries the unread count. */
 	void refreshItem(QTreeWidgetItem* item, ChatPane* pane);
+
+	/**
+	 * The same for a board row.
+	 *
+	 * Its own rather than a branch in the one above, because the two share the label
+	 * and nothing else: a board has no connection of its own to hang a padlock on,
+	 * and what it counts is posts nobody has opened rather than lines nobody has
+	 * seen.
+	 */
+	void refreshBoardItem(QTreeWidgetItem* item, BoardPane* pane);
 
 	void onTreeSelectionChanged();
 
@@ -380,6 +591,28 @@ private:
 	/** Hubs that have decided for themselves, by address. Absent means no opinion. */
 	QHash<QString, bool> m_hubFetchMedia;
 
+	/**
+	 * The boards, the documents, and the cursor each subscription resumes from.
+	 *
+	 * Built on the first hub being opened rather than in the constructor: it makes
+	 * directories and reads them on the core thread, and a window with no hub in it
+	 * has nothing to keep.
+	 */
+	BoardBridge* m_bulletins = nullptr;
+
+	/** Where that bridge keeps what it holds; see setBoardDirectory(). */
+	QString m_boardDirectory;
+
+	/* The board settings, kept in hand for the same reason the media ones are. */
+	bool m_prefetchPosts = false;
+	bool m_servePosts = true;
+	quint64 m_postKeepSeconds = 0;
+	quint64 m_postCacheBytes = 0;
+
+	/** Hubs that have decided either of those for themselves. */
+	QHash<QString, bool> m_hubPrefetch;
+	QHash<QString, bool> m_hubServe;
+
 	QSplitter* m_split;
 	QTreeWidget* m_tree;
 	QStackedWidget* m_stack;
@@ -395,6 +628,36 @@ private:
 
 	/** And the other way, for closing a pane whose row has to go with it. */
 	QHash<ChatPane*, QTreeWidgetItem*> m_items;
+
+	/**
+	 * The same two for the board rows, beside the maps above rather than in them.
+	 *
+	 * Everything that reads m_panes takes what it finds for a conversation - it sums
+	 * unread lines, asks for a pane title, casts to a conversation, tells each one
+	 * that a download finished - and a board is none of those things. Widening the
+	 * map would have every one of those readers ask what kind of pane it had before
+	 * doing anything with it.
+	 */
+	QHash<QTreeWidgetItem*, BoardPane*> m_boards;
+	QHash<BoardPane*, QTreeWidgetItem*> m_boardItems;
+
+	/**
+	 * Which posts have been opened, per board.
+	 *
+	 * Kept here and only for as long as the board is open, because there is no way to
+	 * ask the bridge: the index on disk records what has been read and nothing this
+	 * side can reach says so. A count over what is held, which is why it cannot drift.
+	 */
+	QHash<BoardPane*, QSet<QString>> m_read;
+
+	/**
+	 * Documents composed here whose entry has not come back, by hash.
+	 *
+	 * There is no success message in this protocol - the entry is the acknowledgement
+	 * - so this is what recognises one's own post arriving, and the file is what is
+	 * being offered to whoever reads it first.
+	 */
+	QHash<QString, QString> m_composed;
 };
 
 }

@@ -78,12 +78,13 @@ private:
 	QWidget* buildTransfers();
 	QWidget* buildSharing();
 	QWidget* buildChat();
+	QWidget* buildBoards();
 	QWidget* buildAppearance();
 
 	/**
 	 * A tab page: the form given its margins, and scrolled when the window is too
-	 * short for it. Every tab goes through this, so that the six of them are inset
-	 * by the same amount and none of them clips instead of scrolling.
+	 * short for it. Every tab goes through this, so that they are all inset by the
+	 * same amount and none of them clips instead of scrolling.
 	 */
 	QWidget* makePage(QWidget* page);
 
@@ -137,6 +138,17 @@ private:
 	QCheckBox* m_fetchMedia;
 	QSpinBox* m_mediaLimit;
 	QSpinBox* m_mediaKeep;
+
+	/*
+	 * Bulletin boards: the two disclosures, and what this client is willing to hold.
+	 * Reading a post is fetching a file from whoever has it, so both of the first two
+	 * say something about this user to somebody else - which is why the page says so
+	 * in words rather than leaving it to a tooltip.
+	 */
+	QCheckBox* m_prefetchPosts;
+	QCheckBox* m_servePosts;
+	QSpinBox* m_postKeep;
+	QSpinBox* m_postCache;
 	QListWidget* m_shareList;
 	QPushButton* m_removeShare;
 	QPushButton* m_renameShare;

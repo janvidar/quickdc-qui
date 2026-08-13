@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
@@ -48,6 +49,9 @@ private slots:
 	void formTracksBeingEdited();
 	void formChunkSizeIsShownInKibibytes();
 	void formAddsAFolderWithQtsOwnChooser();
+
+	void boardsFetchNothingAheadUntilTheyAreTold();
+	void theBoardsPageSaysThatReadingAPostMayBeSeen();
 
 private:
 	QString scratch(const QString& name) const;
@@ -475,6 +479,82 @@ void TestSettings::formAddsAFolderWithQtsOwnChooser()
 	QCOMPARE(shares.folders().first().name, QStringLiteral("Clicked"));
 
 	shares.setFolders({});
+}
+
+void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()
+{
+	using Qdc::ConfigStore;
+
+	/* Nothing written for either, so the form is showing what is really in force. */
+	m_config->remove(ConfigStore::Application, QStringLiteral("Boards"),
+	                 QStringLiteral("Fetch a thread ahead"));
+	m_config->remove(ConfigStore::Application, QStringLiteral("Boards"),
+	                 QStringLiteral("Cache size"));
+	m_config->save(ConfigStore::Application);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	QVERIFY(view.save());
+
+	/*
+	 * Off, and not as a preference: a post is fetched from whoever holds it, and until
+	 * somebody else has read it the only person who holds it is its author - so
+	 * anything fetched without being asked for tells an author who read their post and
+	 * when.
+	 */
+	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Boards"),
+	                           QStringLiteral("Fetch a thread ahead"), true), false);
+
+	/* And the bound on what is held is in bytes, whatever the form shows. */
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Boards"),
+	                             QStringLiteral("Cache size")), 256 * 1024 * 1024);
+
+	m_config->setNumber(ConfigStore::Application, QStringLiteral("Boards"),
+	                    QStringLiteral("Cache size"), 128 * 1024 * 1024);
+
+	view.load();
+	QVERIFY(view.save());
+
+	/*
+	 * Back in bytes, unchanged. A page that showed bytes as mebibytes and wrote them
+	 * back as mebibytes would divide the cache by a million every time it was saved.
+	 */
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Boards"),
+	                             QStringLiteral("Cache size")), 128 * 1024 * 1024);
+}
+
+void TestSettings::theBoardsPageSaysThatReadingAPostMayBeSeen()
+{
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	QStringList said;
+
+	for (const QLabel* label : view.findChildren<QLabel*>())
+		said.append(label->text());
+
+	const QString page = said.join(QLatin1Char('\n'));
+
+	/*
+	 * In words on the page rather than in a tooltip, because it is the thing about a
+	 * board that somebody would not think of and cannot find out afterwards: the
+	 * request goes to whoever has the post, and to begin with that is only its author.
+	 */
+	QVERIFY2(page.contains(QStringLiteral("the only person who has it is whoever "
+	                                      "wrote it")),
+	         "the page does not say who a post is fetched from");
+
+	QVERIFY2(page.contains(QStringLiteral("may tell its author that you have read it")),
+	         "the page does not say that reading a post can be seen");
+
+	/* And that answering for one says the same thing to anybody who asks. */
+	QVERIFY(page.contains(QStringLiteral("Offering a post says the same thing to "
+	                                     "anybody who asks for it")));
+
+	/* And which hubs answer for nothing until they are told to. */
+	QVERIFY(page.contains(QStringLiteral("A hub you have not bookmarked offers "
+	                                     "nothing until you say so on that hub")));
 }
 
 QTEST_MAIN(TestSettings)
