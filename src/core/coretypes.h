@@ -98,6 +98,67 @@ enum class SearchCategory {
 };
 Q_ENUM_NS(SearchCategory)
 
+/**
+ * What a session may do on one bulletin board; the PE field of a board descriptor.
+ *
+ * A bitmask rather than a rank, because the useful shapes are not ordered: a board
+ * where anybody may reply and only an operator may start a thread is what an
+ * announcements board is, and it is Reply without StartThread.
+ *
+ * What the hub said this session may do, and nothing more. It says what to offer a
+ * user, not what will be allowed - the hub re-checks everything when it arrives, and
+ * an operation this appeared to permit may still come back refused.
+ */
+enum class BoardPermission {
+	Subscribe = 1,
+	StartThread = 2,
+	Reply = 4,
+	WithdrawOwn = 8,
+	WithdrawAny = 16
+};
+Q_ENUM_NS(BoardPermission)
+
+/**
+ * How much of a post is actually known, which is not a detail a reader may be spared.
+ *
+ * An index entry is the hub's description of a document that may not exist, so a
+ * subject drawn before the document arrives is the hub's subject line and nothing
+ * more. Each of these is a different thing and the pane draws each of them
+ * differently; collapsing any two would be presenting a claim as a fact.
+ */
+enum class PostState {
+	/** The entry is held, the body has not been asked for. Nothing here is verified. */
+	Announced,
+
+	/** Being fetched now. */
+	Fetching,
+
+	/** Fetched, hashed to the TTH that was asked for, and its header parsed. */
+	Verified,
+
+	/**
+	 * Verified, but the document's own author disagrees with the hub's.
+	 *
+	 * Not an error and not a forgery on its face: the honest case is a post relayed to
+	 * a second hub by somebody who did not write it, and it looks exactly like the
+	 * dishonest one. Attributed to the hub's claim with the disagreement shown, never
+	 * to the document's.
+	 */
+	Disputed,
+
+	/**
+	 * Nobody who has it could be reached.
+	 *
+	 * Distinct from an empty post and from an error, and never a reason to drop the
+	 * entry: the document may be somewhere that is offline today.
+	 */
+	Unavailable,
+
+	/** A tombstone arrived. The replies are still posts and are still shown. */
+	Withdrawn
+};
+Q_ENUM_NS(PostState)
+
 /** Which of the Core's two preference stores a setting belongs to. */
 enum class ConfigStore {
 	/** ~/.quickdc/quickdc.conf; the settings listed in api/config.h. */
@@ -402,6 +463,155 @@ struct QueueEntry {
 	bool transferring = false;
 };
 
+/**
+ * One bulletin board on one hub; QuickDC::Board, the BBD command.
+ *
+ * Everything here is the hub's own testimony and none of it can be checked against
+ * anything. A board is scoped to the hub that described it: two hubs may have a board
+ * of the same name and they are two boards, and merging what each says about one would
+ * produce a board that exists nowhere.
+ *
+ * A board this session may not subscribe to is not described at all - withholding the
+ * descriptor is the whole of the mechanism for hiding a board - so absence here means
+ * either that there is no such board or that we may not see it, and the two are
+ * deliberately indistinguishable.
+ */
+struct BoardInfo {
+	/**
+	 * The board's name on the wire, and its identity.
+	 *
+	 * Protocol text, held to a narrow character set, and never a filename or a path
+	 * component: the set permits '.', so '..' is a legal board name.
+	 */
+	QString name;
+
+	/** A title to show. Remote-chosen; draw it through RichText::displayText(). */
+	QString title;
+
+	/** Remote-chosen prose, and the longest of the three. Same treatment. */
+	QString description;
+
+	/** A BoardPermission mask; see that enum for why it is not a rank. */
+	quint32 permissions = 0;
+
+	/** The largest post document, in bytes, the hub will accept here. */
+	quint64 maxSize = 0;
+
+	/**
+	 * The newest and oldest timestamps the hub will speak for, in seconds.
+	 *
+	 * Kept as the integers they arrived as rather than as QDateTime, because a cursor
+	 * is made of this value and a client must not correct one it finds implausible -
+	 * only decline to display it. A hub that stamps a post far in the future pins it
+	 * to the head of the board for ever, and rounding the number to make it drawable
+	 * would silently move every cursor derived from it.
+	 */
+	quint64 newest = 0;
+	quint64 oldest = 0;
+
+	/** How many posts are indexed, tombstones excluded. */
+	quint64 posts = 0;
+
+	/** The board is gone. Its cached documents are not; they are named by hash. */
+	bool removed = false;
+
+	bool may(BoardPermission permission) const
+	{
+		return (permissions & static_cast<quint32>(permission)) != 0;
+	}
+};
+
+/**
+ * The hub's record of one post on one board; QuickDC::BoardEntry, the BBL command.
+ *
+ * An assertion, never evidence. The hub chose 'board', 'cid', 'nick', 'thread' and
+ * 'timestamp' and nothing can check them; it copied 'parent' and 'subject' out of a
+ * document it has never been able to read, so those two are hints until the document
+ * has been fetched and hashed, and the document wins where they disagree.
+ *
+ * 'cid' is not a proven identity. It means only that this hub says it accepted this
+ * post from a session that had authenticated as that CID. 'nick' is weaker still: it
+ * is not in the document at all, and must never be used to attribute a post or to
+ * match against an ignore list.
+ */
+struct BoardEntry {
+	/** The document's tiger tree root, and the post's identity. */
+	QString tth;
+
+	/**
+	 * The document's length as its author declared it.
+	 *
+	 * Nothing verifies this before the transfer, so it bounds nothing: a fetch is
+	 * capped independently and abandoned when the cap is passed.
+	 */
+	quint64 size = 0;
+
+	QString board;
+	QString cid;
+	QString nick;
+
+	/** The parent's root, empty in a post that starts a thread. */
+	QString parent;
+
+	/**
+	 * The thread root, as the hub grouped it.
+	 *
+	 * A convenience and never verified. 'parent' is the load-bearing link and it is
+	 * inside the hash, so a client holding a board can rebuild the true grouping from
+	 * parent links alone where the two disagree.
+	 */
+	QString thread;
+
+	QString subject;
+
+	/** When the hub accepted it, in seconds; see BoardInfo::newest for why raw. */
+	quint64 timestamp = 0;
+
+	/** A tombstone. Replies to it are separate posts and stay. */
+	bool removed = false;
+};
+
+/**
+ * A post document, once it has been fetched and read; QuickDC::Post.
+ *
+ * Everything here except 'state' came out of bytes that hashed to the root they were
+ * asked for, which is what makes this the half of a post that a hub cannot alter.
+ */
+struct BoardPost {
+	QString tth;
+
+	/** The author the document itself claims. Compared against the entry's, never trusted. */
+	QString cid;
+
+	QString parent;
+	QString subject;
+
+	/** The body, exactly as it arrived. Read as markdown only when richText is set. */
+	QString body;
+
+	/**
+	 * When the author says it was composed, in seconds, and whether they said at all.
+	 *
+	 * Nothing verifies it and it must not be used for ordering - siblings are ordered
+	 * by the hub's timestamp. Present it as a claim rather than as a time.
+	 */
+	quint64 date = 0;
+	bool dated = false;
+
+	/**
+	 * The body is the RTF0 markdown subset.
+	 *
+	 * True only for the value that says so. An RT the reader does not recognise is
+	 * reserved, and a reserved value means plain text rather than an error.
+	 */
+	bool richText = false;
+
+	PostState state = PostState::Announced;
+
+	/** Why the body is not here, for a person to read. Set when state says it is not. */
+	QString unavailableReason;
+};
+
 }
 
 /*
@@ -418,5 +628,8 @@ Q_DECLARE_METATYPE(Qdc::QueueEntry)
 Q_DECLARE_METATYPE(Qdc::RemoteFileInfo)
 Q_DECLARE_METATYPE(Qdc::RemoteDirInfo)
 Q_DECLARE_METATYPE(Qdc::SearchHit)
+Q_DECLARE_METATYPE(Qdc::BoardInfo)
+Q_DECLARE_METATYPE(Qdc::BoardEntry)
+Q_DECLARE_METATYPE(Qdc::BoardPost)
 
 #endif // HAVE_QUICKDC_QUI_CORETYPES_H
