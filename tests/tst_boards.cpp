@@ -9,11 +9,13 @@
 
 #include <QAbstractButton>
 #include <QDateTime>
+#include <QFont>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSet>
 #include <QSignalSpy>
+#include <QStackedWidget>
 #include <QTextBrowser>
 #include <QTest>
 #include <QTreeView>
@@ -61,17 +63,24 @@ private slots:
 	void anAnnouncedPostIsNotDrawnAsThoughItHadBeenRead();
 	void aPostWhoseDocumentIsHereIsNotDrawnAsUnfetched();
 	void aDisputedPostIsAttributedToTheIndexAndNotToTheDocument();
+	void aDisputedPostIsListedAndReadLikeAnyOther();
+	void aDocumentThatIsNotThePostItClaimsToBeIsNotListed();
+	void aPostNobodyCouldBeFoundForIsListedAndDimmed();
 	void aPlainBodyIsNeverRenderedAsMarkdown();
-	void theWordDeleteAppearsNowhereInThePane();
+	void theWordWithdrawAppearsNowhereInThePane();
 
+	void theThreadListDrawsNoParentOrDocumentColumn();
 	void permissionsDecideWhatIsOffered();
+	void deletingIsAskedAboutInPlainWords();
 	void aRefusalIsReportedInThePane();
 	void aGapThatCannotBeClosedIsSaidSo();
+	void writingAPostTakesTheReadingAreaAndGivesItBack();
+	void aReplyOpensQuotingThePostItAnswers();
 	void aSubmittedThreadIsNotPresentedAsPublished();
 	void aReplyKeepsTheParentItWasBegunOn();
-	void aReplyToAPostWithdrawnWhileWritingIsNotSent();
+	void aReplyToAPostDeletedWhileWritingIsNotSent();
 	void aDescriptorForAnotherBoardStartsAgain();
-	void rereadingTheBoardIsOffered();
+	void theBoardIsNotSomethingAReaderRefreshes();
 	void thePaneSaysWhichPostItIsShowing();
 	void aPictureInAPostIsDrawnOnceItsFileIsHere();
 
@@ -372,9 +381,13 @@ void TestBoards::anOrphanIsKeptAndAttachedToItsThread()
 	QCOMPARE(model.parent(model.indexOf(orphan)), model.indexOf(root));
 	QVERIFY(role(model, orphan, Qdc::BoardModel::MissingParentRole).toBool());
 
-	QVERIFY2(cell(model, orphan, Qdc::BoardModel::ParentColumn)
-	         	.contains(QStringLiteral("missing")),
-	         qPrintable(cell(model, orphan, Qdc::BoardModel::ParentColumn)));
+	/*
+	 * And it is marked on the row rather than in a column of words beside the subject: a
+	 * reply drawn somewhere other than under the post it names is slanted, and what is
+	 * odd about it is in the tooltip for whoever wants to know.
+	 */
+	QVERIFY(role(model, orphan, Qt::FontRole).value<QFont>().italic());
+	QVERIFY(!role(model, root, Qt::FontRole).value<QFont>().italic());
 
 	QCOMPARE(model.missingParents(), QStringList({absent}));
 
@@ -504,9 +517,8 @@ void TestBoards::aWithdrawnEntryLeavesAndItsRepliesStay()
 	QVERIFY(role(model, reply, Qdc::BoardModel::WithdrawnParentRole).toBool());
 	QVERIFY(!role(model, reply, Qdc::BoardModel::MissingParentRole).toBool());
 
-	QVERIFY2(cell(model, reply, Qdc::BoardModel::ParentColumn)
-	         	.contains(QStringLiteral("withdrawn")),
-	         qPrintable(cell(model, reply, Qdc::BoardModel::ParentColumn)));
+	/* Marked the same way as any other reply whose parent is not on the board. */
+	QVERIFY(role(model, reply, Qt::FontRole).value<QFont>().italic());
 
 	/* A parent that was withdrawn is not one to go asking the hub for. */
 	QVERIFY(model.missingParents().isEmpty());
@@ -644,7 +656,10 @@ void TestBoards::nothingIsSaidBetweenASubjectAndItsWords()
 		"the hub says", "hashed to the root", "came out of the document",
 		"its author claim", "has been verified", "index line",
 		"is not proof", "attributes nothing", "looks exactly like a forgery",
-		"the entry is kept", "nothing here can check"
+		"the entry is kept", "nothing here can check",
+
+		/* And the register of the controls that stood in the same space. */
+		"withdraw", "disputed", "re-read"
 	};
 
 	Qdc::BoardPane pane;
@@ -844,6 +859,123 @@ void TestBoards::aDisputedPostIsAttributedToTheIndexAndNotToTheDocument()
 	         qPrintable(body->toPlainText()));
 }
 
+/**
+ * A post whose two authorship claims disagree is on the board like any other.
+ *
+ * Its bytes hashed to the name they were asked for and its header parsed, so everything
+ * it says is the post's own; all that disagrees is who wrote it, and the honest case of
+ * that is a post relayed to a second hub by somebody who did not write it. Since a relay
+ * is indistinguishable from a forgery, refusing to list one would empty every relayed
+ * board to catch the one forger - so it is listed, read, and attributed to the hub.
+ */
+void TestBoards::aDisputedPostIsListedAndReadLikeAnyOther()
+{
+	Qdc::BoardPane pane;
+
+	const QString root = QStringLiteral("ROOT");
+
+	pane.addEntry(entry(root, base()));
+	pane.read(root);
+
+	pane.setPost(post(root, QStringLiteral("Relayed from the other hub"), false,
+	                  QStringLiteral("DOCUMENTSAIDTHIS")));
+
+	QCOMPARE(pane.threads()->stateOf(root), Qdc::PostState::Disputed);
+
+	/* Listed, and not marked in the list either: nothing about it is doubtful to draw. */
+	QVERIFY(pane.threads()->listable(root));
+	QVERIFY(pane.threads()->indexOf(root).isValid());
+	QCOMPARE(pane.threads()->postCount(), 1);
+	QVERIFY(!role(*pane.threads(), root, Qt::ForegroundRole).isValid());
+
+	QTextBrowser* body = pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"));
+	QVERIFY(!body->isHidden());
+	QVERIFY(body->toPlainText().contains(QStringLiteral("Relayed from the other hub")));
+}
+
+/**
+ * A document that is here and is not the post its entry named is not listed at all.
+ *
+ * The bytes did not hash to the name, or they did and the header did not parse. Either
+ * way this client has read the document and there is nothing true left to show - not even
+ * the hub's subject line, which described a document that turns out to be something else -
+ * and no later copy can differ, because every copy of it is these same bytes.
+ */
+void TestBoards::aDocumentThatIsNotThePostItClaimsToBeIsNotListed()
+{
+	Qdc::BoardPane pane;
+
+	const QString root = QStringLiteral("ROOT");
+	const QString reply = QStringLiteral("REPLY");
+	const QString other = QStringLiteral("OTHER");
+
+	pane.addEntries({entry(root, base()), entry(reply, base() + 10, root),
+	                 entry(other, base() + 20)});
+
+	pane.read(root);
+
+	QSignalSpy showing(&pane, &Qdc::BoardPane::readingChanged);
+
+	pane.setPostUnverifiable(root);
+
+	QVERIFY(!pane.threads()->listable(root));
+	QVERIFY(!pane.threads()->indexOf(root).isValid());
+	QVERIFY2(!drawn(*pane.threads()).contains(root),
+	         qPrintable(drawn(*pane.threads()).join(QLatin1Char(' '))));
+
+	/* The board is still the board: everything else on it stands. */
+	QCOMPARE(pane.threads()->postCount(), 2);
+	QVERIFY(pane.threads()->indexOf(other).isValid());
+
+	/*
+	 * And the reply to it is a post of its own, which is now a reply to something that
+	 * is not on the board - the same arrangement as a parent that never arrived.
+	 */
+	QVERIFY(pane.threads()->indexOf(reply).isValid());
+	QVERIFY(role(*pane.threads(), reply, Qdc::BoardModel::MissingParentRole).toBool());
+
+	/* Nothing is left on the screen either, and whoever was told it is told again. */
+	QVERIFY(pane.reading().isEmpty());
+	QCOMPARE(showing.count(), 1);
+	QVERIFY(showing.first().first().toString().isEmpty());
+
+	QVERIFY(pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"))->isHidden());
+}
+
+/**
+ * A post nobody could be found for stays in the list and is drawn quieter than the rest.
+ *
+ * An index entry can outlive every copy of the document it names, and the copy that is
+ * missing today may be on a client that is switched off. So the row keeps its subject,
+ * its author and its date and says what has happened by being dimmed - a mark on the row
+ * rather than a word in a column, which is what the columns of this list are not for.
+ */
+void TestBoards::aPostNobodyCouldBeFoundForIsListedAndDimmed()
+{
+	Qdc::BoardPane pane;
+
+	const QString missing = QStringLiteral("GONE");
+	const QString held = QStringLiteral("HERE");
+
+	pane.addEntries({entry(missing, base()), entry(held, base() + 10)});
+
+	pane.read(missing);
+	pane.setPostUnavailable(missing, QStringLiteral("nobody answered"));
+
+	QVERIFY(pane.threads()->listable(missing));
+	QVERIFY(pane.threads()->indexOf(missing).isValid());
+	QCOMPARE(pane.threads()->postCount(), 2);
+
+	const QVariant dimmed = role(*pane.threads(), missing, Qt::ForegroundRole);
+
+	QVERIFY(dimmed.isValid());
+	QVERIFY(!role(*pane.threads(), held, Qt::ForegroundRole).isValid());
+
+	/* Its subject is still drawn, and drawn as itself. */
+	QCOMPARE(cell(*pane.threads(), missing, Qdc::BoardModel::SubjectColumn),
+	         QStringLiteral("A subject"));
+}
+
 void TestBoards::aPlainBodyIsNeverRenderedAsMarkdown()
 {
 	Qdc::BoardPane pane;
@@ -868,7 +1000,7 @@ void TestBoards::aPlainBodyIsNeverRenderedAsMarkdown()
 	QVERIFY(shown->toPlainText().contains(QStringLiteral("not bold")));
 }
 
-void TestBoards::theWordDeleteAppearsNowhereInThePane()
+void TestBoards::theWordWithdrawAppearsNowhereInThePane()
 {
 	Qdc::BoardPane pane;
 
@@ -892,7 +1024,8 @@ void TestBoards::theWordDeleteAppearsNowhereInThePane()
 	pane.setPostUnavailable(root, QStringLiteral("nobody answered"));
 	pane.reportRefusal(72, QStringLiteral("Post exceeds 65536 bytes"), root);
 	pane.setGap(true);
-	button(pane, "boardNewThread")->click();
+	button(pane, "boardDelete")->click();
+	button(pane, "boardNewPost")->click();
 	button(pane, "boardReply")->click();
 
 	QStringList drawnText;
@@ -922,16 +1055,46 @@ void TestBoards::theWordDeleteAppearsNowhereInThePane()
 	                            Qt::ToolTipRole).toString());
 
 	/*
-	 * Withdrawal takes an entry out of an index. It cannot take the document back from
-	 * everybody who has read it, so an interface offering to delete a post promises what
-	 * this extension has no way of doing.
+	 * "Withdraw" is the wire's word for it and it is nobody else's. What a reader means
+	 * by the button is delete, and what the extension can actually promise is said where
+	 * it matters, in the question asked before it happens - not by giving the control a
+	 * name that has to be explained before it can be pressed.
 	 */
 	const QString all = drawnText.join(QLatin1Char('\n'));
 
-	QVERIFY2(!all.contains(QStringLiteral("delete"), Qt::CaseInsensitive),
+	QVERIFY2(!all.contains(QStringLiteral("withdraw"), Qt::CaseInsensitive),
 	         qPrintable(all));
 
-	QVERIFY(all.contains(QStringLiteral("Withdraw")));
+	QVERIFY(all.contains(QStringLiteral("Delete")));
+}
+
+/**
+ * The list is a subject, an author and a time, and no working notes.
+ *
+ * What the parent column and the document column carried was this client's own bookkeeping
+ * - which entry names a parent nobody holds, how far a document has been checked - and a
+ * reader of a board has nothing to do with either. What they do need is on the row itself:
+ * a post that could not be had is dimmed and a reply drawn away from its parent is slanted.
+ */
+void TestBoards::theThreadListDrawsNoParentOrDocumentColumn()
+{
+	Qdc::BoardModel model;
+
+	model.add(entry(QStringLiteral("ROOT"), base()));
+
+	QCOMPARE(model.columnCount(), 3);
+	QCOMPARE(model.columnCount(), int(Qdc::BoardModel::ColumnCount));
+
+	QStringList headings;
+
+	for (int column = 0; column < Qdc::BoardModel::ColumnCount; ++column)
+		headings.append(model.headerData(column, Qt::Horizontal).toString());
+
+	QCOMPARE(headings, QStringList({QStringLiteral("Subject"), QStringLiteral("Author"),
+	                                QStringLiteral("Accepted")}));
+
+	for (const char* const gone : {"Parent", "Document"})
+		QVERIFY2(!headings.contains(QLatin1String(gone)), gone);
 }
 
 void TestBoards::permissionsDecideWhatIsOffered()
@@ -946,26 +1109,132 @@ void TestBoards::permissionsDecideWhatIsOffered()
 	pane.addEntry(entry(QStringLiteral("ROOT"), base()));
 	pane.read(QStringLiteral("ROOT"));
 
-	QVERIFY(!button(pane, "boardNewThread")->isEnabled());
+	/* Not there at all rather than there and refusing: see refreshActions(). */
+	QVERIFY(button(pane, "boardNewPost")->isHidden());
 	QVERIFY(button(pane, "boardReply")->isHidden());
-	QVERIFY(button(pane, "boardWithdraw")->isHidden());
+	QVERIFY(button(pane, "boardDelete")->isHidden());
 
 	/* Reply without start-a-thread is what an announcements board is. */
 	Qdc::BoardInfo replies = readOnly;
 	replies.permissions |= static_cast<quint32>(Qdc::BoardPermission::Reply);
-	replies.permissions |= static_cast<quint32>(Qdc::BoardPermission::WithdrawOwn);
 
 	pane.setBoard(replies);
 
-	QVERIFY(!button(pane, "boardNewThread")->isEnabled());
+	QVERIFY(button(pane, "boardNewPost")->isHidden());
 	QVERIFY(!button(pane, "boardReply")->isHidden());
-	QVERIFY(!button(pane, "boardWithdraw")->isHidden());
+	QVERIFY(button(pane, "boardDelete")->isHidden());
 
-	QSignalSpy withdrawn(&pane, &Qdc::BoardPane::withdrawRequested);
-	button(pane, "boardWithdraw")->click();
+	/* Starting a thread is what "New post" is for, and it says that and not "thread". */
+	Qdc::BoardInfo posting = replies;
+	posting.permissions |= static_cast<quint32>(Qdc::BoardPermission::StartThread);
 
-	QCOMPARE(withdrawn.count(), 1);
-	QCOMPARE(withdrawn.first().first().toString(), QStringLiteral("ROOT"));
+	pane.setBoard(posting);
+
+	QVERIFY(!button(pane, "boardNewPost")->isHidden());
+	QCOMPARE(button(pane, "boardNewPost")->text(), QStringLiteral("New post"));
+
+	/*
+	 * Either withdrawal permission offers it. Whether the post is this user's own is not
+	 * something the pane can tell, and the hub re-checks it as it arrives.
+	 */
+	for (const Qdc::BoardPermission which : {Qdc::BoardPermission::WithdrawOwn,
+	                                         Qdc::BoardPermission::WithdrawAny})
+	{
+		Qdc::BoardInfo mine = posting;
+		mine.permissions |= static_cast<quint32>(which);
+
+		pane.setBoard(mine);
+		pane.read(QStringLiteral("ROOT"));
+
+		QVERIFY(!button(pane, "boardDelete")->isHidden());
+		QCOMPARE(button(pane, "boardDelete")->text(), QStringLiteral("Delete"));
+	}
+
+	QSignalSpy taken(&pane, &Qdc::BoardPane::withdrawRequested);
+
+	/* And it is asked about before it happens; the question is what sends it. */
+	button(pane, "boardDelete")->click();
+	QCOMPARE(taken.count(), 0);
+
+	button(pane, "boardDeleteConfirm")->click();
+
+	QCOMPARE(taken.count(), 1);
+	QCOMPARE(taken.first().first().toString(), QStringLiteral("ROOT"));
+}
+
+/**
+ * Deleting says what it does and promises nothing about the document.
+ *
+ * The word is the reader's: somebody pressing it means delete. What happens is the
+ * extension's withdrawal - the entry leaves this hub's index and the withdrawal travels
+ * to whoever is watching the board - and a copy is a file on somebody else's disk. So the
+ * question says both of those things and stops, rather than promising the post is gone.
+ */
+void TestBoards::deletingIsAskedAboutInPlainWords()
+{
+	Qdc::BoardPane pane;
+
+	Qdc::BoardInfo board;
+	board.name = QStringLiteral("general");
+	board.permissions = 1 + 2 + 4 + 8;
+
+	pane.setBoard(board);
+	pane.addEntry(entry(QStringLiteral("ROOT"), base()));
+	pane.read(QStringLiteral("ROOT"));
+
+	QLabel* question = label(pane, "boardDeleteQuestion");
+	QVERIFY(question);
+
+	/* The question and the buttons are one row and the other, in the same place. */
+	const auto asking = [question] { return !question->parentWidget()->isHidden(); };
+
+	const auto offering = [&pane] {
+		return !button(pane, "boardDelete")->parentWidget()->isHidden();
+	};
+
+	/* Nothing is asked until somebody asks for it. */
+	QVERIFY(!asking());
+	QVERIFY(offering());
+
+	button(pane, "boardDelete")->click();
+
+	QVERIFY(asking());
+	QVERIFY(!offering());
+
+	const QString asked = question->text();
+
+	QVERIFY2(asked.contains(QStringLiteral("hub's index")), qPrintable(asked));
+	QVERIFY2(asked.contains(QStringLiteral("drop their copies")), qPrintable(asked));
+
+	/* And no promise about the bytes, which are on disks this client does not own. */
+	for (const char* const promise : {"is gone", "permanently", "for ever", "everywhere",
+	                                  "cannot be recovered", "erased"})
+	{
+		QVERIFY2(!asked.contains(QLatin1String(promise), Qt::CaseInsensitive),
+		         qPrintable(QStringLiteral("%1: promises '%2'")
+			         .arg(asked, QLatin1String(promise))));
+	}
+
+	/* Cancelling puts the buttons back and asks the hub for nothing. */
+	QSignalSpy taken(&pane, &Qdc::BoardPane::withdrawRequested);
+
+	button(pane, "boardDeleteCancel")->click();
+
+	QVERIFY(!asking());
+	QVERIFY(offering());
+	QCOMPARE(taken.count(), 0);
+
+	/*
+	 * And a question asked about one post does not follow the reader to the next: what
+	 * would be deleted is whatever is on the screen when it is answered.
+	 */
+	pane.addEntry(entry(QStringLiteral("NEXT"), base() + 10));
+
+	button(pane, "boardDelete")->click();
+	pane.read(QStringLiteral("NEXT"));
+
+	QVERIFY(!asking());
+	QCOMPARE(taken.count(), 0);
 }
 
 void TestBoards::aRefusalIsReportedInThePane()
@@ -1021,6 +1290,154 @@ void TestBoards::aGapThatCannotBeClosedIsSaidSo()
 	QVERIFY(bands(pane).at(0)->parentWidget()->isHidden());
 }
 
+/**
+ * Writing something takes the area the post was in, and gives it back.
+ *
+ * A composer standing open under every post takes a third of the pane from the thing the
+ * pane is for, and a reader who has asked to write something is writing it. So the
+ * subject line and the editor arrive in the reading area's place - and cancelling puts
+ * back the post that was being read, rather than an empty pane the reader has to find
+ * their way back into.
+ */
+void TestBoards::writingAPostTakesTheReadingAreaAndGivesItBack()
+{
+	Qdc::BoardPane pane;
+
+	Qdc::BoardInfo board;
+	board.name = QStringLiteral("general");
+	board.permissions = 1 + 2 + 4;
+
+	pane.setBoard(board);
+
+	const QString root = QStringLiteral("ROOT");
+
+	pane.addEntry(entry(root, base()));
+	pane.read(root);
+	pane.setPost(post(root, QStringLiteral("The hub will be offline")));
+
+	QStackedWidget* area = pane.findChild<QStackedWidget*>();
+	QVERIFY(area);
+
+	QLineEdit* subject = pane.findChild<QLineEdit*>(QStringLiteral("boardComposeSubject"));
+	QVERIFY(subject);
+
+	/* Two things in one space, which is what makes writing replace reading. */
+	QWidget* reading = label(pane, "boardSubject")->parentWidget();
+	QWidget* writing = subject->parentWidget();
+
+	QCOMPARE(area->count(), 2);
+	QVERIFY(reading != writing);
+	QCOMPARE(area->currentWidget(), reading);
+
+	button(pane, "boardNewPost")->click();
+	QCOMPARE(area->currentWidget(), writing);
+
+	button(pane, "boardComposeCancel")->click();
+
+	QCOMPARE(area->currentWidget(), reading);
+
+	/* And the post is where it was, still read, without being opened again. */
+	QCOMPARE(pane.reading(), root);
+	QCOMPARE(label(pane, "boardSubject")->text(), QStringLiteral("A subject"));
+
+	QTextBrowser* body = pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"));
+	QVERIFY(!body->isHidden());
+	QVERIFY(body->toPlainText().contains(QStringLiteral("The hub will be offline")));
+
+	/* A reply is the same area and the same way out of it. */
+	button(pane, "boardReply")->click();
+	QCOMPARE(area->currentWidget(), writing);
+
+	button(pane, "boardComposeCancel")->click();
+	QCOMPARE(area->currentWidget(), reading);
+}
+
+/**
+ * A reply opens with the subject it is answering and the words it is answering, quoted.
+ *
+ * Neither is put through RichText::displayText() on the way in. That reduction exists for
+ * drawing a stranger's text in a row - it bounds the length, folds the newlines and marks
+ * what it disarms - and this text is on its way into a document whose hash is the post's
+ * name. A replacement character or an ellipsis of ours in there would be in the bytes
+ * somebody sends, under a name every reader checks against.
+ */
+void TestBoards::aReplyOpensQuotingThePostItAnswers()
+{
+	Qdc::BoardPane pane;
+
+	Qdc::BoardInfo board;
+	board.name = QStringLiteral("general");
+	board.permissions = 1 + 2 + 4;
+
+	pane.setBoard(board);
+
+	const QString root = QStringLiteral("ROOT");
+
+	/*
+	 * Longer than displayText() allows, on more than one line, and carrying an override
+	 * it would replace: three things that would each be visible had the quote been
+	 * reduced on the way into the box.
+	 */
+	const QString body = QStringLiteral("The hub will be offline on Saturday, from "
+	                                    "eight in the morning until the afternoon, "
+	                                    "while the disks are replaced.\n"
+	                                    "Bring the file list back‮afterwards.");
+
+	pane.addEntry(entry(root, base()));
+	pane.read(root);
+	pane.setPost(post(root, body));
+
+	button(pane, "boardReply")->click();
+
+	QLineEdit* subject = pane.findChild<QLineEdit*>(QStringLiteral("boardComposeSubject"));
+	QVERIFY(subject);
+	QCOMPARE(subject->text(), QStringLiteral("Re: A subject"));
+
+	Qdc::ComposerEdit* box = pane.findChild<Qdc::ComposerEdit*>();
+	QVERIFY(box);
+
+	const QString opened = box->toPlainText();
+
+	QVERIFY2(opened.contains(QStringLiteral("> The hub will be offline")),
+	         qPrintable(opened));
+
+	QVERIFY2(opened.contains(QStringLiteral("> Bring the file list back")),
+	         qPrintable(opened));
+
+	/* The author's own bytes: the override is there and nothing of ours is. */
+	QVERIFY(opened.contains(QChar(0x202e)));
+	QVERIFY(!opened.contains(QChar(QChar::ReplacementCharacter)));
+	QVERIFY(!opened.contains(QChar(0x2026)));
+
+	/* A blank line after the quote, and the cursor after that. */
+	QVERIFY2(opened.endsWith(QStringLiteral(".\n\n")), qPrintable(opened));
+	QCOMPARE(box->textCursor().position(), opened.size());
+
+	/* What is sent is what is in the box, quote and all. */
+	QSignalSpy replied(&pane, &Qdc::BoardPane::replySubmitted);
+
+	Qdc::Composer* composer = pane.findChild<Qdc::Composer*>();
+	emit composer->sendRequested(box->toPlainText(), false);
+
+	QCOMPARE(replied.count(), 1);
+	QCOMPARE(replied.first().at(1).toString(), QStringLiteral("Re: A subject"));
+	QVERIFY(replied.first().at(2).toString().contains(QStringLiteral("> The hub will")));
+
+	/*
+	 * And "Re: " once. A reply to a reply is about the same thing as the post it
+	 * answers, and a subject that grows a prefix every time says nothing more.
+	 */
+	const QString again = QStringLiteral("AGAIN");
+
+	pane.addEntry(entry(again, base() + 10, root, QString(),
+	                    QStringLiteral("Re: A subject")));
+
+	pane.read(again);
+	button(pane, "boardReply")->click();
+
+	QCOMPARE(subject->text(), QStringLiteral("Re: A subject"));
+}
+
 void TestBoards::aSubmittedThreadIsNotPresentedAsPublished()
 {
 	Qdc::BoardPane pane;
@@ -1031,7 +1448,7 @@ void TestBoards::aSubmittedThreadIsNotPresentedAsPublished()
 
 	pane.setBoard(board);
 
-	button(pane, "boardNewThread")->click();
+	button(pane, "boardNewPost")->click();
 
 	Qdc::Composer* composer = pane.findChild<Qdc::Composer*>();
 	QVERIFY(composer);
@@ -1102,7 +1519,7 @@ void TestBoards::aReplyKeepsTheParentItWasBegunOn()
 	QCOMPARE(replied.first().at(0).toString(), first);
 }
 
-void TestBoards::aReplyToAPostWithdrawnWhileWritingIsNotSent()
+void TestBoards::aReplyToAPostDeletedWhileWritingIsNotSent()
 {
 	Qdc::BoardPane pane;
 
@@ -1133,7 +1550,7 @@ void TestBoards::aReplyToAPostWithdrawnWhileWritingIsNotSent()
 
 	const QString all = notes.join(QLatin1Char('\n'));
 
-	QVERIFY2(all.contains(QStringLiteral("has been withdrawn")), qPrintable(all));
+	QVERIFY2(all.contains(QStringLiteral("has been deleted")), qPrintable(all));
 	QVERIFY2(all.contains(QStringLiteral("kept here")), qPrintable(all));
 }
 
@@ -1166,22 +1583,37 @@ void TestBoards::aDescriptorForAnotherBoardStartsAgain()
 	QCOMPARE(pane.board(), QStringLiteral("announcements"));
 }
 
-void TestBoards::rereadingTheBoardIsOffered()
+/**
+ * Nobody is asked to refresh a board.
+ *
+ * Reading the whole board again is how a hub that reordered or dropped entries becomes
+ * visible at all, and it is still done - by connecting to the hub, which is when a
+ * subscription is taken out again. What is gone is the button: a board arrives as it
+ * happens, and a control asking a reader to check whether their client is up to date
+ * hands them a job that is not theirs.
+ */
+void TestBoards::theBoardIsNotSomethingAReaderRefreshes()
 {
 	Qdc::BoardPane pane;
 
 	pane.addEntry(entry(QStringLiteral("ROOT"), base()));
 
+	for (QPushButton* one : pane.findChildren<QPushButton*>())
+	{
+		QVERIFY2(!one->text().contains(QStringLiteral("read the board"),
+		                               Qt::CaseInsensitive),
+		         qPrintable(one->text()));
+
+		QVERIFY2(!one->text().contains(QStringLiteral("refresh"), Qt::CaseInsensitive),
+		         qPrintable(one->text()));
+	}
+
+	QVERIFY(!pane.findChild<QPushButton*>(QStringLiteral("boardReread")));
+
+	/* The way of saying it is kept, and nothing in the pane says it. */
 	QSignalSpy again(&pane, &Qdc::BoardPane::rereadRequested);
-
-	button(pane, "boardReread")->click();
-	QCOMPARE(again.count(), 1);
-
-	/*
-	 * And nothing is thrown away by asking: what arrives is reconciled against what is
-	 * held, which is the whole point of reading the board again.
-	 */
-	QCOMPARE(pane.threads()->postCount(), 1);
+	QVERIFY(again.isValid());
+	QCOMPARE(again.count(), 0);
 }
 
 /**

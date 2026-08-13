@@ -183,6 +183,7 @@ private slots:
 	void closingAHubLeavesNoBoardRowBehind();
 	void aComposedPostIsTheDocumentItsHashCovers();
 	void aPostWhoseDocumentIsHereIsReadWithoutAFetchPress();
+	void aDocumentThatIsNotAPostTakesItsEntryOffTheBoard();
 	void whatWasTypedSurvivesLeavingTheSettings();
 	void aDoctoredHubNameCannotReverseItsRow();
 	void aNicknameIsReducedInItsRowAndItsTooltip();
@@ -4272,6 +4273,85 @@ void TestHubs::aPostWhoseDocumentIsHereIsReadWithoutAFetchPress()
 	QPushButton* fetch = pane->findChild<QPushButton*>(QStringLiteral("boardFetch"));
 	QVERIFY(fetch);
 	QVERIFY(fetch->isEnabled());
+}
+
+/**
+ * A document that hashes to its name and is not a post takes the entry off the board.
+ *
+ * The two ways a fetch ends badly are not alike, and this is the one nothing can mend: the
+ * bytes are here, they are the bytes the hash names, and they are not a post document -
+ * so every copy of it anybody could ever fetch is these same bytes. The hub's line about
+ * it described a document that has now been read and turned out to be something else, so
+ * there is nothing true left to list. A post nobody could be reached for is the other case
+ * and keeps its row; see BoardModel::listable(), which is where the two part.
+ */
+void TestHubs::aDocumentThatIsNotAPostTakesItsEntryOffTheBoard()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+
+	const QString url = QStringLiteral("adc://192.0.2.58:412");
+
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("unreadable")));
+
+	/*
+	 * Bytes with no post header in them, and the root they hash to written out beside
+	 * them: this suite may not reach a core header, and both are constants. Getting the
+	 * root wrong is not a silent failure - the document would not be the one the entry
+	 * names, and the fetch would end in the other case instead.
+	 */
+	const QByteArray document = "This is not a post document at all.\n"
+	                            "It has no header a reader can parse.\n";
+
+	const QString tth = QStringLiteral("T5V7MGEELBQFNZE3TZNA2LQ3JO4ECB3NDQSGPNA");
+	const QString other = QStringLiteral("ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6PLQ7");
+
+	const QString file = QDir(m_dir.path()).filePath(QStringLiteral("not-a-post"));
+
+	QFile bytes(file);
+	QVERIFY(bytes.open(QIODevice::WriteOnly));
+	bytes.write(document);
+	bytes.close();
+
+	QVERIFY(hubs.openHub(url));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	Qdc::BoardPane* pane = boardPane(hubs);
+	QVERIFY(pane);
+
+	emit hub->hub()->boardEntriesReceived({entry(tth, 7000), entry(other, 7001)});
+
+	QTRY_COMPARE(pane->threads()->postCount(), 2);
+
+	/* Opened, as a reader would open it, and then read off the disk it is already on. */
+	pane->read(tth);
+
+	QSignalSpy refused(hubs.bulletins(), &Qdc::BoardBridge::postUnavailable);
+	QVERIFY(refused.isValid());
+
+	hubs.bulletins()->adopt(Qdc::BoardBridge::hubKey(url), entry(tth, 7000), file);
+
+	QTRY_COMPARE(refused.count(), 1);
+
+	/* The document is here, which is exactly why the post cannot come back. */
+	QVERIFY(hubs.bulletins()->isHeld(tth));
+
+	QTRY_COMPARE(pane->threads()->postCount(), 1);
+
+	QVERIFY(!pane->threads()->listable(tth));
+	QVERIFY(!pane->threads()->indexOf(tth).isValid());
+
+	/* The rest of the board is untouched, and nothing is left on the screen. */
+	QVERIFY(pane->threads()->indexOf(other).isValid());
+	QVERIFY(pane->reading().isEmpty());
+
+	QTextBrowser* body = pane->findChild<QTextBrowser*>(QStringLiteral("boardBody"));
+	QVERIFY(body);
+	QVERIFY(body->isHidden());
 }
 
 void TestHubs::whatWasTypedSurvivesLeavingTheSettings()
