@@ -4265,11 +4265,13 @@ void TestHubs::aPostWhoseDocumentIsHereIsReadWithoutAFetchPress()
 	QCOMPARE(asked.count(), 0);
 	QCOMPARE(refused.count(), 0);
 
-	QLabel* state = pane->findChild<QLabel*>(QStringLiteral("boardState"));
-	QVERIFY(state);
-
-	QVERIFY2(state->text().contains(QStringLiteral("Not fetched")),
-	         qPrintable(state->text()));
+	/*
+	 * Told apart from a post that has been read by there being no words and a button to
+	 * press, which is the whole of what the pane says about it now.
+	 */
+	QPushButton* fetch = pane->findChild<QPushButton*>(QStringLiteral("boardFetch"));
+	QVERIFY(fetch);
+	QVERIFY(fetch->isEnabled());
 }
 
 void TestHubs::whatWasTypedSurvivesLeavingTheSettings()

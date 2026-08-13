@@ -56,7 +56,8 @@ private slots:
 	void aSubjectOfInvisibleCharactersFallsBackToOurWording();
 	void aSubjectCarryingABidirectionalOverrideIsDrawnReduced();
 
-	void eachStateOfAPostIsDrawnAsADifferentThing();
+	void aReadPostIsItsSubjectItsAuthorAndItsWords();
+	void nothingIsSaidBetweenASubjectAndItsWords();
 	void anAnnouncedPostIsNotDrawnAsThoughItHadBeenRead();
 	void aPostWhoseDocumentIsHereIsNotDrawnAsUnfetched();
 	void aDisputedPostIsAttributedToTheIndexAndNotToTheDocument();
@@ -601,7 +602,7 @@ void TestBoards::aSubjectCarryingABidirectionalOverrideIsDrawnReduced()
 	QCOMPARE(model.entryOf(QStringLiteral("ROOT")).subject, doctored);
 }
 
-void TestBoards::eachStateOfAPostIsDrawnAsADifferentThing()
+void TestBoards::aReadPostIsItsSubjectItsAuthorAndItsWords()
 {
 	Qdc::BoardPane pane;
 
@@ -609,70 +610,90 @@ void TestBoards::eachStateOfAPostIsDrawnAsADifferentThing()
 
 	pane.addEntry(entry(root, base()));
 	pane.read(root);
-
-	QLabel* state = label(pane, "boardState");
-	QVERIFY(state);
-
-	QSet<QString> said;
-
-	/* Announced: the entry is held and nothing has been fetched. */
-	QCOMPARE(pane.threads()->stateOf(root), Qdc::PostState::Announced);
-	said.insert(state->text());
-
-	/* Fetching: asked for, on the reader's own action. */
-	button(pane, "boardFetch")->click();
-	QCOMPARE(pane.threads()->stateOf(root), Qdc::PostState::Fetching);
-	said.insert(state->text());
-
-	/* Verified: the bytes hashed to the root the entry named. */
 	pane.setPost(post(root, QStringLiteral("The body")));
+
 	QCOMPARE(pane.threads()->stateOf(root), Qdc::PostState::Verified);
-	said.insert(state->text());
 
-	/* Disputed: verified bytes, and two different claims about who wrote them. */
-	pane.setPost(post(root, QStringLiteral("The body"), false,
-	                  QStringLiteral("CIDTWO")));
-	QCOMPARE(pane.threads()->stateOf(root), Qdc::PostState::Disputed);
-	said.insert(state->text());
+	/* The subject, whose author is named beside it, and the words. Nothing between. */
+	QCOMPARE(label(pane, "boardSubject")->text(), QStringLiteral("A subject"));
 
-	/* Unavailable: nobody holding it could be reached, and the entry is kept. */
+	QTextBrowser* body = pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"));
+	QVERIFY(body);
+	QVERIFY(!body->isHidden());
+	QVERIFY(body->toPlainText().contains(QStringLiteral("The body")));
+
+	/*
+	 * One line, and it is the hub's nickname for whoever it accepted the post from. The
+	 * author's own claimed date is drawn nowhere at all: nothing verifies it, nothing is
+	 * ordered by it, and a date beside a warning that it may be untrue is worse than no
+	 * date.
+	 */
+	const QString byline = label(pane, "boardAuthor")->text();
+	QVERIFY2(!byline.contains(QLatin1Char('\n')), qPrintable(byline));
+	QVERIFY2(byline.startsWith(QStringLiteral("alice")), qPrintable(byline));
+}
+
+void TestBoards::nothingIsSaidBetweenASubjectAndItsWords()
+{
+	/*
+	 * The register that is not to come back. Each of these was true and none of it was
+	 * anything a reader could act on: whether a post has been checked decides whether it
+	 * is shown, and a post that is on the screen does not argue for itself.
+	 */
+	static const char* const banned[] = {
+		"the hub says", "hashed to the root", "came out of the document",
+		"its author claim", "has been verified", "index line",
+		"is not proof", "attributes nothing", "looks exactly like a forgery",
+		"the entry is kept", "nothing here can check"
+	};
+
+	Qdc::BoardPane pane;
+
+	const QString root = QStringLiteral("ROOT");
+	pane.addEntry(entry(root, base()));
+	pane.read(root);
+
+	/* Every state a post on the screen can be in, including the two transient ones. */
+	const auto drawn = [&pane]() {
+		QString all;
+
+		for (QLabel* one : pane.findChildren<QLabel*>()) all += one->text() + QLatin1Char('\n');
+
+		for (QTextBrowser* one : pane.findChildren<QTextBrowser*>())
+			all += one->toPlainText() + QLatin1Char('\n');
+
+		for (QPushButton* one : pane.findChildren<QPushButton*>())
+			all += one->text() + QLatin1Char('\n');
+
+		return all.toLower();
+	};
+
+	const auto clean = [&drawn](const char* where) {
+		const QString all = drawn();
+
+		for (const char* one : banned)
+		{
+			QVERIFY2(!all.contains(QLatin1String(one)),
+			         qPrintable(QStringLiteral("%1: still says '%2'")
+				         .arg(QLatin1String(where), QLatin1String(one))));
+		}
+	};
+
+	clean("announced");
+
+	pane.setPost(post(root, QStringLiteral("The body")));
+	clean("verified");
+
 	pane.setPostUnavailable(root, QStringLiteral("no sources answered"));
-	QCOMPARE(pane.threads()->stateOf(root), Qdc::PostState::Unavailable);
-	QVERIFY(pane.threads()->holds(root));
-	said.insert(state->text());
+	clean("unavailable");
 
-	QVERIFY2(state->text().contains(QStringLiteral("could not be retrieved")),
-	         qPrintable(state->text()));
-	QVERIFY2(state->text().contains(QStringLiteral("no sources answered")),
-	         qPrintable(state->text()));
-	QVERIFY(button(pane, "boardFetch")->text() == QStringLiteral("Try again"));
-
-	/* Withdrawn: the row leaves the list and the pane says what happened. */
-	pane.addEntry(tombstone(root, base() + 100));
-	QCOMPARE(pane.threads()->stateOf(root), Qdc::PostState::Withdrawn);
-	said.insert(state->text());
-
-	QCOMPARE(label(pane, "boardSubject")->text(), QStringLiteral("Withdrawn post"));
-	QVERIFY(pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"))->isHidden());
-
-	/* Six states, six things said. Collapsing any two would be presenting a claim. */
-	QCOMPARE(said.size(), 6);
-
-	/* And the model has its own word for each of them, in a column of its own. */
-	QSet<QString> words;
-
-	for (const Qdc::PostState one : {Qdc::PostState::Announced, Qdc::PostState::Fetching,
-	                                 Qdc::PostState::Verified, Qdc::PostState::Disputed,
-	                                 Qdc::PostState::Unavailable})
-	{
-		Qdc::BoardModel model;
-		model.add(entry(root, base()));
-		model.setState(root, one);
-
-		words.insert(cell(model, root, Qdc::BoardModel::DocumentColumn));
-	}
-
-	QCOMPARE(words.size(), 5);
+	/*
+	 * And the one line that does stand in for a body says what happened once, without
+	 * advice and without repeating the reason a bridge wrote for a log.
+	 */
+	QTextBrowser* body = pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"));
+	QVERIFY(body);
+	QCOMPARE(body->toPlainText(), QStringLiteral("This post could not be retrieved."));
 }
 
 void TestBoards::anAnnouncedPostIsNotDrawnAsThoughItHadBeenRead()
@@ -689,13 +710,14 @@ void TestBoards::anAnnouncedPostIsNotDrawnAsThoughItHadBeenRead()
 	QCOMPARE(label(pane, "boardSubject")->text(),
 	         QStringLiteral("Hub upgrade on Saturday"));
 
-	QStringList notes;
-	for (QLabel* one : pane.findChildren<QLabel*>()) notes.append(one->text());
-
-	const QString all = notes.join(QLatin1Char('\n'));
-
-	QVERIFY2(all.contains(QStringLiteral("hub's index line")), qPrintable(all));
-	QVERIFY2(all.contains(QStringLiteral("has been verified")), qPrintable(all));
+	/*
+	 * A post nobody has fetched is told apart from one that has been read by there being
+	 * no words on the screen and something there to press, and not by a sentence saying
+	 * so. The subject above is still the hub's - that is what an index entry is - and
+	 * saying that beside it every time told a reader nothing they could act on.
+	 */
+	QVERIFY(button(pane, "boardFetch"));
+	QVERIFY(!button(pane, "boardFetch")->isHidden());
 
 	/*
 	 * And no reading area at all. An empty one is what a post with no words in it looks
@@ -742,31 +764,15 @@ void TestBoards::aPostWhoseDocumentIsHereIsNotDrawnAsUnfetched()
 
 	pane.read(here);
 
-	QLabel* state = label(pane, "boardState");
-	QVERIFY(state);
-
-	/* As it stands, nothing has been read of it and the pane says exactly that. */
-	QVERIFY2(state->text().contains(QStringLiteral("Not fetched")),
-	         qPrintable(state->text()));
+	/* As it stands, nothing has been read of it: no words, and something to press. */
+	QVERIFY(pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"))->isHidden());
+	QVERIFY(button(pane, "boardFetch")->isEnabled());
 
 	/*
 	 * And then the document turns out to be here. Nothing else happens: no post is
 	 * handed over, and the pane is told only that the post is being read.
 	 */
 	pane.threads()->setState(here, Qdc::PostState::Fetching);
-
-	QVERIFY2(!state->text().contains(QStringLiteral("Not fetched")),
-	         qPrintable(state->text()));
-
-	QVERIFY2(!state->text().contains(QStringLiteral("has been verified")),
-	         qPrintable(state->text()));
-
-	QStringList notes;
-	for (QLabel* one : pane.findChildren<QLabel*>()) notes.append(one->text());
-
-	QVERIFY2(!notes.join(QLatin1Char('\n')).contains(
-			QStringLiteral("nothing here has been checked")),
-	         qPrintable(notes.join(QLatin1Char('\n'))));
 
 	/* Nor is a document on this disk something a reader is asked to fetch. */
 	QVERIFY(!button(pane, "boardFetch")->isEnabled());
@@ -791,9 +797,7 @@ void TestBoards::aPostWhoseDocumentIsHereIsNotDrawnAsUnfetched()
 
 	QCOMPARE(pane.threads()->stateOf(elsewhere), Qdc::PostState::Announced);
 
-	QVERIFY2(state->text().contains(QStringLiteral("Not fetched")),
-	         qPrintable(state->text()));
-
+	QVERIFY(pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"))->isHidden());
 	QVERIFY(button(pane, "boardFetch")->isEnabled());
 	QCOMPARE(asked.count(), 0);
 }
@@ -804,8 +808,13 @@ void TestBoards::aDisputedPostIsAttributedToTheIndexAndNotToTheDocument()
 
 	const QString root = QStringLiteral("ROOT");
 
+	/*
+	 * No nickname, so the hub's CID is what the byline has to fall back to - which is
+	 * what makes this a test of which claim the post is attributed to rather than of
+	 * which of two names reads better.
+	 */
 	pane.addEntry(entry(root, base(), QString(), QString(), QStringLiteral("A subject"),
-	                    QStringLiteral("HUBSAIDTHIS")));
+	                    QStringLiteral("HUBSAIDTHIS"), QString()));
 	pane.read(root);
 
 	/*
@@ -822,18 +831,17 @@ void TestBoards::aDisputedPostIsAttributedToTheIndexAndNotToTheDocument()
 
 	const QString all = notes.join(QLatin1Char('\n'));
 
+	/*
+	 * The hub's claim is what the post is attributed to, and the document's is drawn
+	 * nowhere at all. Showing both and explaining the difference was the old answer; it
+	 * asked a reader to adjudicate something nothing on this machine can settle.
+	 */
 	QVERIFY2(all.contains(QStringLiteral("HUBSAIDTHIS")), qPrintable(all));
-	QVERIFY2(all.contains(QStringLiteral("DOCUMENTSAIDTHIS")), qPrintable(all));
+	QVERIFY2(!all.contains(QStringLiteral("DOCUMENTSAIDTHIS")), qPrintable(all));
 
-	/* The hub's claim is the attribution and the document's is the disagreement. */
-	const int attributed = all.indexOf(QStringLiteral("accepted this from the session"));
-	const int claimed = all.indexOf(QStringLiteral("claims a different author"));
-
-	QVERIFY(attributed >= 0);
-	QVERIFY(claimed > attributed);
-
-	/* Nothing anywhere calls either of them a verified identity. */
-	QVERIFY2(all.contains(QStringLiteral("not a verified identity")), qPrintable(all));
+	QTextBrowser* body = pane.findChild<QTextBrowser*>(QStringLiteral("boardBody"));
+	QVERIFY2(!body->toPlainText().contains(QStringLiteral("DOCUMENTSAIDTHIS")),
+	         qPrintable(body->toPlainText()));
 }
 
 void TestBoards::aPlainBodyIsNeverRenderedAsMarkdown()

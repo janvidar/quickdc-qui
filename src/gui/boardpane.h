@@ -330,10 +330,10 @@ private:
 	QPushButton* m_reread;
 
 	QLabel* m_subject;
-	QLabel* m_provenance;
+
+	/** Who the post is from and when the hub took it; see attribution(). */
 	QLabel* m_author;
-	QLabel* m_dates;
-	QLabel* m_state;
+
 	QTextBrowser* m_body;
 
 	QPushButton* m_fetch;

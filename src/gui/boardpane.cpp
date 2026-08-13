@@ -55,56 +55,36 @@ void say(QLabel* label, const QString& text)
 }
 
 /**
- * Who the post is attributed to, and what that is worth.
+ * Who the post is from and when the hub took it, on one line.
  *
- * The hub's claim, always: it says it accepted the post from a session that had
- * authenticated as this CID, which is a statement about one event on one hub and not a
- * proven identity - a CID is the hash of a secret rather than a public key, and nothing
- * can be signed with it. The nickname is drawn beside it because it is what a reader
- * recognises, and is never what the post is attributed to.
+ * The hub's claim about the author, always, and never the document's: the hub says it
+ * accepted the post from a session that had authenticated as this CID, which is a
+ * statement about one event on one hub rather than a proven identity. That is a fact
+ * about what this line means and not something to tell the reader every time - a name
+ * with a paragraph of epistemology after it is not a byline.
  *
- * Where the document names a different author the disagreement is shown and the hub's
- * claim is still the one used. There is no automatic resolution: the honest case is a
- * post relayed to a second hub by somebody who did not write it, and it looks exactly
- * like a forgery.
+ * The nickname is what a reader recognises, so it is what is drawn; the CID stands in
+ * where the hub gave no nickname. A post whose claimed author disagrees with the hub's
+ * is not drawn at all - see listable() - so nothing here has to explain a disagreement.
+ *
+ * The time is the hub's, which is the one that orders the board. The author's own DA is
+ * not drawn anywhere: nothing verifies it, nothing may be ordered by it, and a date
+ * shown beside a warning that it might be untrue is worse than no date.
  */
-QString attribution(const Qdc::BoardEntry& entry, const Qdc::BoardPost& post,
-                    bool hasPost, bool disputed)
+QString attribution(const Qdc::BoardEntry& entry)
 {
 	using Pane = Qdc::BoardPane;
 
-	const QString cid = Qdc::RichText::displayText(entry.cid);
 	const QString nick = Qdc::RichText::displayText(entry.nick);
+	const QString cid = Qdc::RichText::displayText(entry.cid);
+	const QString who = nick.isEmpty() ? cid : nick;
 
-	if (cid.isEmpty() && nick.isEmpty())
-		return Pane::tr("The hub named nobody as having submitted this.");
+	const QString when = Qdc::BoardModel::describeTimestamp(entry.timestamp);
 
-	QString line = cid.isEmpty()
-		? Pane::tr("The hub says it accepted this from a session it called %1.").arg(nick)
-		: (nick.isEmpty()
-			? Pane::tr("The hub says it accepted this from the session %1.").arg(cid)
-			: Pane::tr("The hub says it accepted this from the session %1, which was "
-			           "called %2 at the time.").arg(cid, nick));
+	if (who.isEmpty()) return when;
 
-	line += QLatin1Char(' ');
-	line += Pane::tr("Neither is proof of authorship: a CID is not a verified identity, "
-	                 "and a nickname attributes nothing.");
-
-	if (disputed)
-	{
-		line += QLatin1Char('\n');
-		line += Pane::tr("The document claims a different author, %1. This post is "
-		                 "attributed to the hub's claim and not to the document's, "
-		                 "because nothing here can settle which is right.")
-			.arg(Qdc::RichText::displayText(post.cid));
-	}
-	else if (hasPost && !post.cid.isEmpty())
-	{
-		line += QLatin1Char(' ');
-		line += Pane::tr("The document claims the same author.");
-	}
-
-	return line;
+	return Pane::tr("%1 — %2", "author, then when the hub accepted the post")
+		.arg(who, when);
 }
 
 }
@@ -290,24 +270,20 @@ QWidget* Qdc::BoardPane::buildReader()
 
 	layout->addWidget(m_subject);
 
-	/* Where each field on the screen came from, which is the whole point of the pane. */
-	m_provenance = makeNote(QString(), reader);
-	m_provenance->setTextFormat(Qt::PlainText);
-	layout->addWidget(m_provenance);
-
+	/*
+	 * Who wrote it and when, on one line, and that is the whole of what stands between
+	 * a subject and the words underneath it.
+	 *
+	 * What this client knows about how far a post has been checked decides whether it is
+	 * shown at all - see listable() - and is not narrated to the reader. A post that is
+	 * on the screen is one whose bytes hashed to the name they were asked for; saying so
+	 * beside every one of them tells a reader nothing they can act on, and reads as
+	 * doubt about the post they are looking at.
+	 */
 	m_author = makeNote(QString(), reader);
+	m_author->setObjectName(QStringLiteral("boardAuthor"));
 	m_author->setTextFormat(Qt::PlainText);
 	layout->addWidget(m_author);
-
-	m_dates = makeNote(QString(), reader);
-	m_dates->setTextFormat(Qt::PlainText);
-	layout->addWidget(m_dates);
-
-	m_state = new QLabel(reader);
-	m_state->setObjectName(QStringLiteral("boardState"));
-	m_state->setTextFormat(Qt::PlainText);
-	m_state->setWordWrap(true);
-	layout->addWidget(m_state);
 
 	m_body = new QTextBrowser(reader);
 	m_body->setObjectName(QStringLiteral("boardBody"));
@@ -501,36 +477,18 @@ void Qdc::BoardPane::refreshBoardHeader()
 	say(m_title, title.isEmpty() ? RichText::displayText(m_board.name) : title);
 	say(m_description, RichText::displayText(m_board.description));
 
-	QStringList allowed;
-
-	if (m_board.may(BoardPermission::StartThread)) allowed.append(tr("start a thread"));
-	if (m_board.may(BoardPermission::Reply)) allowed.append(tr("reply"));
-
-	if (m_board.may(BoardPermission::WithdrawAny))
-		allowed.append(tr("withdraw any post"));
-	else if (m_board.may(BoardPermission::WithdrawOwn))
-		allowed.append(tr("withdraw your own posts"));
-
 	QStringList lines;
 
+	/*
+	 * What may be done here is said by which buttons are on the screen and not by a
+	 * sentence about it: a board that can be posted to has a button that posts to it,
+	 * and one that cannot does not. Only the two things a button cannot say are said -
+	 * that a board has gone, and how much of it there is.
+	 */
 	if (m_board.removed)
 	{
 		lines.append(tr("This board no longer exists. What was read of it is still "
 		                "here; nothing more will arrive."));
-	}
-	else if (allowed.isEmpty())
-	{
-		lines.append(tr("The hub says you may read this board and nothing else."));
-	}
-	else
-	{
-		/*
-		 * What the hub says may be done, which is what to offer and not a boundary: the
-		 * hub re-checks every operation as it arrives, and one this permitted may still
-		 * come back refused.
-		 */
-		lines.append(tr("The hub says you may %1 here.")
-			.arg(allowed.join(QStringLiteral(", "))));
 	}
 
 	if (m_board.posts)
@@ -734,10 +692,7 @@ void Qdc::BoardPane::refreshReading()
 	if (m_reading.isEmpty())
 	{
 		say(m_subject, QString());
-		say(m_provenance, tr("Choose a post from the list to read it."));
-		say(m_author, QString());
-		say(m_dates, QString());
-		say(m_state, QString());
+		say(m_author, tr("Choose a post from the list to read it."));
 
 		m_body->clear();
 		m_body->hide();
@@ -751,26 +706,24 @@ void Qdc::BoardPane::refreshReading()
 
 	m_drawn = state;
 
-	/* Whether what is on the screen came out of a document or out of the hub's index. */
+	/*
+	 * Whether the words on the screen are the post's own. A subject is the hub's until
+	 * the document has been read, so the document's is preferred the moment there is
+	 * one - and a post the document could not vouch for is not listed at all.
+	 */
 	const bool fromDocument = m_hasPost
 		&& (state == PostState::Verified || state == PostState::Disputed);
 
+	/*
+	 * A withdrawn post leaves the list, so nothing can select one and this is only ever
+	 * reached by a tombstone arriving for the post already open. There is nothing to
+	 * draw: a tombstone carries a root, a board and a time and deliberately not a word
+	 * of what was withdrawn.
+	 */
 	if (state == PostState::Withdrawn)
 	{
-		/* A tombstone carries a root, a board and a time, and deliberately nothing else. */
-		say(m_subject, tr("Withdrawn post"));
-
-		say(m_provenance, tr("The hub's index no longer carries this post, and a "
-		                     "tombstone says nothing about who wrote it or what it "
-		                     "said. Replies to it are separate posts and are still "
-		                     "listed."));
-
-		say(m_author, QString());
-		say(m_dates, tr("Withdrawn %1.")
-			.arg(BoardModel::describeTimestamp(entry.timestamp)));
-
-		say(m_state, tr("Withdrawn. That takes the post out of this hub's index and "
-		                "promises nothing about the document itself."));
+		say(m_subject, QString());
+		say(m_author, tr("Choose a post from the list to read it."));
 
 		m_body->clear();
 		m_body->hide();
@@ -784,101 +737,23 @@ void Qdc::BoardPane::refreshReading()
 		: RichText::displayText(entry.subject);
 
 	say(m_subject, subject.isEmpty() ? tr("(no subject)") : subject);
+	say(m_author, attribution(entry));
 
-	switch (state)
+	/*
+	 * The one thing a reader is told instead of the post, because it is the one thing
+	 * that is neither the post nor a failure of it: an index entry can outlive every
+	 * copy of the document it names. One line, no advice - the entry stays in the list
+	 * and the document may be on a machine that is merely switched off today, and
+	 * neither of those is a sentence worth spending on somebody who wanted to read
+	 * something.
+	 */
+	if (!fromDocument && state == PostState::Unavailable)
 	{
-		case PostState::Announced:
-			say(m_provenance, tr("This is the hub's index line and not the post. The "
-			                     "subject above is the hub's, and nothing here has been "
-			                     "checked against the document."));
-			break;
+		m_body->setPlainText(tr("This post could not be retrieved."));
+		m_body->show();
 
-		case PostState::Fetching:
-			say(m_provenance, tr("This is still the hub's index line. The subject above "
-			                     "is the hub's until the document has been read."));
-			break;
-
-		case PostState::Verified:
-		case PostState::Disputed:
-			say(m_provenance, tr("The subject and the body below came out of the "
-			                     "document, which hashed to the root this entry names."));
-			break;
-
-		case PostState::Unavailable:
-			say(m_provenance, tr("This is the hub's index line. The document itself "
-			                     "could not be retrieved, so the subject above is the "
-			                     "hub's and the post's own words are not here."));
-			break;
-
-		case PostState::Withdrawn:
-			break;
-	}
-
-	say(m_author, attribution(entry, m_post, fromDocument,
-	                          state == PostState::Disputed));
-
-	QStringList dates;
-	dates.append(tr("The hub accepted it %1.")
-		.arg(BoardModel::describeTimestamp(entry.timestamp)));
-
-	if (fromDocument && m_post.dated)
-	{
-		/*
-		 * The author's own claim about when they wrote it. Nothing verifies it, it is
-		 * never what anything is ordered by, and it is presented as a claim rather than
-		 * as a time - it is also the only timestamp that survives the post being carried
-		 * to another hub.
-		 */
-		dates.append(tr("Its author claims to have written it %1, which nothing here "
-		                "can check.").arg(BoardModel::describeTimestamp(m_post.date)));
-	}
-
-	say(m_dates, dates.join(QLatin1Char('\n')));
-
-	switch (state)
-	{
-		case PostState::Announced:
-			/*
-			 * Nothing is fetched because an entry arrived: a body costs a transfer, and
-			 * fetching one tells whoever serves it that this reader has read it. So the
-			 * unread state is a state on the screen with a button in it, rather than
-			 * something that quietly resolves itself.
-			 */
-			say(m_state, tr("Not fetched. Nothing about this post has been verified."));
-			break;
-
-		case PostState::Fetching:
-			say(m_state, tr("Fetching the document."));
-			break;
-
-		case PostState::Verified:
-			say(m_state, tr("Verified: the bytes that arrived hashed to the root this "
-			                "entry names, so the author, the parent, the subject and "
-			                "the body below are the document's own."));
-			break;
-
-		case PostState::Disputed:
-			say(m_state, tr("Verified bytes, disputed author: the document and the hub "
-			                "name different authors. A post relayed to another hub by "
-			                "somebody who did not write it looks exactly like a "
-			                "forgery."));
-			break;
-
-		case PostState::Unavailable:
-		{
-			const QString reason = RichText::displayText(m_post.unavailableReason);
-
-			say(m_state, reason.isEmpty()
-				? tr("The content could not be retrieved. The entry is kept, and the "
-				     "document may be on a machine that is switched off today.")
-				: tr("The content could not be retrieved: %1. The entry is kept, and "
-				     "the document may be on a machine that is switched off today.")
-					.arg(reason));
-			break;
-		}
-
-		case PostState::Withdrawn:
-			break;
+		refreshActions();
+		return;
 	}
 
 	if (fromDocument)
