@@ -48,11 +48,12 @@ class Composer;
  *
  * Three further rules are the specification's and are visible in what this draws:
  *
- * - The button says "Delete", because that is what somebody pressing it means, and what
- *   it does is the extension's withdrawal: the entry leaves this hub's index and other
- *   clients are asked to drop their copies. It cannot promise the document is gone -
- *   whoever has read it holds it - so the confirmation says what happens and stops
- *   there rather than promising anything about the bytes.
+ * - The button says "Withdraw" and never "Delete". What it does is take the entry out of
+ *   this hub's index and ask other clients to drop their copies; it cannot promise the
+ *   document is gone, because whoever has read it holds it and goes on serving it. A
+ *   button offering to delete a post makes a promise this extension cannot keep, which
+ *   is why the word is withdraw throughout - and the confirmation still says what
+ *   happens rather than leaving the word to carry it.
  * - Nothing is published until its entry comes back. There is no success message in this
  *   protocol - the entry is the acknowledgement - so a submitted post is described as
  *   handed to the hub and nothing more, and what was typed is kept in case it is refused.

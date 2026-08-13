@@ -68,11 +68,11 @@ private slots:
 	void aDocumentThatIsNotThePostItClaimsToBeIsNotListed();
 	void aPostNobodyCouldBeFoundForIsListedAndDimmed();
 	void aPlainBodyIsNeverRenderedAsMarkdown();
-	void theWordWithdrawAppearsNowhereInThePane();
+	void theWordDeleteAppearsNowhereInThePane();
 
 	void theThreadListDrawsNoParentOrDocumentColumn();
 	void permissionsDecideWhatIsOffered();
-	void deletingIsAskedAboutInPlainWords();
+	void withdrawingIsAskedAboutInPlainWords();
 	void aRefusalIsReportedInThePane();
 	void aRefusalCanBeDismissedAndGoesByItself();
 	void aGapThatCannotBeClosedIsSaidSo();
@@ -80,7 +80,7 @@ private slots:
 	void aReplyOpensQuotingThePostItAnswers();
 	void aSubmittedThreadIsNotPresentedAsPublished();
 	void aReplyKeepsTheParentItWasBegunOn();
-	void aReplyToAPostDeletedWhileWritingIsNotSent();
+	void aReplyToAPostWithdrawnWhileWritingIsNotSent();
 	void aDescriptorForAnotherBoardStartsAgain();
 	void theBoardIsNotSomethingAReaderRefreshes();
 	void thePaneSaysWhichPostItIsShowing();
@@ -660,8 +660,13 @@ void TestBoards::nothingIsSaidBetweenASubjectAndItsWords()
 		"is not proof", "attributes nothing", "looks exactly like a forgery",
 		"the entry is kept", "nothing here can check",
 
-		/* And the register of the controls that stood in the same space. */
-		"withdraw", "disputed", "re-read"
+		/*
+		 * And the register of the controls that stood in the same space. "Withdraw" is
+		 * not among them: it is the name of a button and the extension's own word for
+		 * what that button does, which is a different thing from prose about how far a
+		 * post has been checked.
+		 */
+		"disputed", "re-read"
 	};
 
 	Qdc::BoardPane pane;
@@ -1002,7 +1007,7 @@ void TestBoards::aPlainBodyIsNeverRenderedAsMarkdown()
 	QVERIFY(shown->toPlainText().contains(QStringLiteral("not bold")));
 }
 
-void TestBoards::theWordWithdrawAppearsNowhereInThePane()
+void TestBoards::theWordDeleteAppearsNowhereInThePane()
 {
 	Qdc::BoardPane pane;
 
@@ -1029,6 +1034,13 @@ void TestBoards::theWordWithdrawAppearsNowhereInThePane()
 	button(pane, "boardDelete")->click();
 	button(pane, "boardNewPost")->click();
 	button(pane, "boardReply")->click();
+
+	/*
+	 * And the note a reply gets when what it answers goes while it is being written,
+	 * which is the one place left that had its own word for this and was reached by
+	 * nothing: it takes a tombstone arriving for the post the composer was opened on.
+	 */
+	pane.addEntry(tombstone(root, base() + 500));
 
 	QStringList drawnText;
 
@@ -1057,17 +1069,18 @@ void TestBoards::theWordWithdrawAppearsNowhereInThePane()
 	                            Qt::ToolTipRole).toString());
 
 	/*
-	 * "Withdraw" is the wire's word for it and it is nobody else's. What a reader means
-	 * by the button is delete, and what the extension can actually promise is said where
-	 * it matters, in the question asked before it happens - not by giving the control a
-	 * name that has to be explained before it can be pressed.
+	 * Withdraw, and never delete. Taking a post out of a hub's index is the whole of
+	 * what this can do: the document is a file on the disk of everybody who has read it
+	 * and goes on being served from there, so a control offering to delete a post offers
+	 * something no client can carry out. The specification uses withdraw throughout for
+	 * this reason and so does the pane.
 	 */
 	const QString all = drawnText.join(QLatin1Char('\n'));
 
-	QVERIFY2(!all.contains(QStringLiteral("withdraw"), Qt::CaseInsensitive),
+	QVERIFY2(!all.contains(QStringLiteral("delete"), Qt::CaseInsensitive),
 	         qPrintable(all));
 
-	QVERIFY(all.contains(QStringLiteral("Delete")));
+	QVERIFY(all.contains(QStringLiteral("Withdraw")));
 }
 
 /**
@@ -1149,7 +1162,7 @@ void TestBoards::permissionsDecideWhatIsOffered()
 		pane.read(QStringLiteral("ROOT"));
 
 		QVERIFY(!button(pane, "boardDelete")->isHidden());
-		QCOMPARE(button(pane, "boardDelete")->text(), QStringLiteral("Delete"));
+		QCOMPARE(button(pane, "boardDelete")->text(), QStringLiteral("Withdraw"));
 	}
 
 	QSignalSpy taken(&pane, &Qdc::BoardPane::withdrawRequested);
@@ -1172,7 +1185,7 @@ void TestBoards::permissionsDecideWhatIsOffered()
  * to whoever is watching the board - and a copy is a file on somebody else's disk. So the
  * question says both of those things and stops, rather than promising the post is gone.
  */
-void TestBoards::deletingIsAskedAboutInPlainWords()
+void TestBoards::withdrawingIsAskedAboutInPlainWords()
 {
 	Qdc::BoardPane pane;
 
@@ -1589,7 +1602,7 @@ void TestBoards::aReplyKeepsTheParentItWasBegunOn()
 	QCOMPARE(replied.first().at(0).toString(), first);
 }
 
-void TestBoards::aReplyToAPostDeletedWhileWritingIsNotSent()
+void TestBoards::aReplyToAPostWithdrawnWhileWritingIsNotSent()
 {
 	Qdc::BoardPane pane;
 
@@ -1620,7 +1633,7 @@ void TestBoards::aReplyToAPostDeletedWhileWritingIsNotSent()
 
 	const QString all = notes.join(QLatin1Char('\n'));
 
-	QVERIFY2(all.contains(QStringLiteral("has been deleted")), qPrintable(all));
+	QVERIFY2(all.contains(QStringLiteral("has been withdrawn")), qPrintable(all));
 	QVERIFY2(all.contains(QStringLiteral("kept here")), qPrintable(all));
 }
 

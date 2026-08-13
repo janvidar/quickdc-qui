@@ -432,7 +432,7 @@ QWidget* Qdc::BoardPane::buildReader()
 	connect(m_reply, &QPushButton::clicked, this, [this] { showCompose(Compose::Reply); });
 	actions->addWidget(m_reply);
 
-	m_delete = new QPushButton(tr("Delete"), m_actions);
+	m_delete = new QPushButton(tr("Withdraw"), m_actions);
 	m_delete->setObjectName(QStringLiteral("boardDelete"));
 	connect(m_delete, &QPushButton::clicked, this, &BoardPane::askToDelete);
 	actions->addWidget(m_delete);
@@ -454,13 +454,13 @@ QWidget* Qdc::BoardPane::buildReader()
 	 * their behalf.
 	 */
 	QLabel* question = makeNote(
-		tr("Delete this post? It is taken out of this hub's index, and other clients "
+		tr("Withdraw this post? It is taken out of this hub's index, and other clients "
 		   "are asked to drop their copies."), m_question);
 
 	question->setObjectName(QStringLiteral("boardDeleteQuestion"));
 	asking->addWidget(question, 1);
 
-	m_deleteConfirm = new QPushButton(tr("Delete"), m_question);
+	m_deleteConfirm = new QPushButton(tr("Withdraw"), m_question);
 	m_deleteConfirm->setObjectName(QStringLiteral("boardDeleteConfirm"));
 	connect(m_deleteConfirm, &QPushButton::clicked, this, &BoardPane::confirmDelete);
 	asking->addWidget(m_deleteConfirm);
@@ -1029,7 +1029,7 @@ void Qdc::BoardPane::refreshActions()
 	if (m_compose == Compose::Reply && !m_replyTo.isEmpty()
 	    && m_threads->isWithdrawn(m_replyTo))
 	{
-		say(m_composeNote, tr("The post this replies to has been deleted. What you "
+		say(m_composeNote, tr("The post this replies to has been withdrawn. What you "
 		                      "wrote is kept here."));
 	}
 }
@@ -1209,7 +1209,7 @@ void Qdc::BoardPane::submit(const QString& message, bool richText)
 		 */
 		if (m_threads->isWithdrawn(m_replyTo))
 		{
-			say(m_composeNote, tr("The post this replies to has been deleted, so the "
+			say(m_composeNote, tr("The post this replies to has been withdrawn, so the "
 			                      "hub will most likely refuse a reply to it. What you "
 			                      "wrote is kept here."));
 			return;
