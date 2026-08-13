@@ -18,6 +18,7 @@
 #include <QStackedWidget>
 #include <QTextBrowser>
 #include <QTest>
+#include <QTimer>
 #include <QTreeView>
 
 /**
@@ -73,6 +74,7 @@ private slots:
 	void permissionsDecideWhatIsOffered();
 	void deletingIsAskedAboutInPlainWords();
 	void aRefusalIsReportedInThePane();
+	void aRefusalCanBeDismissedAndGoesByItself();
 	void aGapThatCannotBeClosedIsSaidSo();
 	void writingAPostTakesTheReadingAreaAndGivesItBack();
 	void aReplyOpensQuotingThePostItAnswers();
@@ -1259,12 +1261,80 @@ void TestBoards::aRefusalIsReportedInThePane()
 	QVERIFY2(said.contains(QStringLiteral("One post per minute")), qPrintable(said));
 	QVERIFY2(said.contains(QStringLiteral("Hub upgrade on Saturday")), qPrintable(said));
 
+	/*
+	 * And what the hub said is ended before this pane's own sentences run on from it.
+	 * A hub's words are a stranger's and nothing obliges them to be punctuated, so
+	 * without this the band read "...per minute It named the post...".
+	 */
+	QVERIFY2(!said.contains(QStringLiteral("minute It named")), qPrintable(said));
+	QVERIFY2(said.contains(QStringLiteral("minute. It named")), qPrintable(said));
+
 	/* One that names a board this pane knows nothing about is still reported. */
 	pane.reportRefusal(71, QStringLiteral("No such board"), QString(),
 	                   QStringLiteral("genrel"));
 
 	QVERIFY2(bands(pane).at(1)->text().contains(QStringLiteral("genrel")),
 	         qPrintable(bands(pane).at(1)->text()));
+}
+
+void TestBoards::aRefusalCanBeDismissedAndGoesByItself()
+{
+	Qdc::BoardPane pane;
+
+	QWidget* band = bands(pane).at(1)->parentWidget();
+	QVERIFY(band);
+	QVERIFY(band->isHidden());
+
+	pane.reportRefusal(75, QStringLiteral("One post per minute"));
+	QVERIFY(!band->isHidden());
+
+	/* A way out of it, for somebody who has read it. */
+	QPushButton* close = pane.findChild<QPushButton*>(QStringLiteral("boardRefusalClose"));
+	QVERIFY(close);
+
+	close->click();
+
+	QVERIFY(band->isHidden());
+	QVERIFY(bands(pane).at(1)->text().isEmpty());
+
+	/*
+	 * And it goes by itself, because a refusal is something that happened rather than
+	 * what the board is. Driven by moving the timer rather than by waiting out its
+	 * twenty seconds, which is the interval a person needs and not one a test does.
+	 */
+	pane.reportRefusal(75, QStringLiteral("One post per minute"));
+	QVERIFY(!band->isHidden());
+
+	QTimer* timer = nullptr;
+
+	for (QTimer* one : pane.findChildren<QTimer*>())
+		if (one->isSingleShot() && one->isActive()) timer = one;
+
+	QVERIFY2(timer, "the refusal was shown with nothing set to take it away");
+	QVERIFY(timer->interval() > 1000);
+
+	timer->stop();
+	timer->setInterval(1);
+	timer->start();
+
+	QTRY_VERIFY(band->isHidden());
+
+	/*
+	 * The gap is not like that and must not have gone with it: it is what this view of
+	 * the board is until the hub will replay far enough back, and one that quietly
+	 * stopped saying so would look complete.
+	 */
+	Qdc::BoardInfo board;
+	board.name = QStringLiteral("general");
+	board.oldest = base();
+
+	pane.setBoard(board);
+	pane.setGap(true);
+
+	QWidget* gapBand = bands(pane).at(0)->parentWidget();
+	QVERIFY(gapBand && !gapBand->isHidden());
+
+	QVERIFY(!pane.findChild<QPushButton*>(QStringLiteral("boardGapClose")));
 }
 
 void TestBoards::aGapThatCannotBeClosedIsSaidSo()

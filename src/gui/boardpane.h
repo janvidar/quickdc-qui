@@ -21,6 +21,7 @@ class QPushButton;
 class QSplitter;
 class QStackedWidget;
 class QTextBrowser;
+class QTimer;
 class QTreeView;
 class QUrl;
 
@@ -370,6 +371,22 @@ private:
 	QWidget* m_refusalBand;
 	QLabel* m_refusal;
 
+	/** The way out of a refusal, for somebody who has read it and wants it gone. */
+	QPushButton* m_refusalClose;
+
+	/**
+	 * What takes a refusal away by itself.
+	 *
+	 * A refusal is something that happened once, not a state the board is in - unlike
+	 * the gap, which stays until the hub will replay far enough back to close it. A band
+	 * that waited to be dismissed would still be there an hour later, saying something
+	 * about a post nobody is looking at any more.
+	 */
+	QTimer* m_refusalTimer;
+
+	/** Take the refusal off the screen, however it came to be time to. */
+	void clearRefusal();
+
 	QTreeView* m_list;
 	QPushButton* m_newPost;
 
@@ -391,6 +408,18 @@ private:
 	QLabel* m_author;
 
 	QTextBrowser* m_body;
+
+	/** Holds the post at the top of the pane when there are no words under it. */
+	QWidget* m_filler;
+
+	/**
+	 * Show the words, or the space that stands in for them.
+	 *
+	 * The two go together: exactly one of them carries the stretch that decides where
+	 * the leftover height in the pane goes, so setting one without the other is how the
+	 * subject and its byline end up drifting apart down an empty pane.
+	 */
+	void showBody(bool showing);
 
 	/** The row under the post, and the question that takes its place. */
 	QWidget* m_actions;

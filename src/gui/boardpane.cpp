@@ -19,11 +19,31 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTextBrowser>
+#include <QTimer>
 #include <QTreeView>
 #include <QUrl>
 #include <QVBoxLayout>
 
 namespace {
+
+/**
+ * How wide the thread list opens, in logical pixels.
+ *
+ * Enough for a subject and the name beside it. What a board is read through is this
+ * list, so it starts at a width somebody can read one in rather than at whatever the
+ * columns happen to insist on.
+ */
+constexpr int LIST_WIDTH = 380;
+
+/**
+ * How long a refusal stays on the screen, in milliseconds.
+ *
+ * Long enough to be read by somebody who was not looking when it arrived, and gone by
+ * itself after that: a hub declining one thing is not a state of the board, and a band
+ * that stayed until it was dismissed would still be there an hour later saying
+ * something about a post nobody is looking at any more.
+ */
+constexpr int REFUSAL_MS = 20000;
 
 /** The same mapping the chat feed renders a message with; this module reads no theme. */
 Qdc::RichText::RenderColours markup_colours()
@@ -117,6 +137,14 @@ Qdc::BoardPane::BoardPane(QWidget* parent)
 	m_split->setStretchFactor(0, 1);
 	m_split->setStretchFactor(1, 3);
 
+	/*
+	 * Wide enough to read a subject in, which is what the list is for. A stretch factor
+	 * decides how the two share what is left over as the window is resized and says
+	 * nothing about where they start, so on its own it opened the list at the width of
+	 * its own minimum - a column too narrow to hold a subject, with a scrollbar under it.
+	 */
+	m_split->setSizes({LIST_WIDTH, LIST_WIDTH * 3});
+
 	layout->addWidget(m_split, 1);
 
 	/*
@@ -182,7 +210,7 @@ QWidget* Qdc::BoardPane::buildBoardHeader()
 	m_permissions->setTextFormat(Qt::PlainText);
 	layout->addWidget(m_permissions);
 
-	const auto band = [header](QLabel** label) {
+	const auto band = [header](QLabel** label, QPushButton** dismiss) {
 		QWidget* band = new QWidget(header);
 		band->setObjectName(QStringLiteral("connectionBar"));
 
@@ -199,18 +227,57 @@ QWidget* Qdc::BoardPane::buildBoardHeader()
 
 		inside->addWidget(*label, 1);
 
+		if (dismiss)
+		{
+			*dismiss = new QPushButton(QStringLiteral("×"), band);
+			(*dismiss)->setObjectName(QStringLiteral("boardRefusalClose"));
+			(*dismiss)->setFlat(true);
+			(*dismiss)->setCursor(Qt::ArrowCursor);
+			(*dismiss)->setToolTip(Qdc::BoardPane::tr("Dismiss"));
+
+			/* Square and small: it is a way out of the band, not a control in the pane. */
+			(*dismiss)->setFixedSize(18, 18);
+
+			inside->addWidget(*dismiss, 0, Qt::AlignTop);
+		}
+
 		band->hide();
 
 		return band;
 	};
 
-	m_gapBand = band(&m_gap);
+	/*
+	 * The gap has no way out of it and no timer. It is not an event that happened once -
+	 * it is what this view of the board is, for as long as the hub will not replay far
+	 * enough back to close it, and a board that quietly stopped saying so would be one
+	 * that looked complete.
+	 */
+	m_gapBand = band(&m_gap, nullptr);
 	layout->addWidget(m_gapBand);
 
-	m_refusalBand = band(&m_refusal);
+	m_refusalBand = band(&m_refusal, &m_refusalClose);
 	layout->addWidget(m_refusalBand);
 
+	connect(m_refusalClose, &QPushButton::clicked, this, [this] { clearRefusal(); });
+
+	/*
+	 * A refusal is something that happened, so it goes by itself. Single shot and
+	 * restarted by each new one, which is what keeps a second refusal from being taken
+	 * away by the timer the first one started.
+	 */
+	m_refusalTimer = new QTimer(this);
+	m_refusalTimer->setSingleShot(true);
+	m_refusalTimer->setInterval(REFUSAL_MS);
+
+	connect(m_refusalTimer, &QTimer::timeout, this, [this] { clearRefusal(); });
+
 	return header;
+}
+
+void Qdc::BoardPane::showBody(bool showing)
+{
+	m_body->setVisible(showing);
+	m_filler->setVisible(!showing);
 }
 
 QWidget* Qdc::BoardPane::buildThreadList()
@@ -245,8 +312,28 @@ QWidget* Qdc::BoardPane::buildThreadList()
 	m_list->setRootIsDecorated(true);
 	m_list->setSelectionMode(QAbstractItemView::SingleSelection);
 	m_list->setSelectionBehavior(QAbstractItemView::SelectRows);
+	/*
+	 * The subject takes what is left and the two beside it take what they need. Left
+	 * interactive they keep a default width each whatever is in them, which together
+	 * with a subject that stretches comes to more than the list is wide - so the list
+	 * had a scrollbar under it and a subject cut off at a dozen characters, which is
+	 * the one column somebody reads a board by.
+	 */
 	m_list->header()->setStretchLastSection(false);
 	m_list->header()->setSectionResizeMode(BoardModel::SubjectColumn, QHeaderView::Stretch);
+	m_list->header()->setSectionResizeMode(BoardModel::AuthorColumn,
+	                                      QHeaderView::ResizeToContents);
+	m_list->header()->setSectionResizeMode(BoardModel::WhenColumn,
+	                                      QHeaderView::ResizeToContents);
+
+	/*
+	 * And a floor rather than only a preferred width. A splitter given sizes before it
+	 * has one of its own scales them to what it has, which for a pane built into a
+	 * stack and shown later is nothing much - so what actually decides how wide the
+	 * list opens is this, and it has to be wide enough to hold the three columns
+	 * without the subject being scrolled out of the side of them.
+	 */
+	m_list->setMinimumWidth(LIST_WIDTH);
 
 	connect(m_list->selectionModel(), &QItemSelectionModel::currentRowChanged,
 	        this, &BoardPane::selectionChanged);
@@ -308,6 +395,21 @@ QWidget* Qdc::BoardPane::buildReader()
 	});
 
 	layout->addWidget(m_body, 1);
+
+	/*
+	 * What holds the post at the top when there are no words under it.
+	 *
+	 * A box layout hands leftover space out in proportion to the stretch its items
+	 * carry, and where none of them carries any it shares it equally instead - so with
+	 * the body hidden the subject, the line naming its author and the row of buttons
+	 * each took a third of the pane and stood a long way apart. This is the item that
+	 * takes the space in that case, and it is there exactly when the body is not.
+	 */
+	m_filler = new QWidget(reader);
+	m_filler->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+	m_filler->hide();
+
+	layout->addWidget(m_filler, 1);
 
 	m_actions = new QWidget(reader);
 
@@ -624,9 +726,19 @@ void Qdc::BoardPane::reportRefusal(int code, const QString& description,
 
 	const QString said = RichText::displayText(description);
 
-	parts.append(said.isEmpty()
+	/*
+	 * Ended for it where it did not end itself. What the hub said is a stranger's
+	 * sentence and nothing obliges it to be punctuated, so the sentences this pane adds
+	 * after it ran straight on from the last word of it.
+	 */
+	QString reason = said;
+
+	if (!reason.isEmpty() && !QStringLiteral(".!?").contains(reason.back()))
+		reason.append(QLatin1Char('.'));
+
+	parts.append(reason.isEmpty()
 		? tr("The hub refused this, with status %1 and no reason given.").arg(code)
-		: tr("The hub refused this, with status %1: %2").arg(code).arg(said));
+		: tr("The hub refused this, with status %1: %2").arg(code).arg(reason));
 
 	/*
 	 * There is no token in this extension, so a refusal is matched to what it refuses by
@@ -649,6 +761,16 @@ void Qdc::BoardPane::reportRefusal(int code, const QString& description,
 
 	m_refusal->setText(parts.join(QLatin1Char(' ')));
 	m_refusalBand->show();
+
+	/* Restarted rather than left running, so a second refusal gets its own while. */
+	m_refusalTimer->start();
+}
+
+void Qdc::BoardPane::clearRefusal()
+{
+	m_refusalTimer->stop();
+	m_refusal->clear();
+	m_refusalBand->hide();
 }
 
 void Qdc::BoardPane::setGap(bool gapped)
@@ -748,7 +870,7 @@ void Qdc::BoardPane::refreshReading()
 		say(m_author, tr("Choose a post from the list to read it."));
 
 		m_body->clear();
-		m_body->hide();
+		showBody(false);
 
 		refreshActions();
 		return;
@@ -779,7 +901,7 @@ void Qdc::BoardPane::refreshReading()
 		say(m_author, tr("Choose a post from the list to read it."));
 
 		m_body->clear();
-		m_body->hide();
+		showBody(false);
 
 		refreshActions();
 		return;
@@ -803,7 +925,7 @@ void Qdc::BoardPane::refreshReading()
 	if (!fromDocument && state == PostState::Unavailable)
 	{
 		m_body->setPlainText(tr("This post could not be retrieved."));
-		m_body->show();
+		showBody(true);
 
 		refreshActions();
 		return;
@@ -835,7 +957,7 @@ void Qdc::BoardPane::refreshReading()
 			? RichText::renderMarkdown(m_post.body, options)
 			: RichText::renderPlain(m_post.body, options));
 
-		m_body->show();
+		showBody(true);
 	}
 	else
 	{
@@ -845,7 +967,7 @@ void Qdc::BoardPane::refreshReading()
 		 * from an empty one and from an error.
 		 */
 		m_body->clear();
-		m_body->hide();
+		showBody(false);
 	}
 
 	refreshActions();
