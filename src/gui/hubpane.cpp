@@ -9,6 +9,7 @@
 #include "filelistview.h"
 #include "glyphs.h"
 #include "hubheader.h"
+#include "richtext.h"
 #include "theme.h"
 #include "usermenu.h"
 #include "usermodel.h"
@@ -408,6 +409,15 @@ void Qdc::HubPane::refreshHeaderIdentity()
 	                         hub()->url());
 }
 
+/*
+ * The name as the hub gave it, and the address as it was opened with.
+ *
+ * Not reduced here, and neither is DmPane's. This answers "what is this conversation
+ * called", which is asked by things that draw and by things that do not: the fallback is
+ * a hub's URL and a conversation's is a session id, and either of those is somewhere else
+ * a key. Whoever draws one reduces it - the tree row and the header both do, and the
+ * reduction is idempotent, so the one that then passes it on again costs nothing.
+ */
 QString Qdc::HubPane::paneTitle() const
 {
 	const QString name = hub() ? hub()->hubName() : QString();
@@ -734,9 +744,16 @@ void Qdc::HubPane::showUserMenu(const UserInfo& user, const QPoint& globalPos)
 
 	if (here.id.isEmpty())
 	{
-		options.unavailable = user.nick.isEmpty()
+		/*
+		 * Reduced before the sentence is chosen rather than after: a name that is
+		 * nothing but invisible characters leaves nothing to draw, and "They" is the
+		 * sentence for a name there is nothing to say - not "%1" with a hole in it.
+		 */
+		const QString who = RichText::displayText(user.nick);
+
+		options.unavailable = who.isEmpty()
 			? tr("They are no longer on this hub")
-			: tr("%1 is no longer on this hub").arg(user.nick);
+			: tr("%1 is no longer on this hub").arg(who);
 	}
 
 	const UserInfo& about = here.id.isEmpty() ? user : here;
@@ -762,16 +779,23 @@ void Qdc::HubPane::refreshInfo()
 
 	QStringList rows;
 
-	rows << tr("<b>Address</b><br>%1").arg(hub()->url().toHtmlEscaped());
+	/*
+	 * Reduced and then escaped, in that order: the bound is on the name the hub chose
+	 * and not on whatever it grows into once the ampersands are entities. Every row here
+	 * is one of our own labels beside a value, so a name carrying an override would read
+	 * as the label of the row below it - which is exactly what displayText() is for.
+	 */
+	const auto shown = [](const QString& text) {
+		return RichText::displayText(text).toHtmlEscaped();
+	};
+
+	rows << tr("<b>Address</b><br>%1").arg(shown(hub()->url()));
 
 	if (!hub()->hubName().isEmpty())
-		rows << tr("<b>Name</b><br>%1").arg(hub()->hubName().toHtmlEscaped());
+		rows << tr("<b>Name</b><br>%1").arg(shown(hub()->hubName()));
 
 	if (!hub()->hubDescription().isEmpty())
-	{
-		rows << tr("<b>Description</b><br>%1")
-			.arg(hub()->hubDescription().toHtmlEscaped());
-	}
+		rows << tr("<b>Description</b><br>%1").arg(shown(hub()->hubDescription()));
 
 	rows << tr("<b>Users</b><br>%1").arg(m_users->count());
 
@@ -917,7 +941,24 @@ Qdc::DmPane::DmPane(HubBridge* hub, const UserInfo& user,
 
 void Qdc::DmPane::applyBand()
 {
-	connectionBar()->setAbsent(m_present ? QString() : m_user.nick);
+	QString absent;
+
+	if (!m_present)
+	{
+		/*
+		 * The band writes this name into a sentence of its own and has nothing but the
+		 * string to go on, so it is reduced here rather than there. An empty one is also
+		 * how the band is told there is nobody absent, though, and a name of nothing but
+		 * invisible characters reduces to none at all - so the marker stands in for one
+		 * of those, and a doctored name is not a way of stopping the band from speaking.
+		 */
+		absent = RichText::displayText(m_user.nick);
+
+		if (absent.isEmpty() && !m_user.nick.isEmpty())
+			absent = QChar(QChar::ReplacementCharacter);
+	}
+
+	connectionBar()->setAbsent(absent);
 	connectionBar()->setStatus(m_netStatus, m_hubStatus);
 }
 
@@ -933,9 +974,11 @@ void Qdc::DmPane::applySendable()
 	 */
 	if (reason.isEmpty() && !m_present)
 	{
-		reason = m_user.nick.isEmpty()
+		const QString who = RichText::displayText(m_user.nick);
+
+		reason = who.isEmpty()
 			? tr("They are no longer on this hub")
-			: tr("%1 is no longer on this hub").arg(m_user.nick);
+			: tr("%1 is no longer on this hub").arg(who);
 	}
 
 	composer()->setSendable(reason.isEmpty(), reason);
@@ -976,7 +1019,8 @@ void Qdc::DmPane::setPresent(bool present, const QString& nickname)
 	 * says what is true now and this is a record of when it changed - which is what
 	 * somebody scrolling back through the morning is reading.
 	 */
-	const QString who = nickname.isEmpty() ? tr("They") : nickname;
+	const QString shown = RichText::displayText(nickname);
+	const QString who = shown.isEmpty() ? tr("They") : shown;
 
 	if (!present)
 	{
@@ -984,9 +1028,14 @@ void Qdc::DmPane::setPresent(bool present, const QString& nickname)
 		return;
 	}
 
+	/*
+	 * Whether they came back under a new name is asked of the names as they arrived,
+	 * since two that differ only in what the reduction takes off are still two names.
+	 */
 	postNotice(m_user.nick == nickname
 		? tr("%1 is back.").arg(who)
-		: tr("%1 is back, now called %2.").arg(who, m_user.nick));
+		: tr("%1 is back, now called %2.")
+			.arg(who, RichText::displayText(m_user.nick)));
 }
 
 QString Qdc::DmPane::paneTitle() const
@@ -1040,9 +1089,11 @@ void Qdc::DmPane::showUserMenu(const UserInfo& user, const QPoint& globalPos)
 
 	if (!m_present)
 	{
-		options.unavailable = m_user.nick.isEmpty()
+		const QString who = RichText::displayText(m_user.nick);
+
+		options.unavailable = who.isEmpty()
 			? tr("They are no longer on this hub")
-			: tr("%1 is no longer on this hub").arg(m_user.nick);
+			: tr("%1 is no longer on this hub").arg(who);
 	}
 
 	/*

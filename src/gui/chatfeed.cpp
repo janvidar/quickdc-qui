@@ -164,7 +164,21 @@ public:
 				? theme().presenceOperator
 				: nick_colour(message.from.nick, darkBackground);
 
-			const QString nick = message.from.nick.toHtmlEscaped();
+			/*
+			 * One value for the name, because it is both drawn and measured: the
+			 * hanging indent below is the width of exactly these glyphs, and measuring
+			 * it from the nickname as it arrived would be measuring characters that
+			 * were never drawn - so every line after the first would sit wrong by
+			 * however much a stranger put in their name.
+			 *
+			 * The colour above and the address below stay on the name as it arrived.
+			 * Neither is drawn: one is a hash that has to give the same person the same
+			 * colour in every conversation, and the other is only ever asked what
+			 * scheme it has.
+			 */
+			const QString speaker = RichText::displayText(message.from.nick);
+
+			const QString nick = speaker.toHtmlEscaped();
 
 			/*
 			 * Linked so that the layout can be asked whether the pointer is on the
@@ -189,7 +203,7 @@ public:
 				: QStringLiteral("<b>%1</b> ").arg(named);
 
 			indent += QFontMetricsF(speakerFont)
-				.horizontalAdvance(message.from.nick + QLatin1Char(' '));
+				.horizontalAdvance(speaker + QLatin1Char(' '));
 
 			options.italic = message.action;
 		}

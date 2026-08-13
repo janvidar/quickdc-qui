@@ -956,10 +956,17 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 
 		if (tth.isEmpty())
 		{
+			/*
+			 * The name is reduced where it is put into a sentence of ours, and nowhere
+			 * else: what is queued below is the name as the file list gave it. A name
+			 * carrying a right-to-left override rewrites everything after it, so
+			 * interpolating one raw lets somebody else finish our own sentences - which
+			 * is the half of the requirement that is not about the length of a row.
+			 */
 			QMessageBox::information(this, tr("Download"),
 				tr("'%1' cannot be downloaded: the file list gave no hash for it, "
 				   "and without one there is no way to find anyone who has it.")
-					.arg(name));
+					.arg(RichText::displayText(name)));
 			return;
 		}
 
@@ -1055,7 +1062,8 @@ void Qdc::HubsView::promptForPassword(Entry& entry)
 
 		const QString typed = QInputDialog::getText(this, tr("Hub password"),
 			tr("%1 wants a password.\n\n"
-			   "It will be remembered for this hub.").arg(hubUrl),
+			   "It will be remembered for this hub.")
+				.arg(RichText::displayText(hubUrl)),
 			QLineEdit::Password, QString(), &accepted);
 
 		if (accepted) password = typed;
@@ -1322,7 +1330,8 @@ void Qdc::HubsView::followLink(const QUrl& url)
 			if (!FileActions::open(here))
 			{
 				QMessageBox::information(this, tr("Open"),
-					tr("'%1' is here but could not be opened.").arg(file.name));
+					tr("'%1' is here but could not be opened.")
+						.arg(RichText::displayText(file.name)));
 			}
 
 			return;
@@ -1332,7 +1341,7 @@ void Qdc::HubsView::followLink(const QUrl& url)
 		{
 			QMessageBox::information(this, tr("Download"),
 				tr("'%1' cannot be downloaded: there is no transfer manager.")
-					.arg(file.name));
+					.arg(RichText::displayText(file.name)));
 			return;
 		}
 
@@ -1351,7 +1360,8 @@ void Qdc::HubsView::followLink(const QUrl& url)
 		if (!openHub(url.toString()))
 		{
 			QMessageBox::warning(this, tr("Connect to a hub"),
-				tr("'%1' is not an address I can use.").arg(url.toString()));
+				tr("'%1' is not an address I can use.")
+					.arg(RichText::displayText(url.toString())));
 			return;
 		}
 
@@ -1404,10 +1414,20 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 {
 	if (!item || !pane) return;
 
-	const QString label = decorate(pane->paneTitle(), pane->unreadCount());
+	/*
+	 * A hub's own name or somebody's nickname, in the densest list in the window, so it
+	 * is reduced to something drawable first - see RichText::displayText().
+	 *
+	 * Reduced before it is decorated rather than after, because the count decorate()
+	 * adds is our own text: a name that reaches the bound would otherwise have the
+	 * "(3)" cut off it, and a stranger would get to decide whether this row admits to
+	 * having anything unread. The tooltip is the same value, since hovering a doctored
+	 * name must not be the way to see it undoctored.
+	 */
+	const QString shown = RichText::displayText(pane->paneTitle());
 
-	item->setText(NameColumn, label);
-	item->setToolTip(NameColumn, pane->paneTitle());
+	item->setText(NameColumn, decorate(shown, pane->unreadCount()));
+	item->setToolTip(NameColumn, shown);
 
 	QFont face = item->font(NameColumn);
 	face.setBold(pane->unreadCount() > 0);
@@ -1446,8 +1466,8 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 	 * being an item of its own with somewhere to put one.
 	 */
 	item->setToolTip(NameColumn, secure
-		? tr("%1\nEncrypted with TLS").arg(pane->paneTitle())
-		: tr("%1\nNot encrypted").arg(pane->paneTitle()));
+		? tr("%1\nEncrypted with TLS").arg(shown)
+		: tr("%1\nNot encrypted").arg(shown));
 }
 
 void Qdc::HubsView::changeEvent(QEvent* event)
@@ -1621,9 +1641,11 @@ void Qdc::HubsView::showDmMenu(QTreeWidgetItem* item, const QPoint& globalPos)
 
 	if (here.id.isEmpty())
 	{
-		options.unavailable = remembered.nick.isEmpty()
+		const QString who = RichText::displayText(remembered.nick);
+
+		options.unavailable = who.isEmpty()
 			? tr("They are no longer on this hub")
-			: tr("%1 is no longer on this hub").arg(remembered.nick);
+			: tr("%1 is no longer on this hub").arg(who);
 	}
 
 	const UserInfo& about = here.id.isEmpty() ? remembered : here;
@@ -1732,6 +1754,7 @@ void Qdc::HubsView::promptForHub()
 		 * bridge into the pane, where there is somewhere to put it.
 		 */
 		QMessageBox::warning(this, tr("Connect to a hub"),
-			tr("'%1' is not an address I can use.").arg(url.trimmed()));
+			tr("'%1' is not an address I can use.")
+				.arg(RichText::displayText(url.trimmed())));
 	}
 }

@@ -51,6 +51,7 @@
 #include <QTimer>
 #include <QFileDialog>
 #include <QMenu>
+#include <QMessageBox>
 #include <QElapsedTimer>
 #include <QAbstractButton>
 #include <QSignalSpy>
@@ -164,6 +165,11 @@ private slots:
 	void everyRowIsNamedByTheKindOfThingItStandsFor();
 	void theBoardGlyphIsAThirdFigureInTheSameSpace();
 	void whatWasTypedSurvivesLeavingTheSettings();
+	void aDoctoredHubNameCannotReverseItsRow();
+	void aNicknameIsReducedInItsRowAndItsTooltip();
+	void aRemoteNameInOneOfOurSentencesIsReduced();
+	void aFileNameInAMessageBoxIsReduced();
+	void theFeedMeasuresTheSpeakerItDraws();
 
 private:
 	Qdc::UserInfo user(const QString& nick, bool op = false) const;
@@ -4109,6 +4115,272 @@ void TestHubs::pressingReconnectNowAsksTheHub()
 	 */
 	QVERIFY(now->isHidden());
 	QVERIFY(!bar->text().contains(QStringLiteral("120")));
+}
+
+namespace {
+
+/** The bidirectional override, and the marker a reduced string puts in its place. */
+const QChar RLO(0x202e);
+const QChar MARKER(QChar::ReplacementCharacter);
+
+/** The one row of the hub tree, and the conversations under it. */
+QTreeWidgetItem* hubRow(Qdc::HubsView& hubs)
+{
+	QTreeWidget* tree = hubs.findChild<QTreeWidget*>(QStringLiteral("hubTree"));
+	if (!tree || tree->topLevelItemCount() != 1) return nullptr;
+
+	return tree->topLevelItem(0);
+}
+
+}
+
+/*
+ * A hub's own name is drawn in the narrowest list in the window, and RTF0 requires
+ * that such a name cannot be mistaken for our own text. An override in it would
+ * otherwise reverse the row it is drawn in.
+ */
+void TestHubs::aDoctoredHubNameCannotReverseItsRow()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+
+	/*
+	 * In the address rather than in the name the hub sends, because a name only arrives
+	 * from a hub there is somebody to talk to - and the row draws whichever of the two
+	 * it has through the one call. An address like this comes from a clicked link.
+	 *
+	 * Long, as well as doctored, so that the reduction has to cut it: the count of what
+	 * is unread is our own text and must survive being put beside a name that fills the
+	 * bound, which it only does if the name is reduced before the count is added.
+	 */
+	const QString url = QStringLiteral("adc://192.0.2.60:412/") + RLO
+		+ QString(200, QLatin1Char('i'));
+
+	QVERIFY(hubs.openHub(url));
+
+	QTreeWidgetItem* row = hubRow(hubs);
+	QVERIFY(row);
+
+	const QString shown = Qdc::RichText::displayText(url);
+	QVERIFY2(shown != url, "the reduction left this address alone");
+
+	QCOMPARE(row->text(0), shown);
+	QCOMPARE(row->toolTip(0), shown);
+
+	/* Marked as doctored rather than quietly repaired, and not still reversing. */
+	QVERIFY(shown.contains(MARKER));
+	QVERIFY(!row->text(0).contains(RLO));
+
+	/* Hovering it is not the way round the reduction either. */
+	QVERIFY(!row->toolTip(0).contains(RLO));
+
+	Qdc::ChatMessage said;
+	said.from = user(QStringLiteral("alice"));
+	said.received = QDateTime::currentDateTime();
+	said.text = QStringLiteral("anybody there?");
+
+	emit hubs.currentPane()->hub()->chatReceived(said);
+
+	/* The count is still on the end of it, where a name cut to the bound would be. */
+	QCOMPARE(row->text(0), shown + QStringLiteral(" (1)"));
+}
+
+void TestHubs::aNicknameIsReducedInItsRowAndItsTooltip()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.61:412")));
+
+	Qdc::HubPane* pane = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(pane);
+
+	/*
+	 * A control character and a tab: one goes, the other becomes the space it was, so
+	 * a name written on two lines is one line here rather than two rows tall.
+	 */
+	const Qdc::UserInfo alice = user(QStringLiteral("al\x01ice\tb"));
+	pane->users()->upsert(alice);
+
+	emit pane->directMessageRequested(alice);
+
+	QTreeWidgetItem* hub = hubRow(hubs);
+	QVERIFY(hub);
+	QCOMPARE(hub->childCount(), 1);
+
+	QTreeWidgetItem* row = hub->child(0);
+
+	QCOMPARE(row->text(0), QStringLiteral("alice b"));
+	QCOMPARE(row->toolTip(0), QStringLiteral("alice b"));
+
+	/* And the name itself was never touched: it is who the conversation is with. */
+	Qdc::DmPane* dm = theConversation(hubs);
+	QVERIFY(dm);
+	QCOMPARE(dm->peer().nick, alice.nick);
+}
+
+/*
+ * The half of the requirement that is not about a row: a name interpolated raw into
+ * one of our own sentences gets to finish that sentence, because an override reverses
+ * everything drawn after it.
+ */
+void TestHubs::aRemoteNameInOneOfOurSentencesIsReduced()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.62:412")));
+
+	Qdc::ChatPane* hub = hubs.currentPane();
+	QVERIFY(hub);
+
+	Qdc::HubBridge* bridge = hub->hub();
+	QVERIFY(bridge);
+
+	const Qdc::UserInfo alice =
+		adcUser(QStringLiteral("AAAB"), QStringLiteral("alice") + RLO,
+		        QStringLiteral("CID-ALICE"));
+
+	emit bridge->userUpdated(alice);
+
+	Qdc::ChatMessage hello;
+	hello.from = alice;
+	hello.context = alice.id;
+	hello.privateMessage = true;
+	hello.text = QStringLiteral("are you there?");
+	emit bridge->chatReceived(hello);
+
+	Qdc::DmPane* dm = theConversation(hubs);
+	QVERIFY(dm);
+
+	/* As elsewhere: the conversation has to exist before the status reaches it. */
+	logIn(bridge);
+
+	emit bridge->userLeft(alice, QString(), true);
+
+	/* The band across the top of the conversation. */
+	Qdc::ConnectionBar* band = dm->findChild<Qdc::ConnectionBar*>();
+	QVERIFY(band);
+	QVERIFY2(band->text().contains(MARKER), qPrintable(band->text()));
+	QVERIFY(!band->text().contains(RLO));
+
+	/* Why nothing can be typed, which the box says in our words. */
+	QTextEdit* edit = dm->findChild<QTextEdit*>();
+	QVERIFY(edit);
+	QVERIFY(edit->placeholderText().contains(MARKER));
+	QVERIFY(!edit->placeholderText().contains(RLO));
+
+	/* And the line written into the conversation as a record of it. */
+	Qdc::ChatFeed* feed = dm->findChild<Qdc::ChatFeed*>();
+	QVERIFY(feed && feed->model());
+
+	QAbstractItemModel* lines = feed->model();
+	QVERIFY(lines->rowCount() > 0);
+
+	const Qdc::ChatMessage last =
+		lines->data(lines->index(lines->rowCount() - 1, 0),
+		            Qdc::ChatModel::MessageRole).value<Qdc::ChatMessage>();
+
+	QVERIFY2(last.text.contains(QStringLiteral("has left the hub")),
+	         qPrintable(last.text));
+
+	QVERIFY(last.text.contains(MARKER));
+	QVERIFY(!last.text.contains(RLO));
+}
+
+void TestHubs::aFileNameInAMessageBoxIsReduced()
+{
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, nullptr);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.63:412")));
+
+	Qdc::ChatPane* pane = hubs.currentPane();
+	QVERIFY(pane);
+
+	/*
+	 * The name a sender put in a magnet, which is the one thing in an attachment that
+	 * they chose the whole of. Reversed, "photo<RLO>gpj.exe" reads as "photoexe.jpg".
+	 */
+	Qdc::RichText::Attachment file;
+	file.tth = QStringLiteral("QKGXQ7HYQ5ARWZ2LNFVQ7YVN6TQGXQ7HYQ5ARWZ");
+	file.name = QStringLiteral("photo") + RLO + QStringLiteral("gpj.exe");
+	file.size = 1024;
+
+	/*
+	 * Read from a timer, because a message box runs its own event loop: nothing here
+	 * gets another turn until it has been dismissed, so what it says has to be read
+	 * from inside it.
+	 */
+	QString said;
+
+	QTimer::singleShot(200, [&said] {
+		for (QWidget* top : QApplication::topLevelWidgets())
+		{
+			QMessageBox* box = qobject_cast<QMessageBox*>(top);
+			if (!box || !box->isVisible()) continue;
+
+			said = box->text();
+			box->accept();
+		}
+	});
+
+	/* No transfer manager here, which is the message this one has to give. */
+	emit pane->linkActivated(QUrl(Qdc::RichText::writeMagnet(file)));
+
+	QTest::qWait(1000);
+
+	QVERIFY2(!said.isEmpty(), "no message box was on screen");
+	QVERIFY2(said.contains(MARKER), qPrintable(said));
+	QVERIFY(!said.contains(RLO));
+}
+
+/*
+ * The hanging indent is the width of the speaker's name, so the value it is measured
+ * from and the value drawn have to be the one value - otherwise every line after the
+ * first sits under nothing, by however much a stranger put in their name.
+ */
+void TestHubs::theFeedMeasuresTheSpeakerItDraws()
+{
+	Qdc::ChatModel model;
+
+	const QString sprawling = QString(200, QLatin1Char('i'));
+	const QString reduced = Qdc::RichText::displayText(sprawling);
+	QVERIFY2(reduced != sprawling, "the reduction left this name alone");
+
+	Qdc::ChatMessage said;
+	said.from = user(sprawling);
+	said.received = QDateTime::currentDateTime();
+	said.text = QStringLiteral("a line with enough words in it to wrap around "
+	                           "several times over, whatever room it is given");
+	model.append(said);
+
+	/* The same line, from somebody already called what the reduction calls them. */
+	Qdc::ChatMessage same = said;
+	same.from = user(reduced);
+	model.append(same);
+
+	/* And from somebody with a short name, as the yardstick for the indent itself. */
+	Qdc::ChatMessage brief = said;
+	brief.from = user(QStringLiteral("al"));
+	model.append(brief);
+
+	Qdc::ChatDelegate delegate;
+
+	QStyleOptionViewItem option;
+	option.rect = QRect(0, 0, 900, 0);
+	option.font = QApplication::font();
+	option.palette = QApplication::palette();
+
+	/* What is drawn is the reduced name, prefix and all. */
+	QCOMPARE(delegate.plainText(model.index(0), option),
+	         delegate.plainText(model.index(1), option));
+
+	const int tall = delegate.sizeHint(option, model.index(0)).height();
+	const int shortRow = delegate.sizeHint(option, model.index(2)).height();
+
+	/*
+	 * The indent is what the text column is measured from, so a long name really does
+	 * make a taller row - which is what says the equality below is worth anything.
+	 */
+	QVERIFY2(tall > shortRow, qPrintable(QStringLiteral("a cut name measured %1, a "
+	                                                   "short one %2")
+	                                     .arg(tall).arg(shortRow)));
+
+	QCOMPARE(tall, delegate.sizeHint(option, model.index(1)).height());
 }
 
 #include "tst_hubs.moc"
