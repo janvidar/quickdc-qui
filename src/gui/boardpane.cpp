@@ -389,6 +389,11 @@ QWidget* Qdc::BoardPane::buildComposer()
 
 	m_composer = new Composer(m_composeBox);
 	connect(m_composer, &Composer::sendRequested, this, &BoardPane::submit);
+
+	connect(m_composer, &Composer::attachRequested, this, &BoardPane::attachRequested);
+	connect(m_composer, &Composer::imagePasted, this, &BoardPane::imagePasted);
+	connect(m_composer, &Composer::filesDropped, this, &BoardPane::filesDropped);
+
 	layout->addWidget(m_composer);
 
 	m_composeNote = makeNote(QString(), m_composeBox);
@@ -419,8 +424,31 @@ QString Qdc::BoardPane::reading() const
 	return m_reading;
 }
 
+void Qdc::BoardPane::insertAttachment(const RichText::Attachment& file)
+{
+	m_composer->insertAttachment(file);
+
+	/*
+	 * Warned about, where a conversation would not warn. The rules for an attachment are
+	 * the same ones chat uses; its lifetime is not. A post can be read years after it was
+	 * written, and every reader of it who wants the attachment has to be able to find
+	 * somebody still holding the file.
+	 */
+	say(m_composeNote, tr("Attached by hash. A post can be read years from now, and this "
+	                      "file will only arrive for a reader if somebody is still "
+	                      "sharing it then."));
+}
+
 void Qdc::BoardPane::setBoard(const BoardInfo& board)
 {
+	/*
+	 * A descriptor for another board is another board. Two hubs, or two boards on one
+	 * hub, may use the same subjects and the same threads and they are not the same
+	 * board; what is held for the last one is dropped rather than mixed into this one,
+	 * which would produce a board that exists nowhere.
+	 */
+	if (!m_threads->board().isEmpty() && m_threads->board() != board.name) clear();
+
 	m_board = board;
 	m_threads->setBoard(board.name);
 
@@ -879,8 +907,17 @@ void Qdc::BoardPane::refreshActions()
 	m_newThread->setEnabled(m_board.may(BoardPermission::StartThread)
 	                        && !m_board.removed);
 
-	if (m_compose == Compose::Reply && (!reading || withdrawn))
-		showCompose(Compose::None);
+	/*
+	 * A reply being written is not taken away when its post is withdrawn. The words are
+	 * somebody's own and the tombstone arrived from elsewhere, so the box keeps them and
+	 * says what has happened instead; the submission is where it is stopped.
+	 */
+	if (m_compose == Compose::Reply && !m_replyTo.isEmpty()
+	    && m_threads->isWithdrawn(m_replyTo))
+	{
+		say(m_composeNote, tr("The post this replies to has been withdrawn. What you "
+		                      "wrote is kept here."));
+	}
 }
 
 void Qdc::BoardPane::fetch()
@@ -977,6 +1014,20 @@ void Qdc::BoardPane::submit(const QString& message, bool richText)
 	else
 	{
 		if (m_replyTo.isEmpty()) return;
+
+		/*
+		 * The post being replied to may have been withdrawn while the reply was being
+		 * written. Its hash is still a valid parent and the hub will very likely refuse
+		 * the post for naming an entry it no longer indexes, so saying so here is better
+		 * than letting the refusal explain it.
+		 */
+		if (m_threads->isWithdrawn(m_replyTo))
+		{
+			say(m_composeNote, tr("The post this replies to has been withdrawn, so the "
+			                      "hub will most likely refuse a reply to it. What you "
+			                      "wrote is kept here."));
+			return;
+		}
 
 		emit replySubmitted(m_replyTo, subject, message, richText);
 	}

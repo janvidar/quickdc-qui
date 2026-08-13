@@ -7,6 +7,8 @@
 
 #include <core/coretypes.h>
 
+#include "richtext.h"
+
 #include <QString>
 #include <QVector>
 #include <QWidget>
@@ -71,6 +73,16 @@ public:
 
 	/** The root of the post the reading pane is showing, or empty. */
 	QString reading() const;
+
+	/**
+	 * Put a chosen file into the post being written, as a link to its hash.
+	 *
+	 * The answer to attachRequested(), exactly as in a conversation - and warned about
+	 * here, where it is not in a conversation: an attachment to a chat message is fetched
+	 * within minutes by the people present, while an attachment to a post may be asked
+	 * for years later by somebody who has just read it.
+	 */
+	void insertAttachment(const RichText::Attachment& file);
 
 public slots:
 	/**
@@ -174,6 +186,18 @@ signals:
 
 	/** A link in a body was activated; the pane follows nothing itself. */
 	void linkActivated(const QUrl& url);
+
+	/**
+	 * The composer's own three, carried up as a conversation carries them.
+	 *
+	 * Choosing a file, hashing it and offering it to the hub belong to whoever owns the
+	 * connection, and the answer comes back through insertAttachment(). Forwarded rather
+	 * than left unconnected: a control that does nothing when it is pressed is worse than
+	 * one that is not there.
+	 */
+	void attachRequested();
+	void imagePasted(const QByteArray& data, const QString& suffix);
+	void filesDropped(const QStringList& paths);
 
 private:
 	/** Which of the two things the composer is being used for, or neither. */

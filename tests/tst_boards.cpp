@@ -67,6 +67,8 @@ private slots:
 	void aGapThatCannotBeClosedIsSaidSo();
 	void aSubmittedThreadIsNotPresentedAsPublished();
 	void aReplyKeepsTheParentItWasBegunOn();
+	void aReplyToAPostWithdrawnWhileWritingIsNotSent();
+	void aDescriptorForAnotherBoardStartsAgain();
 	void rereadingTheBoardIsOffered();
 
 private:
@@ -1009,6 +1011,70 @@ void TestBoards::aReplyKeepsTheParentItWasBegunOn()
 
 	QCOMPARE(replied.count(), 1);
 	QCOMPARE(replied.first().at(0).toString(), first);
+}
+
+void TestBoards::aReplyToAPostWithdrawnWhileWritingIsNotSent()
+{
+	Qdc::BoardPane pane;
+
+	Qdc::BoardInfo board;
+	board.name = QStringLiteral("general");
+	board.permissions = 1 + 2 + 4;
+
+	pane.setBoard(board);
+
+	const QString root = QStringLiteral("ROOT");
+
+	pane.addEntry(entry(root, base()));
+	pane.read(root);
+	button(pane, "boardReply")->click();
+
+	/* The tombstone arrives while the reply is being typed. */
+	pane.addEntry(tombstone(root, base() + 10));
+
+	QSignalSpy replied(&pane, &Qdc::BoardPane::replySubmitted);
+
+	Qdc::Composer* composer = pane.findChild<Qdc::Composer*>();
+	emit composer->sendRequested(QStringLiteral("Too late"), false);
+
+	QCOMPARE(replied.count(), 0);
+
+	QStringList notes;
+	for (QLabel* one : pane.findChildren<QLabel*>()) notes.append(one->text());
+
+	const QString all = notes.join(QLatin1Char('\n'));
+
+	QVERIFY2(all.contains(QStringLiteral("has been withdrawn")), qPrintable(all));
+	QVERIFY2(all.contains(QStringLiteral("kept here")), qPrintable(all));
+}
+
+void TestBoards::aDescriptorForAnotherBoardStartsAgain()
+{
+	Qdc::BoardPane pane;
+
+	Qdc::BoardInfo first;
+	first.name = QStringLiteral("general");
+	first.permissions = 1;
+
+	pane.setBoard(first);
+	pane.addEntry(entry(QStringLiteral("ROOT"), base()));
+	pane.read(QStringLiteral("ROOT"));
+
+	QCOMPARE(pane.threads()->postCount(), 1);
+
+	/*
+	 * Another board is another board, even on the same hub. Keeping the first board's
+	 * entries beside the second's would make a third that exists nowhere.
+	 */
+	Qdc::BoardInfo second;
+	second.name = QStringLiteral("announcements");
+	second.permissions = 1;
+
+	pane.setBoard(second);
+
+	QCOMPARE(pane.threads()->postCount(), 0);
+	QVERIFY(pane.reading().isEmpty());
+	QCOMPARE(pane.board(), QStringLiteral("announcements"));
 }
 
 void TestBoards::rereadingTheBoardIsOffered()
