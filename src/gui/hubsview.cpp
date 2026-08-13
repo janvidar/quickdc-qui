@@ -1432,23 +1432,24 @@ Qdc::BoardBridge* Qdc::HubsView::bulletins()
 		for (BoardPane* pane : panesHolding(tth)) pane->setPost(post);
 	});
 
+	/*
+	 * Not this time: nobody answered, or it was too large, or the copy that is here
+	 * would not open. The entry keeps its place and can be asked for again - the copy
+	 * that is missing today may be on a client that is switched off.
+	 */
 	connect(m_bulletins, &BoardBridge::postUnavailable, this,
 	        [this](const QString& tth, const QString& reason) {
-		/*
-		 * Which of the two this is, and they are not alike. A document nobody could be
-		 * reached for is an entry to keep and to ask about again - the copy that is
-		 * missing today may be on a client that is switched off. A document that is
-		 * here and still could not be read is one that is not the post its entry named,
-		 * since every copy of a document named by its hash is these same bytes: there
-		 * is nothing true left to show, and the post goes off the board.
-		 */
-		const bool unreadable = m_bulletins->isHeld(tth);
+		for (BoardPane* pane : panesHolding(tth)) pane->setPostUnavailable(tth, reason);
+	});
 
-		for (BoardPane* pane : panesHolding(tth))
-		{
-			if (unreadable) pane->setPostUnverifiable(tth);
-			else pane->setPostUnavailable(tth, reason);
-		}
+	/*
+	 * And not ever: the bytes hash to the name the entry gave and are not a post
+	 * document, so every copy of it anywhere is these same bytes. Nothing asking again
+	 * could produce, and nothing true left to draw, so the post goes off the board.
+	 */
+	connect(m_bulletins, &BoardBridge::postUnreadable, this,
+	        [this](const QString& tth, const QString&) {
+		for (BoardPane* pane : panesHolding(tth)) pane->setPostUnverifiable(tth);
 	});
 
 	connect(m_bulletins, &BoardBridge::postStateChanged, this,

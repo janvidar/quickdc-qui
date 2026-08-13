@@ -1144,7 +1144,8 @@ void Qdc::BoardBridge::fetch(const QString& hubUrl, const BoardEntry& entry)
 
 				giveUp(entry.tth,
 				       tr("The document behind this post is not the post it claims "
-				          "to be, and every copy of it is these same bytes."));
+				          "to be, and every copy of it is these same bytes."),
+				       true);
 				return;
 			}
 
@@ -1221,7 +1222,8 @@ void Qdc::BoardBridge::readHeld(const QString& hubUrl, const BoardEntry& entry)
 				 */
 				giveUp(entry.tth,
 				       tr("The document behind this post is not the post it claims to "
-				          "be, and every copy of it is these same bytes."));
+				          "be, and every copy of it is these same bytes."),
+				       true);
 				return;
 			}
 
@@ -1363,7 +1365,7 @@ void Qdc::BoardBridge::startWaiting()
 	}
 }
 
-void Qdc::BoardBridge::giveUp(const QString& tth, const QString& reason)
+void Qdc::BoardBridge::giveUp(const QString& tth, const QString& reason, bool unreadable)
 {
 	m_asking.remove(tth);
 
@@ -1388,7 +1390,8 @@ void Qdc::BoardBridge::giveUp(const QString& tth, const QString& reason)
 	if (postState(tth) != PostState::Withdrawn)
 		setState(tth, PostState::Unavailable);
 
-	emit postUnavailable(tth, reason);
+	if (unreadable) emit postUnreadable(tth, reason);
+	else emit postUnavailable(tth, reason);
 
 	startWaiting();
 }
@@ -1682,7 +1685,17 @@ void Qdc::BoardBridge::adopt(const QString& hubUrl, const BoardEntry& entry,
 			if (verdict.post.state == PostState::Unavailable)
 			{
 				setState(tth, PostState::Unavailable);
-				emit postUnavailable(tth, verdict.reason);
+
+				/*
+				 * Which of the two failures this was, said here rather than worked out
+				 * from what the store happens to hold afterwards. The document being
+				 * here is the mark of one of them and not of the other, but it is also
+				 * the mark of a copy that is here and merely could not be opened - and
+				 * that is a bad afternoon, not a post that can never be read.
+				 */
+				if (verdict.held) emit postUnreadable(tth, verdict.reason);
+				else emit postUnavailable(tth, verdict.reason);
+
 				startWaiting();
 				return;
 			}

@@ -4401,12 +4401,19 @@ void TestHubs::aDocumentThatIsNotAPostTakesItsEntryOffTheBoard()
 	/* Opened, as a reader would open it, and then read off the disk it is already on. */
 	pane->read(tth);
 
-	QSignalSpy refused(hubs.bulletins(), &Qdc::BoardBridge::postUnavailable);
+	/*
+	 * The final failure and not the other one. A post nobody could be reached for keeps
+	 * its row and can be asked for again; this one is here, is not a post, and no copy
+	 * anywhere differs - which is what takes it off the board.
+	 */
+	QSignalSpy refused(hubs.bulletins(), &Qdc::BoardBridge::postUnreadable);
+	QSignalSpy later(hubs.bulletins(), &Qdc::BoardBridge::postUnavailable);
 	QVERIFY(refused.isValid());
 
 	hubs.bulletins()->adopt(Qdc::BoardBridge::hubKey(url), entry(tth, 7000), file);
 
 	QTRY_COMPARE(refused.count(), 1);
+	QCOMPARE(later.count(), 0);
 
 	/* The document is here, which is exactly why the post cannot come back. */
 	QVERIFY(hubs.bulletins()->isHeld(tth));

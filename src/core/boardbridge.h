@@ -482,6 +482,18 @@ signals:
 	 */
 	void postUnavailable(const QString& tth, const QString& reason);
 
+	/**
+	 * The document is here, and it is not the post its entry named.
+	 *
+	 * Told apart from postUnavailable() because what a reader can do about the two is
+	 * not the same. That one is "not this time" - nobody answered, or it was too large,
+	 * or the copy here would not open - and the entry keeps its place and can be asked
+	 * for again. This one is final: the bytes hash to the name the entry gave and are
+	 * not a post document, so every copy of it anywhere is these same bytes and there
+	 * is nothing left that asking again could produce.
+	 */
+	void postUnreadable(const QString& tth, const QString& reason);
+
 	/** How much of a post is known has changed; see Qdc::PostState. */
 	void postStateChanged(const QString& tth, Qdc::PostState state);
 
@@ -608,8 +620,18 @@ private:
 	/** Start whatever is waiting on the concurrency bound. */
 	void startWaiting();
 
-	/** Give up on one fetch, saying why, and let the next one in. */
-	void giveUp(const QString& tth, const QString& reason);
+	/**
+	 * Give up on one fetch, saying why, and let the next one in.
+	 *
+	 * @param unreadable true where the document is here and can never be read - it
+	 *        hashes to the name the entry gave and is not a post document, so every
+	 *        copy of it is these same bytes. False for everything else, all of which
+	 *        is some flavour of "not this time": nobody answered, it is larger than
+	 *        this client will fetch, the board has had its allowance, or the copy that
+	 *        is here could not be opened. Those keep their entry and can be asked for
+	 *        again; the other one cannot.
+	 */
+	void giveUp(const QString& tth, const QString& reason, bool unreadable = false);
 
 	void setState(const QString& tth, PostState state);
 

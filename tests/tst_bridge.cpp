@@ -1675,7 +1675,14 @@ void TestBridge::aBoardReadBackKnowsWhichDocumentsItHolds()
 		other.close();
 
 		QSignalSpy ready(&posts, &Qdc::BoardBridge::postReady);
-		QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnavailable);
+
+		/*
+		 * The final one of the two failures, and not the "not this time" one: these
+		 * bytes hash to the name the entry gave and are not a post document, so no
+		 * copy anywhere differs and asking again would produce nothing.
+		 */
+		QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnreadable);
+		QSignalSpy later(&posts, &Qdc::BoardBridge::postUnavailable);
 
 		posts.adopt(key, bridge_entry(readable, board, AUTHOR_CID,
 		                              static_cast<quint64>(document.size())), first);
@@ -1685,6 +1692,7 @@ void TestBridge::aBoardReadBackKnowsWhichDocumentsItHolds()
 
 		QTRY_COMPARE(ready.count(), 1);
 		QTRY_COMPARE(refused.count(), 1);
+		QCOMPARE(later.count(), 0);
 
 		/* Both are here from the moment they were adopted, whatever they came to. */
 		QVERIFY(posts.isHeld(readable));
@@ -1868,7 +1876,13 @@ void TestBridge::aDocumentKnownNotToBeThePostIsNotOfferedAsFetchable()
 	const Qdc::BoardEntry entry =
 		bridge_entry(tth, board, AUTHOR_CID, static_cast<quint64>(junk.size()));
 
-	QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnavailable);
+	/*
+	 * Reported as unreadable both times: the bytes hash to the name and are not a post,
+	 * which is the answer for good rather than for now - so the reading side is told the
+	 * one that takes the entry off the board and never the one that keeps it.
+	 */
+	QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnreadable);
+	QSignalSpy later(&posts, &Qdc::BoardBridge::postUnavailable);
 	QVERIFY(refused.isValid());
 
 	posts.adopt(hubUrl, entry, file);
@@ -1887,6 +1901,7 @@ void TestBridge::aDocumentKnownNotToBeThePostIsNotOfferedAsFetchable()
 			QStringLiteral("not the post it claims to be")),
 	         qPrintable(refused.at(1).at(1).toString()));
 
+	QCOMPARE(later.count(), 0);
 	QCOMPARE(posts.postState(tth), Qdc::PostState::Unavailable);
 
 	/* And nothing was asked of anybody for it, which is the point of remembering. */
