@@ -1033,9 +1033,18 @@ void Qdc::HubBridge::sendPassword(const QString& password)
 	});
 }
 
+/**
+ * Nothing about a board goes to a hub that has not announced boards.
+ *
+ * The hub's answer is authoritative for the connection, whatever this client
+ * offered, and the session refuses these in any case - so the point of asking here
+ * is that this side does not go on believing it asked for something that was never
+ * sent. Not reported as an error: a hub with no boards is the ordinary case, and the
+ * interface asking is what was mistaken.
+ */
 void Qdc::HubBridge::subscribeBoard(const QString& board, quint64 timestamp)
 {
-	if (!m_thread || board.isEmpty()) return;
+	if (!m_thread || !m_bulletins || board.isEmpty()) return;
 
 	const QByteArray name = board.toUtf8();
 
@@ -1055,7 +1064,7 @@ void Qdc::HubBridge::subscribeBoard(const QString& board, quint64 timestamp)
 
 void Qdc::HubBridge::unsubscribeBoard(const QString& board)
 {
-	if (!m_thread || board.isEmpty()) return;
+	if (!m_thread || !m_bulletins || board.isEmpty()) return;
 
 	const QByteArray name = board.toUtf8();
 
@@ -1068,7 +1077,7 @@ void Qdc::HubBridge::unsubscribeBoard(const QString& board)
 
 void Qdc::HubBridge::requestBoardEntry(const QString& board, const QString& tth)
 {
-	if (!m_thread || board.isEmpty() || tth.isEmpty()) return;
+	if (!m_thread || !m_bulletins || board.isEmpty() || tth.isEmpty()) return;
 
 	const QByteArray name = board.toUtf8();
 	const QByteArray hash = tth.toUtf8();
@@ -1083,7 +1092,7 @@ void Qdc::HubBridge::submitPost(const QString& tth, quint64 size,
                                 const QString& board, const QString& subject,
                                 const QString& parent)
 {
-	if (!m_thread || tth.isEmpty() || board.isEmpty()) return;
+	if (!m_thread || !m_bulletins || tth.isEmpty() || board.isEmpty()) return;
 
 	const QByteArray hash = tth.toUtf8();
 	const QByteArray name = board.toUtf8();
@@ -1102,7 +1111,7 @@ void Qdc::HubBridge::submitPost(const QString& tth, quint64 size,
 
 void Qdc::HubBridge::withdrawPost(const QString& tth, const QString& board)
 {
-	if (!m_thread || tth.isEmpty() || board.isEmpty()) return;
+	if (!m_thread || !m_bulletins || tth.isEmpty() || board.isEmpty()) return;
 
 	const QByteArray hash = tth.toUtf8();
 	const QByteArray name = board.toUtf8();

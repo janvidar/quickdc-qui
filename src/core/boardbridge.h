@@ -187,6 +187,13 @@ public:
 	 * statement to anybody who asks: *I have read this*. So it is off until a hub
 	 * the user has actually joined is named, and turning it off withholds what is
 	 * already offered rather than throwing it away.
+	 *
+	 * It reaches the documents this hub's posts were read from, and no others. The
+	 * store is keyed by hash alone, because the same bytes are the same post on every
+	 * hub that indexes them, and it deliberately does not remember what was offered:
+	 * an offer lasts no longer than the process that made it. So after a restart a
+	 * document is offered again from the moment it is next read, which errs towards
+	 * saying less about what this client has read rather than more.
 	 */
 	void setServing(const QString& hubUrl, bool serving);
 	bool serves(const QString& hubUrl) const;
@@ -417,14 +424,25 @@ private:
 		quint64 cap = 0;
 
 		/**
-		 * When the author may be named as a source; see startFetch().
+		 * How long there has been nothing arriving, which is the one clock this
+		 * needs and answers two questions.
 		 *
-		 * The author is a source from the moment the entry arrives and is the
-		 * last one to ask, because a post's author recording who fetches it has
-		 * a complete census of its early readers. So the search goes out first
-		 * and this is where it is given time to answer.
+		 * The author is a source from the moment the entry arrives and is the last
+		 * party to ask, because an author who records who fetches their post has a
+		 * complete census of its early readers - so the search goes out first and
+		 * this is where it is given time to answer. And a fetch that nothing has
+		 * answered at all is eventually given up on, because an entry can outlive
+		 * every copy of the document it names and somebody has to say so.
+		 *
+		 * Restarted whenever bytes arrive: a fetch that is moving has a source, so
+		 * there is neither anything to gain by naming the author nor anything to
+		 * give up on.
 		 */
 		QElapsedTimer since;
+
+		/** How much had arrived when 'since' was last restarted. */
+		quint64 moved = 0;
+
 		bool authorNamed = false;
 	};
 
@@ -456,6 +474,12 @@ private:
 
 	/** The author of a post whose search has had its chance, named as a source. */
 	void nameAuthors();
+
+	/** Note the bytes that have arrived, which is what says a fetch is alive. */
+	void noteProgress(const QVector<Qdc::TransferInfo>& transfers);
+
+	/** Say so about a post nobody who has it could be reached for. */
+	void giveUpOnTheUnanswered();
 
 	CoreThread* m_thread = nullptr;
 	TransferBridge* m_transfers = nullptr;
@@ -490,6 +514,15 @@ private:
 
 	/** Waiting on the concurrency bound, in the order they were asked for. */
 	QVector<std::pair<QString, BoardEntry>> m_waiting;
+
+	/**
+	 * Posts the store is being asked about, which is a moment long and matters.
+	 *
+	 * Whether a post has to be fetched at all is a question for the core thread, so
+	 * there is a gap between a caller asking for one and this knowing that it is on
+	 * its way. Two clicks inside that gap are one fetch and not two.
+	 */
+	QSet<QString> m_asking;
 
 	QHash<QString, PostState> m_state;
 

@@ -34,6 +34,35 @@ namespace {
 constexpr int TTH_LENGTH = 39;
 
 /**
+ * Whether 'tth' is a tiger tree root: exactly TTH_LENGTH characters of unpadded
+ * base32, which is upper case A to Z and the digits 2 to 7.
+ *
+ * Checked here rather than assumed, because this is the string a cache filename is
+ * built out of. The protocol code checks it too before an entry is ever dispatched,
+ * and that is the point: a hash reaching this layer from anywhere else - a magnet
+ * URI, a document's parent link, a caller's own idea of what to fetch - has to meet
+ * the same bar before it names a file. Base32 has no padding at this length and no
+ * lower case, so a lower case root and one containing '0', '1', '8' or '9' are
+ * refused rather than folded.
+ */
+bool is_tiger_root(const QString& tth)
+{
+	if (tth.size() != TTH_LENGTH) return false;
+
+	for (const QChar at : tth)
+	{
+		const char16_t code = at.unicode();
+
+		const bool letter = code >= u'A' && code <= u'Z';
+		const bool digit = code >= u'2' && code <= u'7';
+
+		if (!letter && !digit) return false;
+	}
+
+	return true;
+}
+
+/**
  * The most this client will fetch for one post unless it is told otherwise.
  *
  * A post document is a header and a body of text, so this is enormous for what it
@@ -74,6 +103,40 @@ constexpr int AUTHOR_GRACE_MS = 20000;
 
 /** How often the fetches in flight are looked at; see BoardBridge::m_watch. */
 constexpr int WATCH_INTERVAL_MS = 2000;
+
+/**
+ * How long a fetch with nothing arriving is waited for.
+ *
+ * An index entry can outlive every copy of the document it names, which is a third
+ * thing and not an error: the entry keeps its subject, its author and its date, and
+ * says that the content could not be retrieved. Something has to decide when to say
+ * so, and this is it - measured from the last byte that arrived rather than from the
+ * start, so a large post over a slow link is not given up on for being slow.
+ */
+constexpr int FETCH_TIMEOUT_MS = 300000;
+
+/** Where one board stands, carried back in one piece. */
+struct BoardState {
+	quint64 cursor = 0;
+	Qdc::BoardBridge::View view = Qdc::BoardBridge::View::Unknown;
+};
+
+/** What the store already knows about a post somebody has asked to read. */
+struct Known {
+	/** Where the document is; empty when none is held. */
+	QString path;
+
+	/** Held, and already known not to be the post it claims to be. */
+	bool failed = false;
+};
+
+/** What verifying one document came to, ready to be emitted. */
+struct Verdict {
+	Qdc::BoardPost post;
+
+	/** Empty where the post can be read, and a sentence for a person otherwise. */
+	QString reason;
+};
 
 QString from_std(const std::string& text)
 {
@@ -222,29 +285,6 @@ public:
 	QuickDC::PostStore posts;
 };
 
-/** Where one board stands, carried back in one piece. */
-struct BoardState {
-	quint64 cursor = 0;
-	BoardBridge::View view = BoardBridge::View::Unknown;
-};
-
-/** What the store already knows about a post somebody has asked to read. */
-struct Known {
-	/** Where the document is; empty when none is held. */
-	QString path;
-
-	/** Held, and already known not to be the post it claims to be. */
-	bool failed = false;
-};
-
-/** What verifying one document came to, ready to be emitted. */
-struct Verdict {
-	BoardPost post;
-
-	/** Empty where the post can be read, and a sentence for a person otherwise. */
-	QString reason;
-};
-
 }
 
 Qdc::BoardBridge::BoardBridge(CoreThread* thread, TransferBridge* transfers,
@@ -286,6 +326,7 @@ Qdc::BoardBridge::BoardBridge(CoreThread* thread, TransferBridge* transfers,
 		}
 
 		nameAuthors();
+		giveUpOnTheUnanswered();
 
 		/*
 		 * Asked for rather than waited for. The answer arrives as
@@ -328,7 +369,10 @@ Qdc::BoardBridge::BoardBridge(CoreThread* thread, TransferBridge* transfers,
 		});
 
 		connect(m_transfers, &TransferBridge::snapshotChanged, this, [this] {
-			abandonOverCap(m_transfers->activeTransfers());
+			const QVector<TransferInfo> moving = m_transfers->activeTransfers();
+
+			noteProgress(moving);
+			abandonOverCap(moving);
 
 			/* A document that could not be discarded a moment ago may go now. */
 			releasePending();
@@ -525,6 +569,19 @@ void Qdc::BoardBridge::describe(const QString& hubUrl, const BoardInfo& board)
 	if (!m_thread || board.name.isEmpty()) return;
 
 	const QString name = board.name;
+
+	/*
+	 * A board that has ceased to exist is described by a descriptor carrying its name
+	 * and the flag, and nothing else - so recording it would record an oldest
+	 * timestamp of zero and turn a view with a hole in it into a complete one. The
+	 * cached entries are still there and are still worth reading, so what is held is
+	 * reported and the record is left as it was.
+	 */
+	if (board.removed)
+	{
+		requestState(hubUrl, name);
+		return;
+	}
 
 	m_thread->call(m_relay,
 		[holder = m_stores, hub = to_std(hubUrl), described = to_core(board)] {
@@ -739,7 +796,7 @@ bool Qdc::BoardBridge::passesCap(quint64 received, quint64 declared, quint64 cap
 
 void Qdc::BoardBridge::fetch(const QString& hubUrl, const BoardEntry& entry)
 {
-	if (entry.tth.size() != TTH_LENGTH)
+	if (!is_tiger_root(entry.tth))
 	{
 		/*
 		 * A hash that is not a tiger root names no document, could never be
@@ -753,12 +810,23 @@ void Qdc::BoardBridge::fetch(const QString& hubUrl, const BoardEntry& entry)
 
 	if (entry.removed)
 	{
+		/*
+		 * A tombstone is the more particular thing to know about a post than "the
+		 * body is not here", so it is what is recorded. The replies to it are
+		 * separate posts and are unaffected.
+		 */
+		setState(entry.tth, PostState::Withdrawn);
 		giveUp(entry.tth, tr("This post has been withdrawn."));
 		return;
 	}
 
-	/* Already on its way. Asking twice is not a reason to ask a peer twice. */
-	if (m_byTth.contains(entry.tth)) return;
+	/*
+	 * Already on its way, or already being asked about. Two clicks are not two
+	 * reasons to ask a peer, and the store is asked on the core thread first - so
+	 * without the last of these a second click would arrive while the first was
+	 * still in the air and charge the fetch twice.
+	 */
+	if (m_byTth.contains(entry.tth) || m_asking.contains(entry.tth)) return;
 
 	for (const auto& waiting : m_waiting)
 	{
@@ -770,6 +838,8 @@ void Qdc::BoardBridge::fetch(const QString& hubUrl, const BoardEntry& entry)
 		giveUp(entry.tth, tr("The core is not running."));
 		return;
 	}
+
+	m_asking.insert(entry.tth);
 
 	/*
 	 * Asked of the store first, on the core thread. A document already held and
@@ -794,6 +864,8 @@ void Qdc::BoardBridge::fetch(const QString& hubUrl, const BoardEntry& entry)
 			return known;
 		},
 		[this, hubUrl, entry](const Known& known) {
+			m_asking.remove(entry.tth);
+
 			if (known.failed)
 			{
 				giveUp(entry.tth,
@@ -879,6 +951,18 @@ void Qdc::BoardBridge::startFetch(const QString& hubUrl, const BoardEntry& entry
 	                                                                : m_cap;
 
 	/*
+	 * Nothing bounds this fetch: the entry declared no size and the cap has been
+	 * turned off. Refused rather than asked for, since what would be asked of a peer
+	 * is "send until you stop", and no answer to that can be checked.
+	 */
+	if (fetch.cap == 0)
+	{
+		giveUp(entry.tth, tr("Nothing says how large this post is, and no limit is "
+		                     "set on what may be fetched for one."));
+		return;
+	}
+
+	/*
 	 * Charged where the fetch actually goes out, so that one waiting behind the
 	 * concurrency bound is charged when it starts rather than when it was asked for.
 	 */
@@ -918,6 +1002,8 @@ void Qdc::BoardBridge::startWaiting()
 
 void Qdc::BoardBridge::giveUp(const QString& tth, const QString& reason)
 {
+	m_asking.remove(tth);
+
 	const QString path = m_byTth.take(tth);
 
 	if (!path.isEmpty())
@@ -998,6 +1084,50 @@ void Qdc::BoardBridge::nameAuthors()
 	}
 }
 
+void Qdc::BoardBridge::noteProgress(const QVector<TransferInfo>& transfers)
+{
+	for (const TransferInfo& row : transfers)
+	{
+		if (row.upload) continue;
+
+		const auto at = m_fetching.find(row.filename);
+		if (at == m_fetching.end()) continue;
+		if (row.transferred <= at->moved) continue;
+
+		/*
+		 * Bytes are arriving, so the clock starts again. One clock does for both
+		 * questions this answers: a fetch that is moving has a source, so there is
+		 * nothing to be gained by naming the author, and nothing to give up on.
+		 */
+		at->moved = row.transferred;
+		at->since.start();
+	}
+}
+
+void Qdc::BoardBridge::giveUpOnTheUnanswered()
+{
+	QVector<QString> lost;
+
+	for (const Fetch& fetch : m_fetching)
+	{
+		if (fetch.since.elapsed() < FETCH_TIMEOUT_MS) continue;
+
+		lost.append(fetch.entry.tth);
+	}
+
+	/*
+	 * Collected first, because giving up takes the fetch out of what is being walked.
+	 * The entry is untouched and is still worth showing: this says that nobody who
+	 * has the document could be reached, which is neither an empty post nor an error,
+	 * and asking again later is what a reader does next.
+	 */
+	for (const QString& tth : lost)
+	{
+		giveUp(tth, tr("Nobody who has this post could be reached. It may be on a "
+		               "client that is offline; try again later."));
+	}
+}
+
 void Qdc::BoardBridge::abandonOverCap(const QVector<TransferInfo>& transfers)
 {
 	for (const TransferInfo& row : transfers)
@@ -1044,7 +1174,8 @@ void Qdc::BoardBridge::adopt(const QString& hubUrl, const BoardEntry& entry,
 			 * handed, and handing over the store's own path would be the store
 			 * deleting the document it holds.
 			 */
-			const bool held = !file.empty() && posts.pathFor(wanted.tth) == file;
+			const bool held = posts.has(wanted.tth)
+				&& !file.empty() && posts.pathFor(wanted.tth) == file;
 
 			QFile document(from_std(file));
 
@@ -1163,6 +1294,9 @@ void Qdc::BoardBridge::adopt(const QString& hubUrl, const BoardEntry& entry,
 		},
 		[this, hubUrl, entry](const Verdict& verdict) {
 			const QString tth = entry.tth;
+
+			m_asking.remove(tth);
+
 			const QString path = m_byTth.take(tth);
 
 			if (!path.isEmpty()) m_fetching.remove(path);

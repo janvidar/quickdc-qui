@@ -338,12 +338,28 @@ void Qdc::TransferBridge::hidePath(const QString& prefix)
 	m_hidden.append(prefix);
 
 	/*
-	 * The rows already gathered are dropped here rather than left to age out, so
+	 * What has already been gathered is dropped here rather than left to age out, so
 	 * that a caller which hides a directory before fetching into it and one which
-	 * hides it afterwards see the same list.
+	 * hides it afterwards are shown the same list.
 	 */
-	m_active = foldByFile({}, m_queue, m_active, 0, m_hidden);
-	m_queue = markTransferring(m_queue, m_active);
+	QVector<TransferInfo> rows;
+	rows.reserve(m_active.size());
+
+	for (const TransferInfo& row : m_active)
+	{
+		if (!isUnder(row.filename, m_hidden)) rows.append(row);
+	}
+
+	QVector<QueueEntry> visible;
+	visible.reserve(m_queue.size());
+
+	for (const QueueEntry& entry : m_queue)
+	{
+		if (!isUnder(entry.filename, m_hidden)) visible.append(entry);
+	}
+
+	m_active = rows;
+	m_queue = visible;
 }
 
 QStringList Qdc::TransferBridge::hiddenPaths() const
