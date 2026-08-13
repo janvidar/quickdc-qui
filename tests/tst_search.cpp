@@ -75,9 +75,35 @@ private:
 
 	static QLabel* summaryOf(Qdc::SearchView& view);
 
+	/**
+	 * Take a file out of the queue and wait until it has gone.
+	 *
+	 * Removing is posted to the core thread and answered by nothing, so a case that
+	 * called it and returned left its file queued for however long that took - and the
+	 * next case, counting what the queue holds, counted the previous one's file as well.
+	 * Which case failed then depended on how busy the machine was.
+	 */
+	static void dequeue(Qdc::TransferBridge& transfers, const QString& target);
+
 	QTemporaryDir m_dir;
 	Qdc::CoreThread* m_thread = nullptr;
 };
+
+void TestSearch::dequeue(Qdc::TransferBridge& transfers, const QString& target)
+{
+	transfers.removeFromQueue(target);
+
+	const auto gone = [&transfers, &target]() {
+		transfers.refresh();
+
+		for (const Qdc::QueueEntry& one : transfers.queueSnapshot())
+			if (one.filename == target) return false;
+
+		return true;
+	};
+
+	QTRY_VERIFY_WITH_TIMEOUT(gone(), 5000);
+}
 
 Qdc::SearchHit TestSearch::hit(const QString& name, const QString& tth,
                                const QString& nick, quint32 freeSlots, quint64 size,
@@ -546,7 +572,7 @@ void TestSearch::queueingAResultBringsThePeerThatAnsweredWithIt()
 	QCOMPARE(queued.first().filename, target);
 	QCOMPARE(queued.first().sources, 1u);
 
-	transfers.removeFromQueue(target);
+	dequeue(transfers, target);
 }
 
 void TestSearch::queueingTheSameResultTwiceAddsOneSource()
@@ -572,7 +598,7 @@ void TestSearch::queueingTheSameResultTwiceAddsOneSource()
 	QCOMPARE(queued.size(), 1);
 	QCOMPARE(queued.first().sources, 1u);
 
-	transfers.removeFromQueue(target);
+	dequeue(transfers, target);
 }
 
 QTEST_MAIN(TestSearch)
