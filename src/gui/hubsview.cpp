@@ -757,11 +757,27 @@ bool Qdc::HubsView::openHub(const QString& url)
 
 		found->subscribed.clear();
 
+		/*
+		 * And what somebody had finished with, because that was about the boards this
+		 * connection was carrying. Being told again what a hub has is where its boards
+		 * come from, and holding a refusal from an hour ago against one of them would
+		 * make a board left once a board left for good.
+		 */
+		found->left.clear();
+
 		if (!supported) return;
 
-		for (const QString& board : found->joined)
+		/*
+		 * Every board this hub has said it has, and not only the ones somebody has
+		 * looked at: a subscription ends with the session, and what a board is for is
+		 * to be arriving before anybody opens it. The descriptors for a fresh session
+		 * arrive after this, and each of those subscribes as it lands; this is for the
+		 * boards already known when a hub takes the feature back and gives it again.
+		 */
+		for (auto at = found->boards.constBegin(); at != found->boards.constEnd(); ++at)
 		{
-			if (found->boards.contains(board)) subscribeBoard(*found, board);
+			if (at.value() && at.value()->boardInfo().may(BoardPermission::Subscribe))
+				subscribeBoard(*found, at.key());
 		}
 	});
 
@@ -1518,6 +1534,15 @@ void Qdc::HubsView::describeBoard(Entry& entry, const BoardInfo& board)
 		return;
 	}
 
+	/*
+	 * A board somebody has left stays left while this connection lasts. A hub sends a
+	 * fresh descriptor whenever a field of the board changes, and the newest timestamp
+	 * and the post count are fields - so on a board anybody is posting to a descriptor
+	 * arrives every few seconds, and without this each one would put back the row that
+	 * had just been closed.
+	 */
+	if (entry.left.contains(board.name)) return;
+
 	BoardPane* pane = entry.boards.value(board.name, nullptr);
 	if (!pane) pane = openBoard(entry, board.name);
 
@@ -1529,6 +1554,19 @@ void Qdc::HubsView::describeBoard(Entry& entry, const BoardInfo& board)
 	 * rather than only the first time.
 	 */
 	pane->setBoard(board);
+
+	/*
+	 * And followed from the moment the hub says it is there, rather than when somebody
+	 * opens it: a board is a thing that arrives, and one that only fills in once it has
+	 * been looked at has nothing to show at the moment it is first looked at. What that
+	 * costs is a replay per board at login, which the hub bounds by refusing to go
+	 * further back than its own oldest timestamp - and after the first time each board
+	 * resumes from the cursor it left off at, so the cost is paid once.
+	 *
+	 * Only where the hub says this session may. A descriptor is not sent at all for a
+	 * board it may not subscribe to, so this is the belt to that braces.
+	 */
+	if (board.may(BoardPermission::Subscribe)) subscribeBoard(entry, board.name);
 
 	refreshBoardItem(m_boardItems.value(pane, nullptr), pane);
 }
@@ -1729,13 +1767,14 @@ void Qdc::HubsView::showBoard(BoardPane* pane)
 	}
 
 	/*
-	 * Opening a board is what asks the hub to send it. A descriptor said the board was
-	 * there and that is all it said; taking out a subscription on the strength of one
-	 * would be a standing instruction to send what nobody had asked to read.
+	 * Already subscribed, from the descriptor that put the row there - opening a board
+	 * is reading what has been arriving rather than the thing that asks for it. Asked
+	 * for again all the same, since this is also the path a board reopened after being
+	 * closed comes back along, and asking twice for one already held costs nothing.
 	 */
 	if (Entry* owner = entryForBoard(pane))
 	{
-		owner->joined.insert(pane->board());
+		owner->left.remove(pane->board());
 		subscribeBoard(*owner, pane->board());
 	}
 
@@ -1747,7 +1786,6 @@ void Qdc::HubsView::closeBoard(Entry& entry, const QString& board)
 {
 	BoardPane* pane = entry.boards.take(board);
 
-	entry.joined.remove(board);
 	entry.subscribed.remove(board);
 
 	if (!pane) return;
@@ -2827,6 +2865,13 @@ void Qdc::HubsView::showBoardMenu(QTreeWidgetItem* item, const QPoint& globalPos
 	 * reading for as long as the connection lasts.
 	 */
 	if (entry->bridge) entry->bridge->unsubscribeBoard(board);
+
+	/*
+	 * Remembered as left, and only here - this is somebody saying they have finished
+	 * with the board, where closeBoard() is also how a board the hub has removed goes.
+	 * Marking that one would mean a board taken away and put back never came back.
+	 */
+	entry->left.insert(board);
 
 	closeBoard(*entry, board);
 }

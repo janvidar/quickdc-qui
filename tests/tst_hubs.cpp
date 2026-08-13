@@ -175,6 +175,7 @@ private slots:
 	void aBoardThatIsGoneTakesItsRowWithIt();
 	void aBoardRowOffersTheBoardsOwnMenu();
 	void openingABoardIsWhatSubscribesToIt();
+	void aBoardLeftIsNotPutBackByTheNextDescriptor();
 	void aHubWithoutBoardsForgetsWhatWasSubscribed();
 	void postsNobodyHasOpenedReachTheRailBadge();
 	void theBadgeStillCountsWhatWasUnreadAfterARestore();
@@ -3651,22 +3652,21 @@ void TestHubs::openingABoardIsWhatSubscribesToIt()
 	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
 
 	/*
-	 * The descriptor puts a row in the tree and reports where the board stands - a
-	 * descriptor is the one thing that can turn a complete view into one with a hole
-	 * in it - and subscribes to nothing.
+	 * The descriptor is what subscribes. A board is a thing that arrives, and one that
+	 * only begins to fill in once somebody has looked at it has nothing to show at the
+	 * moment it is first looked at.
+	 *
+	 * Twice over: a descriptor asks where the board stands, since it is the one thing
+	 * that can turn a complete view into one with a hole in it, and the subscription it
+	 * takes out answers with the cursor it resumed from.
 	 */
-	QTRY_COMPARE(states.count(), 1);
+	QTRY_COMPARE(states.count(), 2);
 
 	Qdc::BoardPane* pane = boardPane(hubs);
 	QVERIFY(pane);
 
 	/* What was cached is read back into the pane without the hub being asked. */
 	QTRY_COMPARE(pane->threads()->postCount(), 2);
-
-	QTreeWidget* rows = hubTree(hubs);
-	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
-
-	QTRY_COMPARE(states.count(), 2);
 
 	/*
 	 * From the highest timestamp held and never from one past it. Timestamps are
@@ -3676,7 +3676,12 @@ void TestHubs::openingABoardIsWhatSubscribesToIt()
 	QCOMPARE(states.last().at(1).toString(), QStringLiteral("general"));
 	QCOMPARE(states.last().at(2).toULongLong(), quint64(2000));
 
-	/* And a second look at a board already subscribed to asks for nothing again. */
+	/* And opening it asks for nothing again: it has been arriving all along. */
+	QTreeWidget* rows = hubTree(hubs);
+	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
+
+	QCOMPARE(states.count(), 2);
+
 	rows->setCurrentItem(rows->topLevelItem(0));
 	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
 
@@ -3697,11 +3702,8 @@ void TestHubs::aHubWithoutBoardsForgetsWhatWasSubscribed()
 	QSignalSpy states(hubs.bulletins(), &Qdc::BoardBridge::boardStateReady);
 
 	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-	QTRY_COMPARE(states.count(), 1);
 
-	QTreeWidget* rows = hubTree(hubs);
-	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
-
+	/* Where the board stands, and the subscription the descriptor took out. */
 	QTRY_COMPARE(states.count(), 2);
 
 	/*
@@ -3711,20 +3713,89 @@ void TestHubs::aHubWithoutBoardsForgetsWhatWasSubscribed()
 	emit hub->hub()->bulletinSupportChanged(false);
 	QCOMPARE(states.count(), 2);
 
-	/* Which is why looking at the board again asks for it again. */
-	rows->setCurrentItem(rows->topLevelItem(0));
-	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
-
-	QTRY_COMPARE(states.count(), 3);
-
 	/*
-	 * And a session that has just found the feature holds none either, so a board
-	 * somebody had open is asked for rather than assumed to be still arriving.
+	 * And a session that has just found the feature holds none either, so every board
+	 * the hub has already named is asked for again rather than assumed to be still
+	 * arriving - without waiting for anybody to look at one.
 	 */
 	emit hub->hub()->bulletinSupportChanged(true);
 
-	QTRY_COMPARE(states.count(), 4);
+	QTRY_COMPARE(states.count(), 3);
 	QCOMPARE(states.last().at(1).toString(), QStringLiteral("general"));
+}
+
+void TestHubs::aBoardLeftIsNotPutBackByTheNextDescriptor()
+{
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
+	hubs.setBoardDirectory(boardScratch(QStringLiteral("left")));
+
+	hubs.resize(900, 600);
+	hubs.show();
+	QVERIFY(QTest::qWaitForWindowExposed(&hubs));
+
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.46:412")));
+
+	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
+	QVERIFY(hub && hub->hub());
+
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	QTreeWidget* rows = hubTree(hubs);
+	QTRY_COMPARE(rows->topLevelItem(0)->childCount(), 1);
+
+	/* Left the way a person leaves one, through the menu on its row. */
+	QTimer watcher;
+	watcher.setInterval(20);
+
+	QObject::connect(&watcher, &QTimer::timeout, [] {
+		for (QWidget* top : QApplication::topLevelWidgets())
+		{
+			QMenu* menu = qobject_cast<QMenu*>(top);
+			if (!menu || !menu->isVisible()) continue;
+
+			for (QAction* action : menu->actions())
+			{
+				if (action->text() != QStringLiteral("Leave this board")) continue;
+
+				menu->setActiveAction(action);
+				QTest::keyClick(menu, Qt::Key_Return);
+				return;
+			}
+
+			menu->close();
+			return;
+		}
+	});
+
+	watcher.start();
+	emit rows->customContextMenuRequested(
+		rows->visualItemRect(rows->topLevelItem(0)->child(0)).center());
+	watcher.stop();
+
+	QTRY_COMPARE(rows->topLevelItem(0)->childCount(), 0);
+
+	/*
+	 * A hub sends a fresh descriptor whenever a field of the board changes, and the
+	 * newest timestamp and the post count are both fields - so on a board anybody is
+	 * posting to one arrives every few seconds. None of them is a reason to put back a
+	 * row somebody has just closed.
+	 */
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	QCoreApplication::processEvents();
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 0);
+
+	/*
+	 * Until the connection goes. Reconnecting is being told what a hub has all over
+	 * again, and a board left an hour ago is not something to hold against it.
+	 */
+	emit hub->hub()->bulletinSupportChanged(false);
+	emit hub->hub()->bulletinSupportChanged(true);
+	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+
+	QTRY_COMPARE(rows->topLevelItem(0)->childCount(), 1);
 }
 
 void TestHubs::postsNobodyHasOpenedReachTheRailBadge()

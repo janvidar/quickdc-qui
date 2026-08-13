@@ -217,15 +217,18 @@ private:
 		QHash<QString, BoardPane*> boards;
 
 		/**
-		 * The boards somebody has opened here, which is what asks for a subscription.
+		 * The boards somebody has closed on this connection.
 		 *
-		 * The wish rather than the state, and it outlives a connection - a
-		 * subscription ends with the session and has to be asked for again, and this
-		 * is what remembers which ones to ask for. A board whose row was closed is
-		 * not in here: leaving a board is how somebody says they have finished with
-		 * it.
+		 * Every board a hub describes is followed from the moment it says so, so what
+		 * has to be remembered is the exception rather than the rule. A hub sends a
+		 * fresh descriptor whenever a field changes and the post count is one, so on
+		 * a busy board they arrive continually - and each would put back a row that
+		 * had just been closed if nothing here said not to.
+		 *
+		 * For this connection only. Reconnecting to a hub is being told what it has
+		 * again, and a board left an hour ago is not something to hold against it.
 		 */
-		QSet<QString> joined;
+		QSet<QString> left;
 
 		/**
 		 * The boards a subscription has been asked for on this connection.
