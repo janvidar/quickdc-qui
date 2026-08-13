@@ -300,13 +300,17 @@ QVariant Qdc::SearchModel::fileData(const Group& group, int column, int role) co
 		 * The name is the one the peer answering the search chose, so it is disarmed
 		 * before it is put in front of a sentence of ours - which is the confusion RTF0
 		 * asks to be prevented. The hash beside it is our own reading of base32.
+		 *
+		 * The sentence and the label are ours and the name is not, and a tooltip is drawn
+		 * as markup, so the finished thing is escaped: what stays structure is the newline
+		 * between the two lines, and nothing the peer sent can add to it.
 		 */
 		const QString name = RichText::displayText(group.name);
 
-		return group.tth.isEmpty()
+		return RichText::literalHtml(group.tth.isEmpty()
 			? tr("%1\nNo hash, so this file cannot be matched against any other.")
 				.arg(name)
-			: tr("%1\nTTH: %2").arg(name, group.tth);
+			: tr("%1\nTTH: %2").arg(name, group.tth));
 	}
 
 	/* The figures right, the words left - and the hub is words, as it is below. */
@@ -377,7 +381,7 @@ QVariant Qdc::SearchModel::peerData(const SearchHit& hit, int column, int role) 
 	if (role == Qt::ToolTipRole)
 	{
 		/* The path is the peer's own; the file row shows only the name from it. */
-		return RichText::displayText(hit.name);
+		return RichText::literalHtml(RichText::displayText(hit.name));
 	}
 
 	if (role == Qt::TextAlignmentRole && column == SlotsColumn)

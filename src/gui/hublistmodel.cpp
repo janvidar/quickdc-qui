@@ -77,12 +77,13 @@ QVariant Qdc::HubListModel::data(const QModelIndex& index, int role) const
 			 *
 			 * Both are what a hub's operator wrote, so both are disarmed - one at a
 			 * time, since the newline between them is ours and a pass over the joined
-			 * text would take it back out again.
+			 * text would take it back out again - and the pair is then escaped in one
+			 * pass, that newline being the only markup a tooltip of two lines needs.
 			 */
-			return hub.description.isEmpty()
+			return RichText::literalHtml(hub.description.isEmpty()
 				? RichText::displayText(hub.address)
 				: RichText::displayText(hub.description) + QStringLiteral("\n")
-					+ RichText::displayText(hub.address);
+					+ RichText::displayText(hub.address));
 
 		case Qt::AccessibleTextRole:
 			if (index.column() != FavouriteColumn) break;

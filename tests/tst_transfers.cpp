@@ -234,11 +234,15 @@ void TestTransfers::queueModelFormatsItsColumns()
 	QCOMPARE(model.rowCount(), 1);
 	QCOMPARE(model.columnCount(), Qdc::QueueModel::ColumnCount);
 
-	/* The name column shows the tail; the whole path is in the tooltip. */
+	/*
+	 * The name column shows the tail; the whole path is in the tooltip. Looked for inside
+	 * it rather than compared against the whole of it, because a tooltip is drawn as markup
+	 * and so is handed over as markup - what that markup is made of is tst_richtext's.
+	 */
 	QCOMPARE(model.data(model.index(0, Qdc::QueueModel::NameColumn), Qt::DisplayRole).toString(),
 	         QStringLiteral("film.mkv"));
-	QCOMPARE(model.data(model.index(0, Qdc::QueueModel::NameColumn),
-	                    Qt::ToolTipRole).toString(), entry.filename);
+	QVERIFY(model.data(model.index(0, Qdc::QueueModel::NameColumn),
+	                   Qt::ToolTipRole).toString().contains(entry.filename));
 
 	/* Both source counts, because they answer different questions. */
 	QCOMPARE(model.data(model.index(0, Qdc::QueueModel::SourcesColumn), Qt::DisplayRole).toString(),

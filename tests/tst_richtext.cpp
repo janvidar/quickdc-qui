@@ -51,9 +51,32 @@ private slots:
 	void aHostileNameIsDisarmedBeforeItIsDrawn();
 	void aLongNameIsBoundedWithoutSplittingACharacter();
 	void anOrdinaryNameIsDrawnAsItArrived();
+	void aTooltipIsDrawnAsTextRatherThanAsMarkup();
+	void aTooltipKeepsItsOwnStructureAroundTheFieldsInIt();
+	void aTooltipIsEscapedAfterTheNameInItIsReduced();
+	void anOrdinaryTooltipIsNotVisiblyEscaped();
 
 private:
 	static Qdc::RichText::RenderOptions options();
+
+	/**
+	 * What a tooltip built from 'text' would actually read as on screen.
+	 *
+	 * The two steps QLabel takes when it is left on Qt::AutoText, which is where QToolTip
+	 * leaves the label it draws in: ask Qt::mightBeRichText(), and parse the string as HTML
+	 * when the answer is yes. The hole this is about is in what Qt does with a string
+	 * rather than in how the string looks, so this asks Qt.
+	 */
+	static QString asShown(const QString& text);
+
+	/**
+	 * Whether anything in 'document' is a picture or a link.
+	 *
+	 * Asked of the parsed document and not of the text: an image is a resource the document
+	 * goes and fetches and a link is somewhere the reader can be sent, so what matters is
+	 * whether either survived being parsed - not whether the text spells one out.
+	 */
+	static bool hasImageOrAnchor(const QTextDocument& document);
 
 	/** A document holding one run with 'format' applied. */
 	static void appendRun(QTextDocument& document, const QString& text,
@@ -95,6 +118,32 @@ QStringList TestRichText::anchorTargets(const QString& html)
 	while (it.hasNext()) targets.append(it.next().captured(1));
 
 	return targets;
+}
+
+QString TestRichText::asShown(const QString& text)
+{
+	QTextDocument document;
+
+	if (Qt::mightBeRichText(text))
+		document.setHtml(text);
+	else
+		document.setPlainText(text);
+
+	return document.toPlainText();
+}
+
+bool TestRichText::hasImageOrAnchor(const QTextDocument& document)
+{
+	for (QTextBlock block = document.begin(); block.isValid(); block = block.next())
+	{
+		for (QTextBlock::iterator it = block.begin(); !it.atEnd(); ++it)
+		{
+			const QTextCharFormat format = it.fragment().charFormat();
+			if (format.isImageFormat() || format.isAnchor()) return true;
+		}
+	}
+
+	return false;
 }
 
 Qdc::RichText::RenderOptions TestRichText::options()
@@ -1345,6 +1394,163 @@ void TestRichText::anOrdinaryNameIsDrawnAsItArrived()
 	};
 
 	for (const QString& name : names) QCOMPARE(displayText(name), name);
+}
+
+void TestRichText::aTooltipIsDrawnAsTextRatherThanAsMarkup()
+{
+	using Qdc::RichText::literalHtml;
+
+	/*
+	 * The hole itself, asserted first, so that what follows stays a test of Qt's behaviour
+	 * rather than of an assumption about it: handed over as it arrived, a hub description
+	 * of this shape is markup to the label a tooltip is drawn in, and the bold tag is gone
+	 * from what is read because it was obeyed.
+	 */
+	QVERIFY(Qt::mightBeRichText(QStringLiteral("<b>Best</b> Hub")));
+	QCOMPARE(asShown(QStringLiteral("<b>Best</b> Hub")), QStringLiteral("Best Hub"));
+
+	const QStringList hostile = {
+		QStringLiteral("<b>Best</b> Hub"),
+		QStringLiteral("<img src=\"http://tracker.example/pixel.png\"> Hub"),
+		QStringLiteral("<a href=\"file:///etc/passwd\">a friendly hub</a>"),
+		QStringLiteral("films & arguments <about> them"),
+		QStringLiteral("say \"<i>hello</i>\" & mean it"),
+
+		/* Already spelled as entities, which is text and has to stay text. */
+		QStringLiteral("&lt;b&gt;Best&lt;/b&gt; &amp; so on"),
+
+		/* An attempt to close the wrapper and write markup outside it. */
+		QStringLiteral("</p></html><img src=\"http://tracker.example/pixel.png\">"),
+
+		/* The other thing the heuristic answers yes to on sight. */
+		QStringLiteral("<!doctype html><b>x")
+	};
+
+	for (const QString& text : hostile)
+	{
+		const QString tooltip = literalHtml(text);
+
+		/*
+		 * Deliberately on the rich text path rather than hoping to stay off it. The
+		 * string says outright what it is, so the heuristic is not consulted and cannot
+		 * change its mind about some later name that trips it.
+		 */
+		QVERIFY2(Qt::mightBeRichText(tooltip), qPrintable(tooltip));
+
+		/* And every character of what the stranger sent is read back as itself. */
+		QCOMPARE(asShown(tooltip), text);
+
+		QTextDocument document;
+		document.setHtml(tooltip);
+
+		QVERIFY2(!hasImageOrAnchor(document), qPrintable(tooltip));
+	}
+}
+
+void TestRichText::aTooltipKeepsItsOwnStructureAroundTheFieldsInIt()
+{
+	using Qdc::RichText::displayText;
+	using Qdc::RichText::literalHtml;
+
+	/*
+	 * A user's tooltip as the model builds one: lines the person chose, a line of ours
+	 * among them, and a newline of ours between each pair. The structure has to survive as
+	 * structure while none of the fields is allowed to add to it.
+	 */
+	const QStringList lines = {
+		displayText(QStringLiteral("<b>alice</b>")),
+		displayText(QStringLiteral("films & <i>arguments</i> about them")),
+		QStringLiteral("Sharing 1.0 GiB"),
+		displayText(QStringLiteral("<img src=\"http://tracker.example/pixel.png\">"))
+	};
+
+	const QString tooltip = literalHtml(lines.join(QLatin1Char('\n')));
+
+	/* Three joins for four lines, and they are the only tags of ours in the body. */
+	QCOMPARE(tooltip.count(QStringLiteral("<br>")), 3);
+	QCOMPARE(asShown(tooltip).split(QLatin1Char('\n')), lines);
+
+	QTextDocument document;
+	document.setHtml(tooltip);
+	QVERIFY(!hasImageOrAnchor(document));
+
+	/* A field that tries to become a line of the structure stays inside its own. */
+	const QString injected = literalHtml(
+		displayText(QStringLiteral("alice</p><p>Operator")) + QLatin1Char('\n')
+			+ QStringLiteral("Away"));
+
+	QCOMPARE(asShown(injected).count(QLatin1Char('\n')), 1);
+	QCOMPARE(asShown(injected),
+	         QStringLiteral("alice</p><p>Operator\nAway"));
+
+	/* A blank line the model asked for is still a blank line. */
+	const QString gap = QStringLiteral("/tmp/x\n\nThis file is no longer there.");
+	QCOMPARE(asShown(literalHtml(gap)), gap);
+}
+
+void TestRichText::aTooltipIsEscapedAfterTheNameInItIsReduced()
+{
+	using Qdc::RichText::displayText;
+	using Qdc::RichText::literalHtml;
+
+	const QChar ellipsis(0x2026);
+
+	/*
+	 * Reduced first and escaped second, so that the bound falls on the characters somebody
+	 * reads rather than on the entities they are written as. An ampersand is one of the
+	 * first and five of the second: in the other order this name would be cut to a fifth of
+	 * what it is allowed, and the cut could land inside "&amp;" and draw as "&am".
+	 */
+	const QString shown = asShown(literalHtml(displayText(
+		QString(400, QLatin1Char('&')))));
+
+	QCOMPARE(shown.size(), 128);
+	QCOMPARE(shown, QString(127, QLatin1Char('&')) + ellipsis);
+
+	/* The two characters the reduction leaves behind are text and stay text. */
+	const QChar marked(QChar::ReplacementCharacter);
+
+	QCOMPARE(asShown(literalHtml(displayText(QStringLiteral("photo") + QChar(0x202e)
+	                                         + QStringLiteral("gpj.exe")))),
+	         QStringLiteral("photo") + marked + QStringLiteral("gpj.exe"));
+
+	/*
+	 * A path is escaped and not reduced. A user reads one in order to go and find the file
+	 * with it, so it is shown however long it is - the leaf of it being a name a stranger
+	 * chose is what the escaping is for.
+	 */
+	const QString path = QStringLiteral("/Users/x/Downloads/")
+		+ QString(300, QLatin1Char('m')) + QStringLiteral("/a & b <c>.zip");
+
+	QCOMPARE(asShown(literalHtml(path)), path);
+	QVERIFY(!asShown(literalHtml(path)).contains(ellipsis));
+}
+
+void TestRichText::anOrdinaryTooltipIsNotVisiblyEscaped()
+{
+	using Qdc::RichText::literalHtml;
+
+	/*
+	 * The requirement that is easiest to lose sight of: almost every tooltip is ordinary,
+	 * and one reading "films &amp; arguments" would be a worse fault than the one all this
+	 * is about.
+	 */
+	const QStringList ordinary = {
+		QStringLiteral("alice"),
+		QStringLiteral("Ann-Marie O'Brien (away)"),
+		QStringLiteral("The Hub — films & arguments about them"),
+		QStringLiteral("Symphony No. 5 [FLAC].zip"),
+		QStringLiteral("عبد الله"),
+		QStringLiteral("TTH: FZTHYWQOHUMTAQKKQEBSAYQXNQK5FVWKEHXIWNQ"),
+
+		/* Two spaces are not one: a run of them is part of the name that has them. */
+		QStringLiteral("/Users/x/Downloads/Symphony  No. 5.zip")
+	};
+
+	for (const QString& text : ordinary) QCOMPARE(asShown(literalHtml(text)), text);
+
+	/* Nothing to say and so nothing shown, rather than an empty box saying it. */
+	QCOMPARE(literalHtml(QString()), QString());
 }
 
 QTEST_MAIN(TestRichText)

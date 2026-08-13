@@ -1414,6 +1414,18 @@ QString Qdc::RichText::displayText(const QString& text)
 	return out + QChar(0x2026);
 }
 
+QString Qdc::RichText::literalHtml(const QString& text)
+{
+	if (text.isEmpty()) return QString();
+
+	QString body = text.toHtmlEscaped();
+
+	/* Ours, and the only tags in the result: see the header for why they are needed. */
+	body.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+
+	return QStringLiteral("<html><p style=\"white-space:pre\">%1</p></html>").arg(body);
+}
+
 QString Qdc::RichText::renderMarkdown(const QString& markdown,
                                       const RenderOptions& options)
 {

@@ -61,7 +61,10 @@ QVariant Qdc::UserModel::data(const QModelIndex& index, int role) const
 			/*
 			 * Every line the user chose is disarmed one at a time, before the join
 			 * rather than after it: the newlines between them are ours, and a pass over
-			 * the joined text would take them out again.
+			 * the joined text would take them out again. The escaping goes the other
+			 * way round - once, over the whole of it, at the end - because a tooltip is
+			 * markup and it is these lines and the words of ours between them that have
+			 * to be the only markup in it.
 			 */
 			QStringList lines;
 			lines << RichText::displayText(user.nick);
@@ -91,7 +94,7 @@ QVariant Qdc::UserModel::data(const QModelIndex& index, int role) const
 			if (!user.keyprint.isEmpty())
 				lines << RichText::displayText(user.keyprint);
 
-			return lines.join(QLatin1Char('\n'));
+			return RichText::literalHtml(lines.join(QLatin1Char('\n')));
 		}
 
 		default:

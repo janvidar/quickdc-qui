@@ -98,8 +98,13 @@ QVariant Qdc::QueueModel::data(const QModelIndex& index, int role) const
 				: QVariant(static_cast<int>(Qt::AlignRight | Qt::AlignVCenter));
 
 		case Qt::ToolTipRole:
-			/* The full path, which the Name column only shows the tail of. */
-			return entry.filename;
+			/*
+			 * The full path, which the Name column only shows the tail of. Escaped and
+			 * not reduced: the leaf of it is still a name a stranger chose, and a tooltip
+			 * draws it as markup, but a path is read in order to go and find the file
+			 * with it and so is shown in full however long it is.
+			 */
+			return RichText::literalHtml(entry.filename);
 
 		case Qt::DisplayRole:
 			break;
@@ -207,12 +212,16 @@ QVariant Qdc::ActiveTransfersModel::data(const QModelIndex& index, int role) con
 			/*
 			 * The row is the file; how many pieces it is arriving in is worth being
 			 * able to find out, and is not worth a column of its own.
+			 *
+			 * Escaped as one, so the line of ours under the path is the only structure
+			 * in it; and shown in full, as the queue's is.
 			 */
-			if (transfer.chunks <= 1) return transfer.filename;
+			if (transfer.chunks <= 1)
+				return RichText::literalHtml(transfer.filename);
 
-			return transfer.filename + QLatin1Char('\n')
+			return RichText::literalHtml(transfer.filename + QLatin1Char('\n')
 				+ tr("%n chunk(s) at once", nullptr,
-				     static_cast<int>(transfer.chunks));
+				     static_cast<int>(transfer.chunks)));
 		}
 
 		case Qt::DisplayRole:
@@ -355,9 +364,9 @@ QVariant Qdc::CompletedModel::data(const QModelIndex& index, int role) const
 				: QVariant(static_cast<int>(Qt::AlignRight | Qt::AlignVCenter));
 
 		case Qt::ToolTipRole:
-			return FileActions::exists(entry.filename)
+			return RichText::literalHtml(FileActions::exists(entry.filename)
 				? entry.filename
-				: tr("%1\n\nThis file is no longer there.").arg(entry.filename);
+				: tr("%1\n\nThis file is no longer there.").arg(entry.filename));
 
 		case Qt::ForegroundRole:
 		{

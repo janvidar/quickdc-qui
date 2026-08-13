@@ -327,6 +327,49 @@ QString toPlainText(const QString& markdown);
  */
 QString displayText(const QString& text);
 
+/**
+ * Plain text as the markup that renders as exactly that text.
+ *
+ * A tooltip is not a plain string. QToolTip hands what it is given to a QLabel left on
+ * Qt::AutoText, and AutoText asks Qt::mightBeRichText() - so a hub calling itself
+ * "<b>Best</b> Hub" is drawn bold in one, an <img> in a name makes the label go and fetch a
+ * resource, and an <a href> is a link the reader never chose. displayText() cannot close
+ * that on its own and deliberately does not try: nearly everything it feeds is a delegate
+ * drawing plain text, and a row reading "&amp;" where a name has an ampersand would be a
+ * worse fault than the one being fixed.
+ *
+ * So the text is escaped and then wrapped in <html>...</html>, which is how Qt is told
+ * outright that a string is rich text. Said outright, the heuristic is not consulted at
+ * all, and nothing inside can be markup because every character that could have been has
+ * been escaped. The alternative - keeping a tooltip on the plain-text path - means
+ * arranging for mightBeRichText() to answer no, and that predicate is Qt's own, is
+ * documented as a heuristic, and already answers yes to a bare "&lt;" and to every one of
+ * the element names its parser knows. Nor is it asked here and acted on: wrapping only the
+ * strings it objects to would be correct, Qt asking the same question of the same string -
+ * but then what a model returns depends on which characters are in a name, and a reader of
+ * one of them would have to know the predicate to know which of two shapes they have. One
+ * shape, always.
+ *
+ * The newlines become <br>, because this is markup now and markup folds a literal newline
+ * into a space; and the paragraph is set white-space:pre, because it also folds a run of
+ * spaces into one - which would be this client quietly rewriting a name into a different
+ * name, the very thing displayText() is careful not to do. Together they are also what
+ * makes a wrapped tooltip lay out at the size the plain one did, to the pixel, in each
+ * shape the models build: one line, several, or two with a blank line between them.
+ *
+ * Applied after displayText() and after the join, never before either. Escaped first, the
+ * bound would fall on markup instead of on characters - an ampersand is one character to
+ * read and five to write, so a name made of them would be cut to a fifth of what it is
+ * allowed, and the cut could land inside an entity and draw as "&am". Reduced after the
+ * join, the newlines a model put between its own fields would be flattened along with the
+ * remote text; which is why displayText() stays where it is, on each field, one at a time,
+ * and this is the single pass over the finished tooltip.
+ *
+ * An empty string stays empty. A tooltip with no text is not shown at all, where a wrapper
+ * around nothing is an empty box that is.
+ */
+QString literalHtml(const QString& text);
+
 }
 
 }

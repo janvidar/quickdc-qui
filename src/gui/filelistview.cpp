@@ -187,6 +187,8 @@ QVariant Qdc::FilelistModel::data(const QModelIndex& index, int role) const
 
 	if (role != Qt::DisplayRole && role != Qt::ToolTipRole) return QVariant();
 
+	QString text;
+
 	switch (index.column())
 	{
 		case NameColumn:
@@ -196,17 +198,29 @@ QVariant Qdc::FilelistModel::data(const QModelIndex& index, int role) const
 			 * filter still matches what the peer sent and nameFor() can still be asked
 			 * for a name to download by.
 			 */
-			return RichText::displayText(node->name);
+			text = RichText::displayText(node->name);
+			break;
 
 		case SizeColumn:
-			return format_size(node->size);
+			text = format_size(node->size);
+			break;
 
 		case TthColumn:
-			return node->tth;
+			text = node->tth;
+			break;
 
 		default:
 			return QVariant();
 	}
+
+	/*
+	 * The tooltip is the same text - it is here because a name is wider than the column
+	 * far more often than not - but a tooltip is drawn as markup where a row is not, so
+	 * it is handed over as markup of ours that says so.
+	 */
+	if (role == Qt::ToolTipRole) return RichText::literalHtml(text);
+
+	return text;
 }
 
 QVariant Qdc::FilelistModel::headerData(int section, Qt::Orientation orientation,
