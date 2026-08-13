@@ -288,6 +288,44 @@ QString renderPlain(const QString& text, const RenderOptions& options);
  */
 QString toPlainText(const QString& markdown);
 
+/**
+ * A remote-chosen string, reduced to something safe to draw in a row of a list.
+ *
+ * A nickname, a hub name, a name out of somebody else's file list: RTF0 requires that
+ * such a string be stripped of control characters, be bounded in length, and be presented
+ * "in a way that cannot be confused with the client's own interface text". BBS0 repeats
+ * the requirement for a board's name and a post's subject, and says why it is worse there:
+ * a board persists where a chat line scrolls away.
+ *
+ * Control characters go. C0 and C1 are nothing a list row wants, and the five whitespace
+ * ones become one space each rather than vanishing, so that a description written on two
+ * lines reads as one instead of having its words run together.
+ *
+ * The bidirectional embeddings, overrides and isolates are replaced with U+FFFD rather
+ * than removed. One unterminated override reverses everything after it - "photo<RLO>gpj.exe"
+ * reads as "photoexe.jpg" - and that is the whole of the attack, so a name doctored that
+ * way should look doctored rather than quietly reading as some third thing. The invisible
+ * ones are dropped instead: LRM and RLM reorder only the neutrals beside them, and a
+ * zero-width space or a word joiner in a name is a way of making two names look alike, so
+ * in both cases there is nothing worth marking the place of.
+ *
+ * Nothing else is touched. ZWJ and ZWNJ stay, because they are orthography in Persian and
+ * Hindi and the joint in every emoji built from a sequence; an Arabic or Hebrew name
+ * passes through exactly as it arrived, since right-to-left text is not an attack.
+ * Confusable *letters* - a Cyrillic 'а' among Latin ones - are not addressed here at all:
+ * telling those apart needs script and identifier data this has no business carrying, and
+ * a half-hearted attempt would only be mistaken for one.
+ *
+ * The result is at most 128 UTF-16 units, ends in an ellipsis when anything was cut, and
+ * is never cut between the halves of a surrogate pair.
+ *
+ * Applied where text is handed to a view and nowhere earlier, so that what is matched,
+ * sorted, downloaded or stored is still what the other end actually said. It is a name
+ * this is for and not a body of prose: both the bound and the flattening of newlines
+ * would be wrong for a message, and a message has renderMarkdown() instead.
+ */
+QString displayText(const QString& text);
+
 }
 
 }

@@ -5,6 +5,7 @@
 #include "transfermodels.h"
 
 #include "fileactions.h"
+#include "richtext.h"
 
 #include <QFileInfo>
 #include <QLocale>
@@ -13,10 +14,18 @@
 
 namespace {
 
+/**
+ * The tail of a path, as a row is labelled with it.
+ *
+ * Disarmed on the way out, because the leaf of a queued or finished download is the name
+ * a stranger's share gave the file - the path around it is ours, but that part is not.
+ * Only the label goes through this: the tooltips beside it show the path a user has to be
+ * able to read in full to go and find the file with.
+ */
 QString base_name(const QString& path)
 {
 	const QString name = QFileInfo(path).fileName();
-	return name.isEmpty() ? path : name;
+	return Qdc::RichText::displayText(name.isEmpty() ? path : name);
 }
 
 QString format_size(quint64 bytes)

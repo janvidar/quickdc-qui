@@ -18,6 +18,15 @@
 
 namespace {
 
+/**
+ * How long a remote-chosen name may be on screen; see displayText().
+ *
+ * Long enough that no name anybody chose for a person, a hub or a file reaches it, and
+ * short enough that a name chosen to fill a row cannot: the point of a bound is that a
+ * stranger does not get to decide how much of the window their name is worth.
+ */
+constexpr qsizetype DISPLAY_LIMIT = 128;
+
 /** Schemes a link may use. Everything else is left as text. */
 const QStringList& external_schemes()
 {
@@ -1333,6 +1342,65 @@ QString Qdc::RichText::toPlainText(const QString& markdown)
 	for (const Line& line : lines) out.append(line.content);
 
 	return out.join(QLatin1Char('\n'));
+}
+
+QString Qdc::RichText::displayText(const QString& text)
+{
+	QString out;
+	out.reserve(text.size());
+
+	for (const QChar c : text)
+	{
+		const char16_t u = c.unicode();
+
+		/* C0 and C1. The ones that were whitespace stay as whitespace. */
+		if (u < 0x20 || (u >= 0x7f && u <= 0x9f))
+		{
+			if (u == u'\t' || u == u'\n' || u == u'\v' || u == u'\f' || u == u'\r')
+				out += QLatin1Char(' ');
+
+			continue;
+		}
+
+		/* The embeddings and overrides, and the isolates that replaced them. */
+		if ((u >= 0x202a && u <= 0x202e) || (u >= 0x2066 && u <= 0x2069))
+		{
+			out += QChar(QChar::ReplacementCharacter);
+			continue;
+		}
+
+		/*
+		 * Invisible and unspellable: the two direction marks, the zero-width space, the
+		 * word joiner, a byte order mark that arrived in the middle of something, and a
+		 * soft hyphen. ZWJ and ZWNJ are deliberately not in this list - see the header.
+		 */
+		if (u == 0x200e || u == 0x200f || u == 0x200b || u == 0x2060 || u == 0xfeff
+		    || u == 0x00ad)
+		{
+			continue;
+		}
+
+		out += c;
+	}
+
+	if (out.size() <= DISPLAY_LIMIT) return out;
+
+	/*
+	 * Room for the ellipsis inside the bound rather than beyond it, so that the promise a
+	 * caller sizes a column against is the length of what it gets.
+	 */
+	qsizetype cut = DISPLAY_LIMIT - 1;
+
+	/*
+	 * A character outside the BMP is two units here, and cutting between them leaves an
+	 * unpaired surrogate - which is not a character at all, and draws as whatever the
+	 * font database has nothing for. The pair goes whole or not at all.
+	 */
+	if (cut > 0 && out.at(cut - 1).isHighSurrogate()) --cut;
+
+	out.truncate(cut);
+
+	return out + QChar(0x2026);
 }
 
 QString Qdc::RichText::renderMarkdown(const QString& markdown,

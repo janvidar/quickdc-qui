@@ -67,6 +67,15 @@ public:
 	/** Whether the index is a directory rather than a file. */
 	bool isDirectory(const QModelIndex& index) const;
 
+	/**
+	 * The name as the list gave it, rather than as it is drawn.
+	 *
+	 * What is drawn has been through RichText::displayText(), which is not a name to ask
+	 * a peer for a file by. Anything acting on a row - a download, above all - asks for
+	 * this one.
+	 */
+	QString nameFor(const QModelIndex& index) const;
+
 	/** Empty for a directory, or for an entry the list gave no hash for. */
 	QString tthFor(const QModelIndex& index) const;
 

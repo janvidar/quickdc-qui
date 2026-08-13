@@ -4,6 +4,8 @@
 
 #include "filelistview.h"
 
+#include "richtext.h"
+
 #include <core/filelistbridge.h>
 
 #include <QHBoxLayout>
@@ -188,7 +190,13 @@ QVariant Qdc::FilelistModel::data(const QModelIndex& index, int role) const
 	switch (index.column())
 	{
 		case NameColumn:
-			return node->name;
+			/*
+			 * A whole file list is names a stranger chose, drawn as a dense tree - the
+			 * case RTF0 has in mind. Disarmed here and not in build(), so that the
+			 * filter still matches what the peer sent and nameFor() can still be asked
+			 * for a name to download by.
+			 */
+			return RichText::displayText(node->name);
 
 		case SizeColumn:
 			return format_size(node->size);
@@ -221,6 +229,13 @@ bool Qdc::FilelistModel::isDirectory(const QModelIndex& index) const
 	Node* node = index.isValid() ? static_cast<Node*>(index.internalPointer())
 	                             : nullptr;
 	return node && node->directory;
+}
+
+QString Qdc::FilelistModel::nameFor(const QModelIndex& index) const
+{
+	Node* node = index.isValid() ? static_cast<Node*>(index.internalPointer())
+	                             : nullptr;
+	return node ? node->name : QString();
 }
 
 QString Qdc::FilelistModel::tthFor(const QModelIndex& index) const
@@ -307,10 +322,11 @@ Qdc::FilelistView::FilelistView(FilelistBridge* filelists, const QString& hubUrl
 	connect(m_tree, &QTreeView::activated, this, [this](const QModelIndex& index) {
 		if (m_model->isDirectory(index)) return;
 
-		const QModelIndex name =
-			index.siblingAtColumn(FilelistModel::NameColumn);
-
-		emit fileActivated(m_model->data(name, Qt::DisplayRole).toString(),
+		/*
+		 * The name as it arrived rather than as it is drawn: what goes out is a request
+		 * for a file, and the row's text has been reduced for reading.
+		 */
+		emit fileActivated(m_model->nameFor(index),
 		                   m_model->sizeFor(index),
 		                   m_model->tthFor(index));
 	});

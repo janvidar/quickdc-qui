@@ -48,6 +48,9 @@ private slots:
 	void nestingIsDrawnAsNesting();
 	void aParagraphBreakIsVisibleAsOne();
 	void nothingEscapesTheTextColumn();
+	void aHostileNameIsDisarmedBeforeItIsDrawn();
+	void aLongNameIsBoundedWithoutSplittingACharacter();
+	void anOrdinaryNameIsDrawnAsItArrived();
 
 private:
 	static Qdc::RichText::RenderOptions options();
@@ -1193,6 +1196,149 @@ void TestRichText::theHangingIndentOnlyPullsBackTheFirstBlock()
 	QVERIFY(leading.indexOf(QStringLiteral("<b>alice</b>"))
 	        < leading.indexOf(QStringLiteral("code();")));
 	QVERIFY(!leading.contains(QStringLiteral("monospace; color:%1\"><b>alice")));
+}
+
+void TestRichText::aHostileNameIsDisarmedBeforeItIsDrawn()
+{
+	using Qdc::RichText::displayText;
+
+	/*
+	 * The code points are spelled out rather than typed in: half of what is being tested
+	 * here is invisible, and a test whose intent cannot be read is no test.
+	 */
+	const QChar rlo(0x202e);
+	const QChar zwsp(0x200b);
+	const QChar marked = QChar(QChar::ReplacementCharacter);
+
+	/* C0 goes, and the whitespace among it leaves a space where the break was. */
+	QCOMPARE(displayText(QStringLiteral("al\x01ice") + QChar(0x1b)
+	                     + QStringLiteral("bell")),
+	         QStringLiteral("alicebell"));
+	QCOMPARE(displayText(QStringLiteral("two\nlines\there")),
+	         QStringLiteral("two lines here"));
+
+	/* C1 is as invisible as C0 and as little use in a row of a list. */
+	QCOMPARE(displayText(QStringLiteral("a") + QChar(0x0085) + QChar(0x009f)
+	                     + QStringLiteral("b")),
+	         QStringLiteral("ab"));
+
+	/*
+	 * The attack itself: an override with nothing closing it, which reverses the rest of
+	 * the name and makes an executable read as a picture. Marked rather than dropped, so
+	 * that a name tampered with reads as tampered with instead of quietly reading as some
+	 * third file that is not there either.
+	 */
+	const QString reversed = displayText(QStringLiteral("photo") + rlo
+	                                     + QStringLiteral("gpj.exe"));
+
+	QCOMPARE(reversed, QStringLiteral("photo") + marked + QStringLiteral("gpj.exe"));
+
+	/* Every embedding, every override, every isolate, and the same answer for each. */
+	for (char16_t control = 0x202a; control <= 0x202e; ++control)
+	{
+		QCOMPARE(displayText(QStringLiteral("a") + QChar(control) + QStringLiteral("b")),
+		         QStringLiteral("a") + marked + QStringLiteral("b"));
+	}
+
+	for (char16_t control = 0x2066; control <= 0x2069; ++control)
+	{
+		QCOMPARE(displayText(QStringLiteral("a") + QChar(control) + QStringLiteral("b")),
+		         QStringLiteral("a") + marked + QStringLiteral("b"));
+	}
+
+	/*
+	 * The invisible ones are dropped instead. A zero-width space is how one name is made
+	 * to look like another, and the direction marks reorder only the neutrals beside them
+	 * - in neither case is there anything worth marking the place of.
+	 */
+	QCOMPARE(displayText(QStringLiteral("al") + zwsp + QStringLiteral("ice")),
+	         QStringLiteral("alice"));
+	QCOMPARE(displayText(QChar(0x200e) + QStringLiteral("al") + QChar(0x2060)
+	                     + QStringLiteral("i") + QChar(0xfeff) + QStringLiteral("ce")
+	                     + QChar(0x00ad) + QChar(0x200f)),
+	         QStringLiteral("alice"));
+
+	QCOMPARE(displayText(QString()), QString());
+
+	/* Nothing but controls is nothing, and a row drawing nothing is the honest answer. */
+	QCOMPARE(displayText(QStringLiteral("\x01\x02\x03\x7f") + zwsp), QString());
+
+	/* Twice changes nothing: some of these values pass through more than one view. */
+	QCOMPARE(displayText(reversed), reversed);
+}
+
+void TestRichText::aLongNameIsBoundedWithoutSplittingACharacter()
+{
+	using Qdc::RichText::displayText;
+
+	const QChar ellipsis(0x2026);
+
+	const QString bounded = displayText(QString(400, QLatin1Char('m')));
+
+	/* The ellipsis is inside the bound rather than a unit past it. */
+	QCOMPARE(bounded.size(), 128);
+	QVERIFY(bounded.endsWith(ellipsis));
+	QVERIFY(bounded.startsWith(QStringLiteral("mmm")));
+
+	/* A name that fits is not marked as cut. */
+	const QString fits = QString(128, QLatin1Char('m'));
+	QCOMPARE(displayText(fits), fits);
+	QVERIFY(!fits.contains(ellipsis));
+
+	QCOMPARE(displayText(fits + QLatin1Char('m')).size(), 128);
+
+	/* The bound is on what is drawn, so what was stripped does not count against it. */
+	QCOMPARE(displayText(QString(200, QChar(0x200b)) + QStringLiteral("alice")),
+	         QStringLiteral("alice"));
+
+	/*
+	 * QString is UTF-16, so anything above the BMP arrives as two units and the cut may
+	 * land between them. A lone surrogate is not a character: it draws as a box and does
+	 * not survive being converted to anything else, which is what this checks.
+	 */
+	QString emoji;
+	for (int n = 0; n < 200; ++n) emoji += QStringLiteral("\U0001f600");
+
+	const QString cut = displayText(emoji);
+
+	QVERIFY2(cut.size() <= 128, qPrintable(QString::number(cut.size())));
+	QVERIFY(cut.endsWith(ellipsis));
+
+	/* Nothing unpaired left in front of the ellipsis, and none anywhere else. */
+	QVERIFY(!cut.at(cut.size() - 2).isHighSurrogate());
+	QCOMPARE(QString::fromUtf8(cut.toUtf8()), cut);
+
+	int surrogates = 0;
+	for (const QChar c : cut) if (c.isSurrogate()) ++surrogates;
+
+	QCOMPARE(surrogates % 2, 0);
+}
+
+void TestRichText::anOrdinaryNameIsDrawnAsItArrived()
+{
+	using Qdc::RichText::displayText;
+
+	/*
+	 * The requirement this has to meet as much as any of the others: right-to-left text
+	 * is not an attack, and a name written in it is nobody else's to rewrite. Nor is a
+	 * name whose spelling needs a joiner - ZWNJ is orthography in Persian, and ZWJ is the
+	 * joint in every emoji built out of a sequence.
+	 */
+	const QStringList names = {
+		QStringLiteral("alice"),
+		QStringLiteral("Ann-Marie O'Brien (away)"),
+		QStringLiteral("\u0639\u0628\u062f \u0627\u0644\u0644\u0647"),
+		QStringLiteral("\u05e9\u05dc\u05d5\u05dd \u05e2\u05dc\u05d9\u05db\u05dd"),
+		QStringLiteral("\u0645\u06cc") + QChar(0x200c)
+			+ QStringLiteral("\u062e\u0648\u0627\u0647\u0645"),
+		QStringLiteral("\u042f\u043c\u0430\u043b"),
+		QStringLiteral("\u65e5\u672c\u8a9e\u306e\u30cb\u30c3\u30af"),
+		QStringLiteral("\U0001f469") + QChar(0x200d) + QStringLiteral("\U0001f4bb"),
+		QStringLiteral("The Hub \u2014 films & arguments about them"),
+		QStringLiteral("Symphony No. 5 [FLAC].zip")
+	};
+
+	for (const QString& name : names) QCOMPARE(displayText(name), name);
 }
 
 QTEST_MAIN(TestRichText)

@@ -4,6 +4,8 @@
 
 #include "hublistmodel.h"
 
+#include "richtext.h"
+
 #include <core/favourites.h>
 
 #include <QLocale>
@@ -72,10 +74,15 @@ QVariant Qdc::HubListModel::data(const QModelIndex& index, int role) const
 			 * The description in full and the address under it. A hublist
 			 * description is a sentence or two written to be read, and the column is
 			 * never wide enough for one.
+			 *
+			 * Both are what a hub's operator wrote, so both are disarmed - one at a
+			 * time, since the newline between them is ours and a pass over the joined
+			 * text would take it back out again.
 			 */
 			return hub.description.isEmpty()
-				? hub.address
-				: hub.description + QStringLiteral("\n") + hub.address;
+				? RichText::displayText(hub.address)
+				: RichText::displayText(hub.description) + QStringLiteral("\n")
+					+ RichText::displayText(hub.address);
 
 		case Qt::AccessibleTextRole:
 			if (index.column() != FavouriteColumn) break;
@@ -103,19 +110,27 @@ QVariant Qdc::HubListModel::data(const QModelIndex& index, int role) const
 
 		case NameColumn:
 			/* A list may name no name, and then the address is what identifies it. */
-			return hub.name.isEmpty() ? hub.address : hub.name;
+			return RichText::displayText(
+				hub.name.isEmpty() ? hub.address : hub.name);
 
 		case UsersColumn:
 			return hub.users > 0 ? QLocale().toString(hub.users) : QString();
 
 		case DescriptionColumn:
-			return hub.description;
+			return RichText::displayText(hub.description);
 
 		case CountryColumn:
-			return hub.country;
+			return RichText::displayText(hub.country);
 
 		case AddressColumn:
-			return hub.address;
+			/*
+			 * Every one of these four is a field of a hublist entry, which is to say a
+			 * string a stranger wrote and this table draws. The address is disarmed like
+			 * the rest of them - a host name reordered by an override is the whole of
+			 * how one hub is made to look like another - while AddressRole above stays
+			 * verbatim, because that is the one anything connecting goes by.
+			 */
+			return RichText::displayText(hub.address);
 
 		default:
 			return QVariant();

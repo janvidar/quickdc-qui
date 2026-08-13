@@ -4,6 +4,8 @@
 
 #include "searchmodel.h"
 
+#include "richtext.h"
+
 #include <core/searchbridge.h>
 
 #include <QFileInfo>
@@ -294,10 +296,17 @@ QVariant Qdc::SearchModel::fileData(const Group& group, int column, int role) co
 {
 	if (role == Qt::ToolTipRole)
 	{
+		/*
+		 * The name is the one the peer answering the search chose, so it is disarmed
+		 * before it is put in front of a sentence of ours - which is the confusion RTF0
+		 * asks to be prevented. The hash beside it is our own reading of base32.
+		 */
+		const QString name = RichText::displayText(group.name);
+
 		return group.tth.isEmpty()
 			? tr("%1\nNo hash, so this file cannot be matched against any other.")
-				.arg(group.name)
-			: tr("%1\nTTH: %2").arg(group.name, group.tth);
+				.arg(name)
+			: tr("%1\nTTH: %2").arg(name, group.tth);
 	}
 
 	/* The figures right, the words left - and the hub is words, as it is below. */
@@ -312,7 +321,11 @@ QVariant Qdc::SearchModel::fileData(const Group& group, int column, int role) co
 	switch (column)
 	{
 		case NameColumn:
-			return group.name;
+			/*
+			 * Disarmed here and not in place(), so that what is matched by hash, sorted
+			 * and asked for is still the name the peer sent.
+			 */
+			return RichText::displayText(group.name);
 
 		case SizeColumn:
 			return group.size ? format_size(group.size) : QString();
@@ -364,7 +377,7 @@ QVariant Qdc::SearchModel::peerData(const SearchHit& hit, int column, int role) 
 	if (role == Qt::ToolTipRole)
 	{
 		/* The path is the peer's own; the file row shows only the name from it. */
-		return hit.name;
+		return RichText::displayText(hit.name);
 	}
 
 	if (role == Qt::TextAlignmentRole && column == SlotsColumn)
@@ -375,7 +388,8 @@ QVariant Qdc::SearchModel::peerData(const SearchHit& hit, int column, int role) 
 	switch (column)
 	{
 		case NameColumn:
-			return hit.user.nick.isEmpty() ? tr("somebody") : hit.user.nick;
+			return hit.user.nick.isEmpty()
+				? tr("somebody") : RichText::displayText(hit.user.nick);
 
 		case SlotsColumn:
 			return QStringLiteral("%1/%2").arg(hit.freeSlots).arg(hit.user.slotCount);

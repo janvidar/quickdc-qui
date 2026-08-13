@@ -5,6 +5,7 @@
 #include "usermodel.h"
 
 #include "glyphs.h"
+#include "richtext.h"
 
 #include <QIcon>
 #include <QLocale>
@@ -32,7 +33,13 @@ QVariant Qdc::UserModel::data(const QModelIndex& index, int role) const
 			return QVariant::fromValue(user);
 
 		case Qt::DisplayRole:
-			return user.nick;
+			/*
+			 * A nickname is whatever the person chose, and this is a dense list read at
+			 * a glance - so it is disarmed on the way to the view and nowhere earlier.
+			 * UserRole still carries the real record, which is what everything that
+			 * acts on a row goes by.
+			 */
+			return RichText::displayText(user.nick);
 
 		case Qt::DecorationRole:
 			/*
@@ -51,10 +58,16 @@ QVariant Qdc::UserModel::data(const QModelIndex& index, int role) const
 
 		case Qt::ToolTipRole:
 		{
+			/*
+			 * Every line the user chose is disarmed one at a time, before the join
+			 * rather than after it: the newlines between them are ours, and a pass over
+			 * the joined text would take them out again.
+			 */
 			QStringList lines;
-			lines << user.nick;
+			lines << RichText::displayText(user.nick);
 
-			if (!user.description.isEmpty()) lines << user.description;
+			if (!user.description.isEmpty())
+				lines << RichText::displayText(user.description);
 
 			if (user.sharedBytes > 0)
 			{
@@ -63,7 +76,8 @@ QVariant Qdc::UserModel::data(const QModelIndex& index, int role) const
 						static_cast<qint64>(user.sharedBytes)));
 			}
 
-			if (!user.userAgent.isEmpty()) lines << user.userAgent;
+			if (!user.userAgent.isEmpty())
+				lines << RichText::displayText(user.userAgent);
 			if (user.op) lines << tr("Operator");
 
 			/* Said as well as drawn: a hollow figure is not self-explanatory. */
@@ -74,7 +88,8 @@ QVariant Qdc::UserModel::data(const QModelIndex& index, int role) const
 			 * Worth showing in full rather than as a flag, since the whole point
 			 * of one is being able to compare it.
 			 */
-			if (!user.keyprint.isEmpty()) lines << user.keyprint;
+			if (!user.keyprint.isEmpty())
+				lines << RichText::displayText(user.keyprint);
 
 			return lines.join(QLatin1Char('\n'));
 		}

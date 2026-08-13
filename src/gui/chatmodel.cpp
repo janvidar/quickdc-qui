@@ -39,9 +39,17 @@ QVariant Qdc::ChatModel::data(const QModelIndex& index, int role) const
 			const QString text = message.richText
 				? RichText::toPlainText(message.text) : message.text;
 
+			/*
+			 * The speaker is disarmed and the message is not. A name is a label in front
+			 * of a line and has to be able to be trusted as one, where the line itself is
+			 * what somebody said: bounding it or flattening its newlines would put a
+			 * truncated message on the clipboard.
+			 */
 			return message.fromHub.isEmpty()
-				? QStringLiteral("%1: %2").arg(message.from.nick, text)
-				: QStringLiteral("%1: %2").arg(message.fromHub, text);
+				? QStringLiteral("%1: %2")
+					.arg(RichText::displayText(message.from.nick), text)
+				: QStringLiteral("%1: %2")
+					.arg(RichText::displayText(message.fromHub), text);
 		}
 
 		default:

@@ -6,6 +6,7 @@
 
 #include "favouritedelegate.h"
 #include "hublistmodel.h"
+#include "richtext.h"
 
 #include <core/favourites.h>
 #include <core/hubdirectory.h>
@@ -707,7 +708,12 @@ void Qdc::HubBrowser::refreshFavourites()
 
 	for (const QString& url : urls)
 	{
-		const QString name = names.value(url);
+		/*
+		 * The name is what the hub called itself, so it is disarmed before it is put
+		 * beside an address in a row of ours. AddressRole below keeps the address as it
+		 * is, since that is what connecting and unbookmarking go by.
+		 */
+		const QString name = RichText::displayText(names.value(url));
 
 		QListWidgetItem* item = new QListWidgetItem(
 			name.isEmpty() ? url : tr("%1  —  %2").arg(name, url), m_favouriteList);
@@ -742,8 +748,10 @@ void Qdc::HubBrowser::refreshRecent()
 
 	for (const RecentHub& entry : entries)
 	{
-		const QString label = entry.name.isEmpty()
-			? entry.url : tr("%1  —  %2").arg(entry.name, entry.url);
+		const QString name = RichText::displayText(entry.name);
+
+		const QString label = name.isEmpty()
+			? entry.url : tr("%1  —  %2").arg(name, entry.url);
 
 		QListWidgetItem* item = new QListWidgetItem(
 			tr("%1  ·  %2").arg(label, format_when(entry.visited)), m_recentList);

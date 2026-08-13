@@ -5,6 +5,7 @@
 #include "hubheader.h"
 
 #include "glyphs.h"
+#include "richtext.h"
 #include "theme.h"
 
 #include <QEvent>
@@ -161,8 +162,15 @@ Qdc::HubHeader::HubHeader(QWidget* parent)
 
 void Qdc::HubHeader::setTitle(const QString& title, const QString& tooltip)
 {
-	m_title->setText(title);
-	m_title->setToolTip(tooltip.isEmpty() ? title : tooltip);
+	/*
+	 * Disarmed in the setters rather than at each caller, because every string that
+	 * reaches these two lines is something a hub or another user named itself - a hub's
+	 * name and description, or a nickname across the top of a conversation - and this
+	 * strip is the client's own chrome, which is exactly what RTF0 says such a name must
+	 * not be able to be mistaken for.
+	 */
+	m_title->setText(RichText::displayText(title));
+	m_title->setToolTip(RichText::displayText(tooltip.isEmpty() ? title : tooltip));
 }
 
 void Qdc::HubHeader::setHubIdentity(const QString& name,
@@ -188,9 +196,13 @@ QString Qdc::HubHeader::subtitle() const
 
 void Qdc::HubHeader::setSubtitle(const QString& subtitle)
 {
-	m_subtitle->setText(subtitle);
-	m_subtitle->setToolTip(subtitle);
-	m_subtitle->setVisible(!subtitle.isEmpty());
+	const QString shown = RichText::displayText(subtitle);
+
+	m_subtitle->setText(shown);
+	m_subtitle->setToolTip(shown);
+
+	/* A description that came to nothing hides the line rather than leaving a blank. */
+	m_subtitle->setVisible(!shown.isEmpty());
 }
 
 void Qdc::HubHeader::setFavourite(bool favourite)
