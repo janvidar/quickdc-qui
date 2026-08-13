@@ -1069,7 +1069,7 @@ void Qdc::BoardPane::submit(const QString& message, bool richText)
 	{
 		if (subject.trimmed().isEmpty())
 		{
-			say(m_composeNote, tr("A new thread needs a subject."));
+			say(m_composeNote, tr("A new post needs a subject."));
 			return;
 		}
 
