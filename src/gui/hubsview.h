@@ -100,6 +100,20 @@ public:
 	/** Close a hub, its conversations, and its connection. */
 	void closeHub(const QString& url);
 
+	/**
+	 * Stop following one board on a hub, as somebody choosing to leave it does.
+	 *
+	 * The hub is told, the row goes, and the board is remembered as left for as long as
+	 * the connection lasts - a descriptor arrives whenever a field of a board changes,
+	 * and on one anybody is posting to that is every few seconds, so without that it
+	 * would be put straight back.
+	 *
+	 * Distinct from the board being removed by the hub, which takes the same row away
+	 * and is not somebody saying they have finished with it: one that goes and comes
+	 * back comes back.
+	 */
+	void leaveBoard(const QString& url, const QString& board);
+
 	/** In the order they were opened. */
 	QStringList openHubs() const;
 

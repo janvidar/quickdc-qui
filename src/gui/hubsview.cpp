@@ -2867,6 +2867,14 @@ void Qdc::HubsView::showBoardMenu(QTreeWidgetItem* item, const QPoint& globalPos
 
 	if (picked != leave) return;
 
+	leaveBoard(entry->bridge ? entry->bridge->url() : QString(), board);
+}
+
+void Qdc::HubsView::leaveBoard(const QString& url, const QString& board)
+{
+	Entry* entry = entryFor(url);
+	if (!entry || board.isEmpty()) return;
+
 	/*
 	 * Said to the hub as well as done here: a subscription lasts until it is cancelled,
 	 * and a row taken away without a word would leave the hub sending a board nobody is

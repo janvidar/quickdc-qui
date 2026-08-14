@@ -3744,36 +3744,16 @@ void TestHubs::aBoardLeftIsNotPutBackByTheNextDescriptor()
 	QTreeWidget* rows = hubTree(hubs);
 	QTRY_COMPARE(rows->topLevelItem(0)->childCount(), 1);
 
-	/* Left the way a person leaves one, through the menu on its row. */
-	QTimer watcher;
-	watcher.setInterval(20);
+	/*
+	 * Left through the call the menu entry makes rather than through the menu itself.
+	 * Driving a popup with synthetic key events is what a menu's own test is for; here
+	 * it was only a way of reaching this, and it reached it about five times in six -
+	 * a key that goes to a popup which is not the active window under load goes nowhere,
+	 * and the case then failed for a reason that had nothing to do with what it checks.
+	 */
+	hubs.leaveBoard(QStringLiteral("adc://192.0.2.46:412"), QStringLiteral("general"));
 
-	QObject::connect(&watcher, &QTimer::timeout, [] {
-		for (QWidget* top : QApplication::topLevelWidgets())
-		{
-			QMenu* menu = qobject_cast<QMenu*>(top);
-			if (!menu || !menu->isVisible()) continue;
-
-			for (QAction* action : menu->actions())
-			{
-				if (action->text() != QStringLiteral("Leave this board")) continue;
-
-				menu->setActiveAction(action);
-				QTest::keyClick(menu, Qt::Key_Return);
-				return;
-			}
-
-			menu->close();
-			return;
-		}
-	});
-
-	watcher.start();
-	emit rows->customContextMenuRequested(
-		rows->visualItemRect(rows->topLevelItem(0)->child(0)).center());
-	watcher.stop();
-
-	QTRY_COMPARE(rows->topLevelItem(0)->childCount(), 0);
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 0);
 
 	/*
 	 * A hub sends a fresh descriptor whenever a field of the board changes, and the
