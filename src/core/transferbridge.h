@@ -246,8 +246,14 @@ public slots:
 	 *
 	 * @param size what to bound the file at, which for a post is the caller's own cap
 	 *        rather than any size a hub quoted.
+	 * @param hubUrl the hub the file was learned from, which is the only one asked
+	 *        about it. A post's hash is on one board and its readers are that hub's
+	 *        subscribers, so a search sent anywhere else reaches nobody who can answer
+	 *        and tells that hub's operator which boards this client reads. Empty asks
+	 *        every hub, for a file that was not learned from any one of them.
 	 */
-	void enqueueForReading(const QString& filename, const QString& tth, quint64 size);
+	void enqueueForReading(const QString& filename, const QString& tth, quint64 size,
+	                       const QString& hubUrl = QString());
 
 	/**
 	 * Name a source for a queued file, where nothing else has answered for it.

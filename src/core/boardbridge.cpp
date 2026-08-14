@@ -1489,7 +1489,7 @@ void Qdc::BoardBridge::startFetch(const QString& hubUrl, const BoardEntry& entry
 	 * the wire is "TTH/{root}", built from the hash rather than from the name, and
 	 * the hash is what the queue checks the result against.
 	 */
-	m_transfers->enqueueForReading(fetch.path, entry.tth, fetch.cap);
+	m_transfers->enqueueForReading(fetch.path, entry.tth, fetch.cap, hubUrl);
 
 	if (!m_watch->isActive()) m_watch->start();
 }

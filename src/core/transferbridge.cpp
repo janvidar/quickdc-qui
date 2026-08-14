@@ -828,18 +828,29 @@ void Qdc::TransferBridge::enqueue(const QString& filename, const QString& tth,
 }
 
 void Qdc::TransferBridge::enqueueForReading(const QString& filename,
-                                            const QString& tth, quint64 size)
+                                            const QString& tth, quint64 size,
+                                            const QString& hubUrl)
 {
 	if (!m_thread || filename.isEmpty() || tth.isEmpty()) return;
 
 	const QByteArray name = filename.toUtf8();
 	const QByteArray hash = tth.toUtf8();
+	const QByteArray only = hubUrl.toUtf8();
 
-	m_thread->post([this, name, hash, size] {
+	m_thread->post([this, name, hash, size, only] {
 		QuickDC::Core* core = m_thread->core();
 		if (!core || !core->queue) return;
 
-		core->queue->add(name.constData(), hash.constData(), size);
+		QuickDC::QueueFile* file =
+			core->queue->add(name.constData(), hash.constData(), size);
+
+		/*
+		 * And looked for on that hub alone. The hash of a post is on one hub's board,
+		 * where its subscribers can read it; a search anywhere else tells another
+		 * operator which boards this client reads and reaches nobody who could
+		 * answer, since a post is offered by hash and only by that board's readers.
+		 */
+		if (file && !only.isEmpty()) file->searchOnlyOn(only.constData());
 
 		/*
 		 * Asked for at once rather than left to the rotation, and the outcome is not
