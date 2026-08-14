@@ -159,6 +159,15 @@ struct Stored {
 	 */
 	QVector<QString> held;
 	QVector<QString> failed;
+
+	/**
+	 * Those of them this client has taken up answering for.
+	 *
+	 * Reported back because the hub a document is answered for is remembered on the
+	 * other side, and it is that record which a later change to the setting reads to
+	 * know what to stop offering.
+	 */
+	QVector<QString> offered;
 };
 
 /**
@@ -180,6 +189,9 @@ struct Loaded {
 
 	/** Those of them already known not to be the post they claim to be. */
 	QVector<QString> failed;
+
+	/** Those of them this client has taken up answering for; see Stored::offered. */
+	QVector<QString> offered;
 };
 
 /** What the store already knows about a post somebody has asked to read. */
@@ -590,7 +602,8 @@ void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& e
 		converted.push_back(to_core(entry));
 
 	m_thread->call(m_relay,
-		[holder = m_stores, converted = std::move(converted), hub = to_std(hubUrl)] {
+		[holder = m_stores, converted = std::move(converted), hub = to_std(hubUrl),
+		 serving = serves(hubUrl)] {
 			Stored stored;
 
 			if (!holder->store) return stored;
@@ -639,7 +652,22 @@ void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& e
 				 * not - so it marks, and does not delete. The release is the other
 				 * half and waits for somebody who can say nothing is reading it.
 				 */
-				if (entry.removed) holder->store->posts.forget(entry.tth);
+				if (entry.removed)
+				{
+					holder->store->posts.forget(entry.tth);
+					continue;
+				}
+
+				/*
+				 * And answered for, where the user said to answer for this hub's posts.
+				 * An offer lasts only as long as the process that made it, so a document
+				 * held from an earlier session is offered again the first time the board
+				 * it is on says it is there - which for a board being read live is here.
+				 * Without it a client would hold a post, draw it, and still leave the
+				 * next reader to find the one copy elsewhere.
+				 */
+				if (serving && holder->store->posts.serve(entry.tth))
+					stored.offered.append(from_std(entry.tth));
 			}
 
 			/*
@@ -683,6 +711,12 @@ void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& e
 			 */
 			for (const QString& tth : stored.held) m_held.insert(tth);
 			for (const QString& tth : stored.failed) m_held.insert(tth);
+
+			/*
+			 * Which hub each document is answered for, so that the user turning the
+			 * setting off for this one stops offering what it took up.
+			 */
+			for (const QString& tth : stored.offered) m_fetchedFrom.insert(tth, hubUrl);
 
 			QHash<QString, QVector<BoardEntry>> byBoard;
 			bool withdrawn = false;
@@ -770,7 +804,8 @@ void Qdc::BoardBridge::loadEntries(const QString& hubUrl, const QString& board)
 	if (!m_thread || board.isEmpty()) return;
 
 	m_thread->call(m_relay,
-		[holder = m_stores, hub = to_std(hubUrl), name = to_std(board)] {
+		[holder = m_stores, hub = to_std(hubUrl), name = to_std(board),
+		 serving = serves(hubUrl)] {
 			Loaded loaded;
 
 			if (!holder->store) return loaded;
@@ -805,6 +840,18 @@ void Qdc::BoardBridge::loadEntries(const QString& hubUrl, const QString& board)
 					loaded.failed.append(from_std(entry.tth));
 				else if (posts.has(entry.tth))
 					loaded.held.append(from_std(entry.tth));
+
+				/*
+				 * And answered for again, where the user said to answer for this hub's
+				 * posts. An offer is made to the share manager for the session only, so
+				 * every document read in an earlier one is held and offered to nobody
+				 * until something takes it up again - and this walk, which the board
+				 * already does to know what is here, is where that happens. A store full
+				 * of posts that no peer can be told about is a client that reads a board
+				 * and never carries it.
+				 */
+				if (serving && posts.serve(entry.tth))
+					loaded.offered.append(from_std(entry.tth));
 			}
 
 			loaded.unread = static_cast<int>(holder->store->index.unread(hub, name));
@@ -826,6 +873,9 @@ void Qdc::BoardBridge::loadEntries(const QString& hubUrl, const QString& board)
 			 */
 			for (const QString& tth : loaded.held) m_held.insert(tth);
 			for (const QString& tth : loaded.failed) m_held.insert(tth);
+
+			/* Which hub each is answered for; see the same line in store(). */
+			for (const QString& tth : loaded.offered) m_fetchedFrom.insert(tth, hubUrl);
 
 			emit entriesLoaded(hubUrl, board, loaded.entries);
 
