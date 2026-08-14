@@ -74,6 +74,10 @@ const QString DOWNLOADS_GROUP = QStringLiteral("Downloads");
  * no time to be reading a preference file.
  */
 const QString BOARDS_GROUP = QStringLiteral("Boards");
+
+/** Where this installation's own client id lives; see HubsView::ownCid(). */
+const QString USER_GROUP = QStringLiteral("User");
+
 const QString BOARD_PREFETCH = QStringLiteral("Fetch a thread ahead");
 const QString BOARD_SERVE = QStringLiteral("Offer what I have read");
 const QString BOARD_KEEP = QStringLiteral("Keep posts for days");
@@ -484,6 +488,19 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 					reloadMediaPolicy();
 
 				if (group == BOARDS_GROUP) reloadBoardPolicy();
+
+				/*
+				 * Which posts are this user's own, which the identity page can change
+				 * with a board open in front of it.
+				 */
+				if (group == USER_GROUP)
+				{
+					const QString cid = ownCid();
+
+					for (const Entry* entry : m_entries)
+						for (BoardPane* pane : entry->boards)
+							pane->setOwnCid(cid);
+				}
 
 				return;
 			}
@@ -1489,6 +1506,14 @@ Qdc::BoardPane* Qdc::HubsView::boardPaneFor(const QString& hubKey,
 	return nullptr;
 }
 
+QString Qdc::HubsView::ownCid() const
+{
+	if (!m_config) return QString();
+
+	return m_config->getString(ConfigStore::Application, USER_GROUP,
+	                           QStringLiteral("Client ID")).trimmed();
+}
+
 QString Qdc::HubsView::hubKeyOf(BoardPane* pane) const
 {
 	if (!pane) return QString();
@@ -1589,6 +1614,7 @@ Qdc::BoardPane* Qdc::HubsView::openBoard(Entry& entry, const QString& board)
 	BoardInfo known;
 	known.name = board;
 	pane->setBoard(known);
+	pane->setOwnCid(ownCid());
 
 	QTreeWidgetItem* item = new QTreeWidgetItem(entry.item);
 	item->setData(NameColumn, KindRole, QVariant::fromValue(RowKind::Board));
@@ -1896,10 +1922,7 @@ void Qdc::HubsView::submitPost(Entry& entry, BoardPane* pane, const QString& par
 	 * the hub must not be able to change about a post; nothing proves it, and a reader
 	 * is never shown it as a proven identity.
 	 */
-	const QString cid = m_config
-		? m_config->getString(ConfigStore::Application, QStringLiteral("User"),
-		                      QStringLiteral("Client ID")).trimmed()
-		: QString();
+	const QString cid = ownCid();
 
 	if (cid.isEmpty())
 	{

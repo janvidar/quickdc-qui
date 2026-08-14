@@ -354,6 +354,14 @@ private:
 	 */
 	QString hubKeyOf(BoardPane* pane) const;
 
+	/**
+	 * This installation's own client id, trimmed, or empty before there is one.
+	 *
+	 * Read rather than held, because the identity page can change it while a board is
+	 * open, and a stale copy would decide which posts are this user's own.
+	 */
+	QString ownCid() const;
+
 	/** Which panes hold an entry for this hash, wherever it was indexed. */
 	QList<BoardPane*> panesHolding(const QString& tth) const;
 

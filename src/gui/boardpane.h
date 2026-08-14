@@ -180,6 +180,17 @@ public slots:
 	 */
 	void setGap(bool gapped);
 
+	/**
+	 * Whose posts on this board are this user's own.
+	 *
+	 * The client id this installation posts under. A board carries the client id the
+	 * hub accepted each post from, so with this the pane can tell which posts are the
+	 * user's - which is what the difference between withdrawing one's own post and
+	 * withdrawing anybody's is about. Empty until there is one, and a post is nobody's
+	 * own while it is.
+	 */
+	void setOwnCid(const QString& cid);
+
 	/** Show a post in the reading pane, selecting its row if it has one. */
 	void read(const QString& tth);
 
@@ -336,6 +347,9 @@ private:
 	/** The post being read, and the document for it once one has arrived. */
 	QString m_reading;
 	Qdc::BoardPost m_post;
+
+	/** This user's own client id; see setOwnCid(). */
+	QString m_ownCid;
 
 	/** Whether a picture a body names is here; see setMediaResolver(). */
 	std::function<RichText::LocalMedia(const QString& tth)> m_media;

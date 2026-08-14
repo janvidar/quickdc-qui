@@ -804,6 +804,16 @@ void Qdc::BoardPane::setGap(bool gapped)
 	m_gapBand->setVisible(gapped);
 }
 
+void Qdc::BoardPane::setOwnCid(const QString& cid)
+{
+	if (m_ownCid == cid) return;
+
+	m_ownCid = cid;
+
+	/* Which posts are this user's own decides what is offered for the one being read. */
+	refreshActions();
+}
+
 void Qdc::BoardPane::clear()
 {
 	const bool wasReading = !m_reading.isEmpty();
@@ -1017,12 +1027,26 @@ void Qdc::BoardPane::refreshActions()
 	                    && m_board.may(BoardPermission::Reply) && !m_board.removed);
 
 	/*
-	 * Deletion is offered where either permission exists. Whether the post is this
-	 * user's own is not something the pane can tell - it is a comparison against our own
-	 * CID, which is not part of a board - and the hub re-checks it anyway.
+	 * Whose post this is, as the hub told the board. The entry's client id is the one
+	 * the hub accepted the post from and is the same claim the hub will check a
+	 * withdrawal against, so comparing it against our own answers the right question -
+	 * unlike the document's own claim of an author, which anybody may write.
+	 *
+	 * Nobody's own while either side is unknown. An installation without a client id
+	 * yet, or an entry the hub sent none for, is not grounds for offering to withdraw
+	 * somebody else's post.
 	 */
-	const bool mayDelete = m_board.may(BoardPermission::WithdrawOwn)
-		|| m_board.may(BoardPermission::WithdrawAny);
+	const bool mine = !m_ownCid.isEmpty() && entry.cid == m_ownCid;
+
+	/*
+	 * Withdrawing anybody's covers this post whoever wrote it; withdrawing one's own
+	 * covers it only where it is. Offered on those terms rather than on the permission
+	 * alone, for the reason the read-only board below is given: a button that is there
+	 * and refused every time invites the user to find out why, and the answer would be
+	 * that the post was never theirs to withdraw.
+	 */
+	const bool mayDelete = m_board.may(BoardPermission::WithdrawAny)
+		|| (m_board.may(BoardPermission::WithdrawOwn) && mine);
 
 	const bool offerDelete = reading && !withdrawn && mayDelete && !m_board.removed;
 

@@ -1120,8 +1120,13 @@ void TestBoards::permissionsDecideWhatIsOffered()
 {
 	Qdc::BoardPane pane;
 
+	/*
+	 * Named as the entry's own board, or the model would refuse it and the pane would be
+	 * reading a post it holds no entry for - which is not the case being tested here and
+	 * would answer nothing about whose post it is.
+	 */
 	Qdc::BoardInfo readOnly;
-	readOnly.name = QStringLiteral("announcements");
+	readOnly.name = QStringLiteral("general");
 	readOnly.permissions = static_cast<quint32>(Qdc::BoardPermission::Subscribe);
 
 	pane.setBoard(readOnly);
@@ -1153,21 +1158,51 @@ void TestBoards::permissionsDecideWhatIsOffered()
 	QCOMPARE(button(pane, "boardNewPost")->text(), QStringLiteral("New post"));
 
 	/*
-	 * Either withdrawal permission offers it. Whether the post is this user's own is not
-	 * something the pane can tell, and the hub re-checks it as it arrives.
+	 * Withdrawing anybody's offers it whoever the post belongs to, and this user is
+	 * nobody in particular here.
 	 */
-	for (const Qdc::BoardPermission which : {Qdc::BoardPermission::WithdrawOwn,
-	                                         Qdc::BoardPermission::WithdrawAny})
-	{
-		Qdc::BoardInfo mine = posting;
-		mine.permissions |= static_cast<quint32>(which);
+	Qdc::BoardInfo anybody = posting;
+	anybody.permissions |= static_cast<quint32>(Qdc::BoardPermission::WithdrawAny);
 
-		pane.setBoard(mine);
-		pane.read(QStringLiteral("ROOT"));
+	pane.setBoard(anybody);
+	pane.read(QStringLiteral("ROOT"));
 
-		QVERIFY(!button(pane, "boardDelete")->isHidden());
-		QCOMPARE(button(pane, "boardDelete")->text(), QStringLiteral("Withdraw"));
-	}
+	QVERIFY(!button(pane, "boardDelete")->isHidden());
+	QCOMPARE(button(pane, "boardDelete")->text(), QStringLiteral("Withdraw"));
+
+	/*
+	 * Withdrawing one's own offers it on this user's own posts and on no others. The
+	 * entry above was accepted from CIDONE, so a client posting as anybody else is
+	 * looking at somebody else's post and has nothing to withdraw - and the button is
+	 * gone rather than there and refused, for the reason every other control here is.
+	 */
+	Qdc::BoardInfo own = posting;
+	own.permissions |= static_cast<quint32>(Qdc::BoardPermission::WithdrawOwn);
+
+	pane.setBoard(own);
+	pane.setOwnCid(QStringLiteral("CIDTWO"));
+	pane.read(QStringLiteral("ROOT"));
+
+	QVERIFY2(button(pane, "boardDelete")->isHidden(),
+	         "somebody else's post was offered for withdrawal");
+
+	/* And an installation that has no client id yet owns nothing. */
+	pane.setOwnCid(QString());
+	QVERIFY(button(pane, "boardDelete")->isHidden());
+
+	pane.setOwnCid(QStringLiteral("CIDONE"));
+
+	QVERIFY(!button(pane, "boardDelete")->isHidden());
+	QCOMPARE(button(pane, "boardDelete")->text(), QStringLiteral("Withdraw"));
+
+	/* Both permissions at once is what an operator on their own post has. */
+	Qdc::BoardInfo both = own;
+	both.permissions |= static_cast<quint32>(Qdc::BoardPermission::WithdrawAny);
+
+	pane.setBoard(both);
+	pane.read(QStringLiteral("ROOT"));
+
+	QVERIFY(!button(pane, "boardDelete")->isHidden());
 
 	QSignalSpy taken(&pane, &Qdc::BoardPane::withdrawRequested);
 
