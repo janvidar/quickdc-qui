@@ -80,6 +80,9 @@ private slots:
 	void writingAPostTakesTheReadingAreaAndGivesItBack();
 	void aReplyOpensQuotingThePostItAnswers();
 	void aSubmittedThreadIsNotPresentedAsPublished();
+	void quotingAFormattedPostKeepsItsFormatting();
+	void whatWasWrittenSurvivesAPostBeingRefused();
+	void returnMakesAParagraphInAPostAndSendsAMessage();
 	void aReplyKeepsTheParentItWasBegunOn();
 	void aReplyToAPostWithdrawnWhileWritingIsNotSent();
 	void aDescriptorForAnotherBoardStartsAgain();
@@ -1521,26 +1524,38 @@ void TestBoards::aReplyOpensQuotingThePostItAnswers()
 
 	const QString opened = box->toPlainText();
 
-	QVERIFY2(opened.contains(QStringLiteral("> The hub will be offline")),
-	         qPrintable(opened));
+	/*
+	 * The quote is a quote and not two characters in front of a line. Written into the
+	 * text, the "> " is what a reader sees when the reply goes out as plain text, and
+	 * what gets escaped to "\>" the moment anything else in the reply is formatted. So
+	 * it lives on the block, and the markers appear where they belong - on the way out.
+	 */
+	const QString outgoing = Qdc::RichText::toMarkdown(*box->document());
 
-	QVERIFY2(opened.contains(QStringLiteral("> Bring the file list back")),
-	         qPrintable(opened));
+	QVERIFY2(outgoing.contains(QStringLiteral("> The hub will be offline")),
+	         qPrintable(outgoing));
+
+	QVERIFY2(outgoing.contains(QStringLiteral("> Bring the file list back")),
+	         qPrintable(outgoing));
+
+	QVERIFY2(!opened.contains(QStringLiteral("> ")), qPrintable(opened));
 
 	/* The author's own bytes: the override is there and nothing of ours is. */
 	QVERIFY(opened.contains(QChar(0x202e)));
 	QVERIFY(!opened.contains(QChar(QChar::ReplacementCharacter)));
 	QVERIFY(!opened.contains(QChar(0x2026)));
 
-	/* A blank line after the quote, and the cursor after that. */
-	QVERIFY2(opened.endsWith(QStringLiteral(".\n\n")), qPrintable(opened));
+	/* A paragraph of their own after the quote, with the cursor in it. */
+	QVERIFY2(opened.endsWith(QLatin1Char('\n')), qPrintable(opened));
 	QCOMPARE(box->textCursor().position(), opened.size());
 
-	/* What is sent is what is in the box, quote and all. */
+	/* And the reply carries markup, since a quote is markup. */
+	QVERIFY(Qdc::RichText::hasMarkup(*box->document()));
+
 	QSignalSpy replied(&pane, &Qdc::BoardPane::replySubmitted);
 
 	Qdc::Composer* composer = pane.findChild<Qdc::Composer*>();
-	emit composer->sendRequested(box->toPlainText(), false);
+	emit composer->sendRequested(outgoing, true);
 
 	QCOMPARE(replied.count(), 1);
 	QCOMPARE(replied.first().at(1).toString(), QStringLiteral("Re: A subject"));
@@ -1594,21 +1609,144 @@ void TestBoards::aSubmittedThreadIsNotPresentedAsPublished()
 	QCOMPARE(submitted.first().at(1).toString(), QStringLiteral("The hub will be offline"));
 
 	/*
-	 * There is no success message in this protocol: the index entry is the
-	 * acknowledgement and the only one. So nothing here says the post went up, and what
-	 * was written is still in the box in case the hub declines it.
+	 * There is no success message in this protocol: the entry arriving in the list is
+	 * the acknowledgement and the only one. So nothing anywhere says the post went up -
+	 * what will say so is its appearing among the others, and it is not there yet.
 	 */
 	QStringList notes;
 	for (QLabel* one : pane.findChildren<QLabel*>()) notes.append(one->text());
 
 	const QString all = notes.join(QLatin1Char('\n'));
 
-	QVERIFY2(all.contains(QStringLiteral("not published until")), qPrintable(all));
-	QVERIFY2(!all.contains(QStringLiteral("Posted"), Qt::CaseInsensitive)
-	         || all.contains(QStringLiteral("not published")), qPrintable(all));
+	for (const char* const claim : {"posted", "published", "sent"})
+	{
+		QVERIFY2(!all.contains(QLatin1String(claim), Qt::CaseInsensitive),
+		         qPrintable(all));
+	}
 
-	QCOMPARE(subject->text(), QStringLiteral("Hub upgrade on Saturday"));
-	QVERIFY(pane.threads()->postCount() == 0);
+	QCOMPARE(pane.threads()->postCount(), 0);
+
+	/* And the post that was being read is back, rather than what was already sent. */
+	QVERIFY(pane.findChild<QLineEdit*>(QStringLiteral("boardComposeSubject"))
+	            ->parentWidget()->isHidden());
+}
+
+void TestBoards::quotingAFormattedPostKeepsItsFormatting()
+{
+	Qdc::BoardPane pane;
+
+	Qdc::BoardInfo board;
+	board.name = QStringLiteral("general");
+	board.permissions = 1 + 2 + 4;
+
+	pane.setBoard(board);
+
+	const QString root = QStringLiteral("ROOT");
+
+	pane.addEntry(entry(root, base()));
+	pane.read(root);
+
+	/* A post that said it was the markdown subset, and is. */
+	pane.setPost(post(root, QStringLiteral("The hub is **offline** on Saturday."), true));
+
+	button(pane, "boardReply")->click();
+
+	Qdc::ComposerEdit* box = pane.findChild<Qdc::ComposerEdit*>();
+	QVERIFY(box);
+
+	/*
+	 * Rendered on the way in, so the emphasis is emphasis in the box rather than a pair
+	 * of asterisks somebody has to look at while they answer.
+	 */
+	const QString shown = box->toPlainText();
+
+	QVERIFY2(shown.contains(QStringLiteral("The hub is offline on Saturday.")),
+	         qPrintable(shown));
+
+	QVERIFY2(!shown.contains(QStringLiteral("**")), qPrintable(shown));
+
+	/*
+	 * And markers on the way back out rather than escapes. Put in as text, the asterisks
+	 * would leave as "\*\*offline\*\*" the moment anything in the reply was formatted -
+	 * markdown for "these are not markers", which is the opposite of what was quoted.
+	 */
+	const QString outgoing = Qdc::RichText::toMarkdown(*box->document());
+
+	QVERIFY2(outgoing.contains(QStringLiteral("**offline**")), qPrintable(outgoing));
+	QVERIFY2(!outgoing.contains(QStringLiteral("\\*")), qPrintable(outgoing));
+	QVERIFY2(outgoing.contains(QStringLiteral("> The hub is")), qPrintable(outgoing));
+}
+
+void TestBoards::whatWasWrittenSurvivesAPostBeingRefused()
+{
+	Qdc::BoardPane pane;
+
+	Qdc::BoardInfo board;
+	board.name = QStringLiteral("general");
+	board.permissions = 1 + 2 + 4;
+
+	pane.setBoard(board);
+	button(pane, "boardNewPost")->click();
+
+	Qdc::Composer* composer = pane.findChild<Qdc::Composer*>();
+	Qdc::ComposerEdit* box = pane.findChild<Qdc::ComposerEdit*>();
+	QVERIFY(composer && box);
+
+	box->setPlainText(QStringLiteral("Something worth keeping"));
+
+	/*
+	 * Refused here rather than by the hub, for want of a subject. The words have to
+	 * still be there: emptying the box takes them away at the very moment the reason
+	 * for keeping them is being written underneath it.
+	 */
+	emit composer->sendRequested(QStringLiteral("Something worth keeping"), false);
+
+	QCOMPARE(box->toPlainText(), QStringLiteral("Something worth keeping"));
+	QVERIFY(!pane.findChild<QLineEdit*>(QStringLiteral("boardComposeSubject"))
+	             ->parentWidget()->isHidden());
+}
+
+void TestBoards::returnMakesAParagraphInAPostAndSendsAMessage()
+{
+	/*
+	 * A message is one thing said in a conversation and Return is how it is said. A post
+	 * is a document written at length, and one where every line break needs a modifier -
+	 * over a key that fires it off half written - is the wrong way round.
+	 */
+	Qdc::BoardPane pane;
+
+	Qdc::ComposerEdit* post = pane.findChild<Qdc::ComposerEdit*>();
+	QVERIFY(post);
+
+	post->setPlainText(QStringLiteral("First line"));
+
+	QSignalSpy posted(post, &Qdc::ComposerEdit::sendRequested);
+
+	QTest::keyClick(post, Qt::Key_Return);
+
+	QCOMPARE(posted.count(), 0);
+	QVERIFY2(post->toPlainText().contains(QLatin1Char('\n')),
+	         qPrintable(post->toPlainText()));
+
+	/* And the modifier still sends, for anybody who would rather not reach for a button. */
+	QTest::keyClick(post, Qt::Key_Return, Qt::ControlModifier);
+	QCOMPARE(posted.count(), 1);
+
+	/* A conversation's box is unchanged. */
+	Qdc::Composer chat;
+
+	Qdc::ComposerEdit* message = chat.findChild<Qdc::ComposerEdit*>();
+	QVERIFY(message);
+
+	message->setPlainText(QStringLiteral("Hello"));
+
+	QSignalSpy said(message, &Qdc::ComposerEdit::sendRequested);
+
+	QTest::keyClick(message, Qt::Key_Return);
+	QCOMPARE(said.count(), 1);
+
+	QTest::keyClick(message, Qt::Key_Return, Qt::ShiftModifier);
+	QCOMPARE(said.count(), 1);
 }
 
 void TestBoards::aReplyKeepsTheParentItWasBegunOn()

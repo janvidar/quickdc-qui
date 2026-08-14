@@ -170,6 +170,11 @@ void Qdc::ComposerEdit::setRichTextEnabled(bool enabled)
 	setAcceptRichText(enabled);
 }
 
+void Qdc::ComposerEdit::setReturnSends(bool sends)
+{
+	m_returnSends = sends;
+}
+
 void Qdc::ComposerEdit::setFillAvailable(bool available)
 {
 	if (m_fillAvailable == available) return;
@@ -499,7 +504,21 @@ void Qdc::ComposerEdit::keyPressEvent(QKeyEvent* event)
 	const bool isReturn = (event->key() == Qt::Key_Return
 	                       || event->key() == Qt::Key_Enter);
 
-	if (isReturn && !(event->modifiers() & Qt::ShiftModifier))
+	/*
+	 * Return sends a message and makes a paragraph in a post.
+	 *
+	 * A message is one thing said in a conversation and Return is how it is said, with
+	 * Shift for the rare second line. A post is a document written at length - the
+	 * extension's own example has a blank line in it - and typing one where every line
+	 * break needs a modifier, over a key that fires it off half written, is the wrong
+	 * way round. There the key that sends is the button, and Control or Command with
+	 * Return for anybody who would rather not reach for it.
+	 */
+	const bool sendKey = m_returnSends
+		? !(event->modifiers() & Qt::ShiftModifier)
+		: (event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier));
+
+	if (isReturn && sendKey)
 	{
 		emit sendRequested();
 		return;
@@ -715,6 +734,18 @@ void Qdc::Composer::setFill(Fill fill)
 	m_edit->setFillAvailable(available);
 
 	/*
+	 * The two go together: a box that fills a pane is one somebody writes a document in,
+	 * and Return there belongs to the document. Sending it is the button, or Control and
+	 * Command with Return.
+	 */
+	m_edit->setReturnSends(!available);
+
+	m_send->setToolTip(available ? tr("Post this (%1 Return)",
+	                                  "the modifier that sends when Return does not")
+	                                  .arg(QStringLiteral("⌘"))
+	                             : QString());
+
+	/*
 	 * And this widget with it, since a box told to take the height it is given is inside
 	 * one that would otherwise still ask for only as much as its content needs.
 	 */
@@ -766,6 +797,84 @@ bool Qdc::Composer::isSendable() const
 void Qdc::Composer::clear()
 {
 	m_edit->clear();
+
+	/* clear() leaves the format at the cursor behind, so the next thing written would
+	   open in whatever the last one ended in. */
+	m_edit->setCurrentCharFormat(QTextCharFormat());
+	refreshFormatState();
+}
+
+void Qdc::Composer::setClearOnSend(bool clearing)
+{
+	m_clearOnSend = clearing;
+}
+
+void Qdc::Composer::setQuoted(const QString& body, bool richText)
+{
+	m_edit->clear();
+
+	if (body.trimmed().isEmpty())
+	{
+		m_edit->setCurrentCharFormat(QTextCharFormat());
+		refreshFormatState();
+		return;
+	}
+
+	/*
+	 * The quoted post goes in as what it is rather than as the characters it is written
+	 * with. Put in as text, a body that was markdown arrives as literal asterisks and
+	 * angle brackets: the reply then goes out as plain text where the quote is not a
+	 * quote and the emphasis is not emphasis, and the moment anything in it is formatted
+	 * the whole lot is escaped on the way back out - which is markdown for "these are
+	 * not markers", and exactly the opposite of what was meant.
+	 *
+	 * So a body that said it was markdown is rendered and inserted as rich text, and one
+	 * that did not is inserted as the literal text it is.
+	 */
+	if (richText)
+	{
+		RichText::RenderOptions options;
+		options.fontPointSize = m_edit->font().pointSizeF();
+
+		m_edit->insertHtml(RichText::renderMarkdown(body, options));
+	}
+	else
+	{
+		m_edit->insertPlainText(body);
+	}
+
+	/*
+	 * And every block of it marked as a quote, which is what makes it leave as one. The
+	 * mark is a property of the block rather than anything in the text, so it cannot be
+	 * carried by the HTML above and is applied here - over whatever the quoted post's own
+	 * blocks were, since a list inside something being quoted is still quoted.
+	 */
+	QTextCursor cursor(m_edit->document());
+	cursor.movePosition(QTextCursor::Start);
+
+	while (true)
+	{
+		QTextBlockFormat format = cursor.blockFormat();
+		format.setProperty(RichText::BlockKindProperty, RichText::Quote);
+		format.setLeftMargin(12);
+		cursor.setBlockFormat(format);
+
+		if (!cursor.movePosition(QTextCursor::NextBlock)) break;
+	}
+
+	/*
+	 * A paragraph of their own underneath, outside the quote, with the cursor in it -
+	 * which is where somebody answering starts writing.
+	 */
+	cursor.movePosition(QTextCursor::End);
+	cursor.insertBlock();
+
+	QTextBlockFormat plain;
+	cursor.setBlockFormat(plain);
+	cursor.setCharFormat(QTextCharFormat());
+
+	m_edit->setTextCursor(cursor);
+	refreshFormatState();
 }
 
 void Qdc::Composer::setText(const QString& text)
@@ -1214,10 +1323,13 @@ void Qdc::Composer::send()
 
 	emit sendRequested(message, richText);
 
-	m_edit->clear();
-
-	/* clear() leaves the format at the cursor behind, so the next message would open
-	   in whatever the last one ended in. */
-	m_edit->setCurrentCharFormat(QTextCharFormat());
-	refreshFormatState();
+	/*
+	 * Emptied only where sending is the end of it. A message goes the moment it is
+	 * sent and there is nothing left to decide; a post can be refused on the spot -
+	 * for want of a subject, or because what it answers has just been withdrawn - and
+	 * clearing here would take the words away as the reason for keeping them was being
+	 * put on the screen. Where it is not cleared, the owner clears it once the thing
+	 * has actually gone.
+	 */
+	if (m_clearOnSend) clear();
 }

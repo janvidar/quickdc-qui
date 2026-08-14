@@ -47,6 +47,9 @@ public:
 	/** Take the height given rather than the height the content asks for; see Composer::Fill. */
 	void setFillAvailable(bool available);
 
+	/** Whether Return sends or makes a paragraph; see Composer::Fill for which is which. */
+	void setReturnSends(bool sends);
+
 	QSize sizeHint() const override;
 
 	/**
@@ -117,6 +120,9 @@ private:
 
 	/** See Composer::Fill, which this follows. */
 	bool m_fillAvailable = false;
+
+	/** See setReturnSends(). */
+	bool m_returnSends = true;
 };
 
 /**
@@ -175,6 +181,30 @@ public:
 	};
 
 	void setFill(Fill fill);
+
+	/**
+	 * Whether sending empties the box.
+	 *
+	 * True for a message, which has gone the moment it is sent. False where what was
+	 * written may still be refused on the spot - a post with no subject, or a reply to
+	 * something withdrawn while it was being written - since emptying the box there
+	 * takes the words away as the reason for keeping them is being put on the screen.
+	 * An owner that turns this off clears the box itself once the thing has gone.
+	 */
+	void setClearOnSend(bool clearing);
+
+	/**
+	 * Open on a quotation of what is being answered, with room underneath to answer in.
+	 *
+	 * The body goes in as what it is and not as the characters it is written with: one
+	 * that said it was markdown is rendered, so the quote leaves as a quote and the
+	 * emphasis as emphasis. Put in as plain text it would go out either as literal
+	 * asterisks or, the moment anything else in the reply were formatted, as markdown
+	 * escaped to say that its markers are not markers.
+	 *
+	 * @param richText whether the body being quoted is the markdown subset.
+	 */
+	void setQuoted(const QString& body, bool richText);
 
 	/**
 	 * Put a file somebody chose into the message, as a link to its hash.
@@ -300,6 +330,9 @@ private:
 
 	/** Which control asked for a file: the picture one, or the plain attachment. */
 	bool m_wantsMedia = false;
+
+	/** See setClearOnSend(). */
+	bool m_clearOnSend = true;
 };
 
 }

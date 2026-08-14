@@ -516,6 +516,14 @@ QWidget* Qdc::BoardPane::buildComposer()
 	 */
 	m_composer->setFill(Composer::Fill::Available);
 
+	/*
+	 * And emptied here rather than on the way out, because submit() refuses some posts
+	 * itself - one with no subject, a reply to something withdrawn while it was being
+	 * written - and the box being emptied under those would take the words away as the
+	 * reason for keeping them was being written into the note below it.
+	 */
+	m_composer->setClearOnSend(false);
+
 	connect(m_composer, &Composer::sendRequested, this, &BoardPane::submit);
 
 	connect(m_composer, &Composer::attachRequested, this, &BoardPane::attachRequested);
@@ -1160,29 +1168,16 @@ void Qdc::BoardPane::prefillReply()
 
 	if (!m_hasPost || m_post.tth != m_replyTo) return;
 
-	const QString quoted = m_post.body.trimmed();
-	if (quoted.isEmpty()) return;
-
-	QString reply;
-
 	/*
-	 * Markdown's quote, a line at a time, and the author's own bytes throughout: a body
-	 * on its way into a document is never put through displayText(), which is a
-	 * reduction for drawing a stranger's text and would leave a replacement character
-	 * or an ellipsis of ours inside somebody's post.
+	 * The author's own bytes, and never through displayText(): that is a reduction for
+	 * drawing a stranger's text on a screen, and a body on its way into a document would
+	 * carry a replacement character or an ellipsis of ours into somebody's post.
+	 *
+	 * Handed over as a body and a flag rather than as lines with "> " written in front
+	 * of them. What the reply is quoting is a post, not the characters that post was
+	 * written with, and the composer is where a document is built.
 	 */
-	for (const QString& line : quoted.split(QLatin1Char('\n')))
-	{
-		QStringView text(line);
-		if (text.endsWith(QLatin1Char('\r'))) text.chop(1);
-
-		reply += QStringLiteral("> ");
-		reply += text;
-		reply += QLatin1Char('\n');
-	}
-
-	/* A blank line after the quote, which is where the cursor is left. */
-	m_composer->setText(reply + QLatin1Char('\n'));
+	m_composer->setQuoted(m_post.body.trimmed(), m_post.richText);
 }
 
 void Qdc::BoardPane::submit(const QString& message, bool richText)
@@ -1228,13 +1223,14 @@ void Qdc::BoardPane::submit(const QString& message, bool richText)
 	}
 
 	/*
-	 * Handed over, and not published. This extension has no success message - the index
-	 * entry coming back is the acknowledgement and the only one there is - so nothing
-	 * here says the post went up, and what was written stays in the box until an entry
-	 * or a refusal settles it. A composer emptied on submission loses the words when the
-	 * hub declines.
+	 * Handed over, and back to the post that was being read. This extension has no
+	 * success message - the entry arriving in the list is the acknowledgement and the
+	 * only one there is - so nothing here says the post went up; what says it went up is
+	 * its appearing among the others. Staying in the composer until then leaves somebody
+	 * looking at what they have already sent with nothing to do in front of them.
+	 *
+	 * A refusal has already returned above without reaching this, with the words still
+	 * in the box, so what is cleared here is only what has actually gone.
 	 */
-	say(m_composeNote, tr("Handed to the hub. It is not published until the hub's entry "
-	                      "for it arrives in the list; there is no other acknowledgement, "
-	                      "so what you wrote is kept here until then."));
+	showCompose(Compose::None);
 }
