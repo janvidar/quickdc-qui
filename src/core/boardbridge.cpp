@@ -123,6 +123,24 @@ struct BoardState {
 };
 
 /**
+ * What taking a board up again came to: where to resume from, and what this client has
+ * gone back to answering for.
+ *
+ * The two belong to the same job because they are the same walk. Subscribing is the
+ * moment a client says it is carrying this board, and carrying it means being a source
+ * for the posts of it that are on this disk - so the documents are offered then, rather
+ * than whenever somebody happens to open the board to look at it. A client that only
+ * answered for boards a user had opened would be no source at all for most of what it
+ * holds.
+ */
+struct Resumed {
+	BoardState state;
+
+	/** The documents taken up again; see Stored::offered. */
+	QVector<QString> offered;
+};
+
+/**
  * What a board reads as, as the index answered it.
  *
  * Carried back beside whatever the job was really asked to do, because each of those
@@ -918,25 +936,49 @@ void Qdc::BoardBridge::resume(HubBridge* hub, const QString& board)
 	const QString key = hubKey(hub->url());
 
 	m_thread->call(m_relay,
-		[holder = m_stores, url = to_std(key), name = to_std(board)] {
-			BoardState state;
+		[holder = m_stores, url = to_std(key), name = to_std(board),
+		 serving = serves(key)] {
+			Resumed resumed;
 
-			if (!holder->store) return state;
+			if (!holder->store) return resumed;
 
-			state.cursor = holder->store->index.cursor(url, name);
-			state.view = from_core(holder->store->index.view(url, name));
+			resumed.state.cursor = holder->store->index.cursor(url, name);
+			resumed.state.view = from_core(holder->store->index.view(url, name));
 
-			return state;
+			if (!serving) return resumed;
+
+			/*
+			 * And answered for from here on, which is what subscribing to a board
+			 * commits this client to. An offer lasts as long as the process that made
+			 * it, so everything read in an earlier session is held and offered to
+			 * nobody until something takes it up - and the entries are walked here
+			 * rather than when a pane is opened, because a client is a source for the
+			 * boards it carries and not for the ones somebody looked at today.
+			 */
+			for (const QuickDC::BoardEntry& entry :
+			     holder->store->index.entries(url, name))
+			{
+				if (entry.removed) continue;
+
+				if (holder->store->posts.serve(entry.tth))
+					resumed.offered.append(from_std(entry.tth));
+			}
+
+			return resumed;
 		},
-		[this, hub, key, board](const BoardState& state) {
+		[this, hub, key, board](const Resumed& resumed) {
+			/* Which hub each is answered for; see the same line in store(). */
+			for (const QString& tth : resumed.offered) m_fetchedFrom.insert(tth, key);
+
 			/*
 			 * The hub may be gone by now: this is the answer to a question asked of
 			 * another thread. What says so is whether it is still followed, which
 			 * its own destruction sees to.
 			 */
-			if (m_followed.contains(hub)) hub->subscribeBoard(board, state.cursor);
+			if (m_followed.contains(hub))
+				hub->subscribeBoard(board, resumed.state.cursor);
 
-			emit boardStateReady(key, board, state.cursor, state.view);
+			emit boardStateReady(key, board, resumed.state.cursor, resumed.state.view);
 		});
 }
 

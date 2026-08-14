@@ -61,7 +61,8 @@ private slots:
 	void snapshotsDoNotWaitForABusyCore();
 	void anOfferedFileIsRecognisedAfterARestart();
 	void aPostIsOfferedForTheSessionAndWithoutASlot();
-	void aPostHeldFromAnEarlierSessionIsOfferedAgainWhenItsBoardIsRead();
+	void aPostHeldFromAnEarlierSessionIsOfferedWhenItsBoardIsTakenUp();
+	void aPostHeldFromAnEarlierSessionIsOfferedWhenItsBoardIsReadBack();
 	void configRoundTripsThroughTheStore();
 	void aGroupIsReadInOneTrip();
 	void configWritesTheFileItWasGiven();
@@ -106,6 +107,29 @@ private:
 	 * the core thread is therefore exactly what the session does.
 	 */
 	QuickDC::HubListener* listenerFor(const Qdc::HubBridge& hub);
+
+	/**
+	 * Whether this client is answering for the document, and answering for it as a
+	 * post.
+	 *
+	 * Slot free is what tells the two apart: an ordinary attachment is offered on the
+	 * usual terms and a post document is offered without taking a slot, so a check on
+	 * being shared at all would pass on either.
+	 */
+	bool isOffered(const QByteArray& tth);
+
+	/**
+	 * Leave a board with one post read, held and verified, and nothing offering it.
+	 *
+	 * The state a client starts up in, arrived at the way a client arrives at it: an
+	 * entry from the hub, a document fetched, and then the offer withdrawn by hand
+	 * because the share manager belongs to the process rather than to the bridge that
+	 * made the offer. Without that last step every assertion about a later session
+	 * would pass on the strength of this one.
+	 */
+	void readAPostInAnEarlierSession(const QString& directory, const QString& address,
+	                                const QString& board,
+	                                const QByteArray& document);
 
 	QTemporaryDir m_dir;
 	Qdc::CoreThread* m_thread = nullptr;
@@ -1966,53 +1990,29 @@ void TestBridge::aDocumentKnownNotToBeThePostIsNotOfferedAsFetchable()
 	QVERIFY2(!queued, "a document known not to be its post was fetched again");
 }
 
-/**
- * A document held from an earlier session is answered for again once the board it is
- * on has been read back.
- *
- * An offer lasts as long as the process that made it and no longer, which is
- * deliberate: whether a post is served is the user's decision to take again at every
- * start-up rather than something a configuration file remembers on their behalf. The
- * consequence is that somebody has to take it up again, and nobody did - so a client
- * would accumulate a store full of posts, draw every one of them from its own disk,
- * and still leave the next reader to find the only other copy elsewhere. Which is the
- * one thing a board rests on not happening.
- *
- * The detach in the middle is what makes the assertion mean anything. The share
- * manager belongs to the process and not to the bridge, so a document attached while
- * the post was fetched stays attached after that bridge is gone: without withdrawing
- * it by hand, the last assertion would pass on the strength of the first session's
- * offer and say nothing at all about the second's.
- */
-void TestBridge::aPostHeldFromAnEarlierSessionIsOfferedAgainWhenItsBoardIsRead()
+bool TestBridge::isOffered(const QByteArray& tth)
 {
-	const QString directory = boards(QStringLiteral("reoffered"));
-	const QString board = QStringLiteral("general");
-	const QString address = QStringLiteral("adc://192.0.2.44:412");
+	bool free = false;
+
+	m_thread->runOnCoreBlocking([this, tth, &free] {
+		QuickDC::Core* core = m_thread->core();
+		if (!core || !core->shares) return;
+
+		free = core->shares->isSlotFreeByTTH(tth.constData());
+	});
+
+	return free;
+}
+
+void TestBridge::readAPostInAnEarlierSession(const QString& directory,
+                                             const QString& address,
+                                             const QString& board,
+                                             const QByteArray& document)
+{
 	const QString key = Qdc::BoardBridge::hubKey(address);
-
-	const QByteArray document =
-		post_document(AUTHOR_CID, QStringLiteral("Still here"),
-		              "A post outlives the session that read it.\n");
-
 	const QString tth = tth_of(document);
 	const QByteArray hash = tth.toUtf8();
 
-	/* Slot free is the mark of a post rather than of any attachment; see serve(). */
-	const auto offered = [this, hash] {
-		bool free = false;
-
-		m_thread->runOnCoreBlocking([this, hash, &free] {
-			QuickDC::Core* core = m_thread->core();
-			if (!core || !core->shares) return;
-
-			free = core->shares->isSlotFreeByTTH(hash.constData());
-		});
-
-		return free;
-	};
-
-	/* A session that reads the post: the board learns of it, and the bytes arrive. */
 	{
 		Qdc::BoardBridge posts(m_thread, nullptr, directory);
 		posts.setServing(key, true);
@@ -2051,10 +2051,12 @@ void TestBridge::aPostHeldFromAnEarlierSessionIsOfferedAgainWhenItsBoardIsRead()
 		         Qdc::PostState::Verified);
 
 		/* Hashing is asynchronous, so the offer stands a moment after serve() did. */
-		QTRY_VERIFY(offered());
+		QTRY_VERIFY(isOffered(hash));
 	}
 
-	/* Nothing answers for it now, which is where a client that has just started is. */
+	/* The document is on the disk, and this session's offer of it is withdrawn. */
+	QVERIFY(QFile::exists(QDir(directory).filePath(QStringLiteral("posts/") + tth)));
+
 	QVERIFY(m_thread->runOnCoreBlocking([this, hash] {
 		QuickDC::Core* core = m_thread->core();
 		if (!core || !core->shares) return;
@@ -2062,25 +2064,94 @@ void TestBridge::aPostHeldFromAnEarlierSessionIsOfferedAgainWhenItsBoardIsRead()
 		core->shares->detach(hash.constData());
 	}));
 
-	QVERIFY2(!offered(), "the document was still offered before the board was read");
+	QVERIFY2(!isOffered(hash), "the earlier session was still offering the document");
+}
 
-	/* And a client that reads the board back takes it up again. */
-	Qdc::BoardBridge again(m_thread, nullptr, directory, this);
-	again.setServing(key, true);
+/**
+ * A post held from an earlier session is answered for again when the board it is on is
+ * taken up, and taken up means subscribed to rather than looked at.
+ *
+ * An offer lasts as long as the process that made it and no longer, which is
+ * deliberate: whether a post is served is the user's decision to take again at every
+ * start-up rather than something a configuration file remembers on their behalf. The
+ * consequence is that somebody has to take it up again, and nobody did - so a client
+ * would accumulate a store full of posts, draw every one of them off its own disk, and
+ * still leave the next reader to find the only other copy elsewhere. Which is the one
+ * thing a board rests on not happening.
+ *
+ * Subscribing is the moment that matters and a pane being opened is not, because a
+ * client is a source for the boards it carries rather than for the ones somebody
+ * happened to open today. A client that had read a board for a year and served it only
+ * on the afternoons its user clicked on it would be, for every other purpose, not a
+ * source at all.
+ */
+void TestBridge::aPostHeldFromAnEarlierSessionIsOfferedWhenItsBoardIsTakenUp()
+{
+	const QString directory = boards(QStringLiteral("resumed"));
+	const QString board = QStringLiteral("general");
+	const QString address = QStringLiteral("adc://192.0.2.44:412");
+	const QString key = Qdc::BoardBridge::hubKey(address);
 
-	QSignalSpy loaded(&again, &Qdc::BoardBridge::entriesLoaded);
+	const QByteArray document =
+		post_document(AUTHOR_CID, QStringLiteral("Still here"),
+		              "A post outlives the session that read it.\n");
+
+	readAPostInAnEarlierSession(directory, address, board, document);
+
+	/* A client starting up: it subscribes from the cursor it cached, and nothing else. */
+	Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
+	posts.setServing(key, true);
+
+	Qdc::HubBridge hub(m_thread, address, this);
+	posts.follow(&hub);
+
+	QSignalSpy state(&posts, &Qdc::BoardBridge::boardStateReady);
+	QVERIFY(state.isValid());
+
+	posts.resume(&hub, board);
+
+	QTRY_COMPARE(state.count(), 1);
+	QCOMPARE(state.at(0).at(2).toULongLong(), 1786439662u);
+
+	QTRY_VERIFY2(isOffered(tth_of(document).toUtf8()),
+	             "a board was subscribed to and the post held on it offered to nobody");
+}
+
+/**
+ * And the same when the board is read back to be drawn, which is the other way a client
+ * meets what it already holds.
+ *
+ * Both paths, because they are reached in either order and by different clients: one
+ * that starts up and subscribes without anybody opening a board, and one whose user
+ * opens a board of a hub they have not joined. Neither is allowed to be the only one
+ * that takes the documents up.
+ */
+void TestBridge::aPostHeldFromAnEarlierSessionIsOfferedWhenItsBoardIsReadBack()
+{
+	const QString directory = boards(QStringLiteral("reoffered"));
+	const QString board = QStringLiteral("general");
+	const QString address = QStringLiteral("adc://192.0.2.45:412");
+	const QString key = Qdc::BoardBridge::hubKey(address);
+
+	const QByteArray document =
+		post_document(AUTHOR_CID, QStringLiteral("Read back"),
+		              "The board is drawn from what is cached.\n");
+
+	readAPostInAnEarlierSession(directory, address, board, document);
+
+	Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
+	posts.setServing(key, true);
+
+	QSignalSpy loaded(&posts, &Qdc::BoardBridge::entriesLoaded);
 	QVERIFY(loaded.isValid());
 
-	again.loadEntries(key, board);
+	posts.loadEntries(key, board);
 
 	QTRY_COMPARE(loaded.count(), 1);
 	QCOMPARE(loaded.at(0).at(2).value<QVector<Qdc::BoardEntry>>().size(), 1);
 
-	QVERIFY(QFile::exists(QDir(directory).filePath(QStringLiteral("posts/") + tth)));
-
-	QTRY_VERIFY2(offered(),
-	             "a post held from an earlier session was read back and offered to "
-	             "nobody");
+	QTRY_VERIFY2(isOffered(tth_of(document).toUtf8()),
+	             "a board was read back and the post held on it offered to nobody");
 }
 
 QTEST_GUILESS_MAIN(TestBridge)
