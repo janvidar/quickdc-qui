@@ -147,6 +147,18 @@ struct Stored {
 	QVector<int> kept;
 
 	QVector<ReadState> boards;
+
+	/**
+	 * Those of them whose documents are already on this disk, and those already known
+	 * not to be the post they claim to be.
+	 *
+	 * Asked of an arriving entry for the same reason it is asked of one read back from
+	 * the cache: a document is held by hash and is the same document on every hub, while
+	 * an index belongs to one board on one. The post relayed to a second hub arrives as
+	 * news with its bytes already here.
+	 */
+	QVector<QString> held;
+	QVector<QString> failed;
 };
 
 /**
@@ -607,6 +619,21 @@ void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& e
 				touched[entry.board].push_back(entry.tth);
 
 				/*
+				 * And whether the document is already here, which an arriving entry is
+				 * no less likely to have than one read back off the disk. Documents are
+				 * held by hash and are the same document everywhere; an index belongs to
+				 * one board on one hub. So the ordinary way to meet a post whose bytes
+				 * are already on this machine is exactly this - the same post indexed on
+				 * a second hub, arriving as news. Asked here, or it would be drawn as
+				 * unfetched and then fetched over the network from somebody who would be
+				 * told, for a file already on the disk.
+				 */
+				const Known known = what_is_known(holder->store->posts, entry.tth);
+
+				if (known.failed) stored.failed.append(from_std(entry.tth));
+				else if (!known.path.isEmpty()) stored.held.append(from_std(entry.tth));
+
+				/*
 				 * A tombstone is a request to stop holding the document, honoured
 				 * by the clients that receive it and meaningless to those that do
 				 * not - so it marks, and does not delete. The release is the other
@@ -647,6 +674,16 @@ void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& e
 			for (const ReadState& where : stored.boards)
 				noteRead(hubUrl, where.board, where.unread, where.read, false);
 
+			/*
+			 * Before the entries as well, so that a view told about one can ask whether
+			 * its document is here and get the answer that belongs with it. No state is
+			 * derived from being held - what verifying came to was not written down, and
+			 * calling a held document verified would draw a post the hub and the document
+			 * disagree about as one they agreed on. Opening it reads it, off this disk.
+			 */
+			for (const QString& tth : stored.held) m_held.insert(tth);
+			for (const QString& tth : stored.failed) m_held.insert(tth);
+
 			QHash<QString, QVector<BoardEntry>> byBoard;
 			bool withdrawn = false;
 
@@ -663,6 +700,15 @@ void Qdc::BoardBridge::store(const QString& hubUrl, const QVector<BoardEntry>& e
 
 			for (auto at = byBoard.constBegin(); at != byBoard.constEnd(); ++at)
 				emit entriesStored(hubUrl, at.key(), at.value());
+
+			/*
+			 * After them, because this is a state and a state is about a post the view has
+			 * been told about. A document that is here and is not the post it claims to be
+			 * is not an unfetched one: every copy of it is these same bytes, so there is
+			 * nothing to fetch and nothing a reader could do by asking.
+			 */
+			for (const QString& tth : stored.failed)
+				setState(tth, PostState::Unavailable);
 
 			/*
 			 * Nothing is fetched here, and that is a rule rather than an omission.

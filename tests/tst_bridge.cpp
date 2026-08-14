@@ -1738,6 +1738,53 @@ void TestBridge::aBoardReadBackKnowsWhichDocumentsItHolds()
 	 */
 	QCOMPARE(again.postState(unreadable), Qdc::PostState::Unavailable);
 	QCOMPARE(again.postState(ENTRY_TTH), Qdc::PostState::Announced);
+
+	/*
+	 * And the same again for an entry that arrives rather than one read back, which is
+	 * the way it actually happens: a document is held by hash and is the same document
+	 * on every hub, while an index belongs to one board on one of them. So the ordinary
+	 * way to meet a post whose bytes are already on this machine is as news from a second
+	 * hub - and asking only on the way back from the disk left it drawn as unfetched and
+	 * then fetched over the network from somebody who would be told, for a file that was
+	 * already here.
+	 */
+	const QString elsewhere = QStringLiteral("adc://192.0.2.55:412");
+
+	Qdc::HubBridge second(m_thread, elsewhere, this);
+	const QString otherKey = Qdc::BoardBridge::hubKey(second.url());
+
+	/*
+	 * A third bridge, which has never read a board back. Asking the one above would
+	 * prove nothing: it already knows what it holds from the load, so the answer would
+	 * be right whether an arriving entry was checked or not.
+	 */
+	Qdc::BoardBridge fresh(m_thread, nullptr, directory, this);
+	fresh.follow(&second);
+
+	QVERIFY(!fresh.isHeld(readable));
+
+	QuickDC::HubListener* other = listenerFor(second);
+	QVERIFY(other != nullptr);
+
+	QSignalSpy arrived(&fresh, &Qdc::BoardBridge::entriesStored);
+
+	QVERIFY(m_thread->runOnCoreBlocking([other, board, readable, unreadable] {
+		other->EventBoardEntry(core_entry(readable, board, AUTHOR_CID, 1786440000));
+		other->EventBoardEntry(core_entry(unreadable, board, AUTHOR_CID, 1786440001));
+		other->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID, 1786440002));
+	}));
+
+	QTRY_VERIFY(arrived.count() >= 1);
+	QTRY_COMPARE(fresh.unread(otherKey, board), 3);
+
+	QVERIFY2(fresh.isHeld(readable),
+	         "a document on the disk was not recognised in an arriving entry");
+
+	QVERIFY(fresh.isHeld(unreadable));
+	QVERIFY(!fresh.isHeld(ENTRY_TTH));
+
+	/* And the one that can never be read says so without anybody pressing anything. */
+	QTRY_COMPARE(fresh.postState(unreadable), Qdc::PostState::Unavailable);
 }
 
 /**
