@@ -538,10 +538,10 @@ Qdc::BoardBridge::~BoardBridge()
 	if (!m_thread) return;
 
 	/*
-	 * Posted, and it does not have to block. Nothing in the core holds a pointer to
-	 * either half: neither is a listener registered anywhere, and the store listens
-	 * to the share manager only while a hash job it started is outstanding, which
-	 * its own destructor is what sees to.
+	 * Posted, and it does not have to block. Nothing in the core is left holding a
+	 * pointer to either half: neither is a listener registered anywhere, and the store
+	 * listens to the share manager only while a hash job it started is outstanding,
+	 * which its own destructor withdraws it from.
 	 *
 	 * Nothing is released here, which is deliberate. A document marked to go stays
 	 * marked; marks survive a restart, and the next start-up releases them at the
@@ -1643,9 +1643,15 @@ void Qdc::BoardBridge::abandonOverCap(const QVector<TransferInfo>& transfers)
 
 		if (!passesCap(row.transferred, at->entry.size, at->cap)) continue;
 
-		giveUp(at->entry.tth,
-		       tr("The peer sending this post sent more than the post was said to "
-		          "be, so the transfer was abandoned."));
+		/*
+		 * Copied out before giving up, because giving up is what takes this entry out of
+		 * the map: the hash would otherwise be a reference into a node that had been
+		 * destroyed by the time the state was set and the signal built from it.
+		 */
+		const QString tth = at->entry.tth;
+
+		giveUp(tth, tr("The peer sending this post sent more than the post was said to "
+		               "be, so the transfer was abandoned."));
 	}
 }
 

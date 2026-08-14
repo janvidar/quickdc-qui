@@ -140,7 +140,7 @@ Qdc::BoardPane::BoardPane(QWidget* parent)
 	/*
 	 * Wide enough to read a subject in, which is what the list is for. A stretch factor
 	 * decides how the two share what is left over as the window is resized and says
-	 * nothing about where they start, so on its own it opened the list at the width of
+	 * nothing about where they start, so on its own it leaves the list at the width of
 	 * its own minimum - a column too narrow to hold a subject, with a scrollbar under it.
 	 */
 	m_split->setSizes({LIST_WIDTH, LIST_WIDTH * 3});
@@ -315,9 +315,9 @@ QWidget* Qdc::BoardPane::buildThreadList()
 	/*
 	 * The subject takes what is left and the two beside it take what they need. Left
 	 * interactive they keep a default width each whatever is in them, which together
-	 * with a subject that stretches comes to more than the list is wide - so the list
-	 * had a scrollbar under it and a subject cut off at a dozen characters, which is
-	 * the one column somebody reads a board by.
+	 * with a subject that stretches comes to more than the list is wide, which puts a
+	 * scrollbar under it and cuts the subject off at a dozen characters - the one column
+	 * somebody reads a board by.
 	 */
 	m_list->header()->setStretchLastSection(false);
 	m_list->header()->setSectionResizeMode(BoardModel::SubjectColumn, QHeaderView::Stretch);
@@ -400,10 +400,10 @@ QWidget* Qdc::BoardPane::buildReader()
 	 * What holds the post at the top when there are no words under it.
 	 *
 	 * A box layout hands leftover space out in proportion to the stretch its items
-	 * carry, and where none of them carries any it shares it equally instead - so with
-	 * the body hidden the subject, the line naming its author and the row of buttons
-	 * each took a third of the pane and stood a long way apart. This is the item that
-	 * takes the space in that case, and it is there exactly when the body is not.
+	 * carry, and where none of them carries any it shares it equally instead - which with
+	 * the body hidden would give the subject, the line naming its author and the row of
+	 * buttons a third of the pane each and stand them a long way apart. This is the item
+	 * that takes the space in that case, and it is there exactly when the body is not.
 	 */
 	m_filler = new QWidget(reader);
 	m_filler->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
@@ -745,8 +745,8 @@ void Qdc::BoardPane::reportRefusal(int code, const QString& description,
 
 	/*
 	 * Ended for it where it did not end itself. What the hub said is a stranger's
-	 * sentence and nothing obliges it to be punctuated, so the sentences this pane adds
-	 * after it ran straight on from the last word of it.
+	 * sentence and nothing obliges it to be punctuated, so without this the sentences
+	 * this pane adds after it run straight on from its last word.
 	 */
 	QString reason = said;
 

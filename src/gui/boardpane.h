@@ -251,8 +251,8 @@ signals:
 	 * Nothing in the pane emits this. It is the only way a hub that reordered or
 	 * removed entries in violation of the extension becomes visible at all - what
 	 * arrives is reconciled against what is held rather than replacing it - and it is
-	 * driven automatically now, by connecting to the hub, rather than by a button
-	 * asking a reader to keep the board honest themselves. Kept because the pane is
+	 * driven by connecting to the hub rather than by a button asking a reader to keep
+	 * the board honest themselves. Kept because the pane is
 	 * where a client would say so if there were ever a reason to ask from here.
 	 */
 	void rereadRequested();
