@@ -74,6 +74,7 @@ private slots:
 	void permissionsDecideWhatIsOffered();
 	void withdrawingIsAskedAboutInPlainWords();
 	void aRefusalIsReportedInThePane();
+	void thePostBeingWrittenTakesTheRoomItIsGiven();
 	void aRefusalCanBeDismissedAndGoesByItself();
 	void aGapThatCannotBeClosedIsSaidSo();
 	void writingAPostTakesTheReadingAreaAndGivesItBack();
@@ -1288,6 +1289,45 @@ void TestBoards::aRefusalIsReportedInThePane()
 
 	QVERIFY2(bands(pane).at(1)->text().contains(QStringLiteral("genrel")),
 	         qPrintable(bands(pane).at(1)->text()));
+}
+
+void TestBoards::thePostBeingWrittenTakesTheRoomItIsGiven()
+{
+	Qdc::BoardPane pane;
+
+	Qdc::ComposerEdit* box = pane.findChild<Qdc::ComposerEdit*>();
+	QVERIFY(box);
+
+	/*
+	 * A post is the only thing on the screen while it is being written, so its box takes
+	 * the height it is given. Left as a conversation's is, it stops at the few lines that
+	 * are right at the foot of a chat, and somebody writing a post types into a slot with
+	 * an empty pane underneath it.
+	 */
+	QCOMPARE(box->sizePolicy().verticalPolicy(), QSizePolicy::Expanding);
+
+	/*
+	 * And it can still shrink, which is what the floor is for: a minimum that tracked the
+	 * content would ratchet upward with every line typed, and nothing - not deleting the
+	 * text, not a smaller window - would bring it back down.
+	 */
+	const int floor = box->minimumSizeHint().height();
+
+	box->setPlainText(QStringLiteral("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight"));
+
+	QCOMPARE(box->minimumSizeHint().height(), floor);
+	QVERIFY(box->sizeHint().height() >= floor);
+
+	/*
+	 * A conversation's box is unchanged, which is the regression that would matter: the
+	 * two share a class and only one of them was meant to move.
+	 */
+	Qdc::Composer chat;
+
+	Qdc::ComposerEdit* chatBox = chat.findChild<Qdc::ComposerEdit*>();
+	QVERIFY(chatBox);
+
+	QCOMPARE(chatBox->sizePolicy().verticalPolicy(), QSizePolicy::Fixed);
 }
 
 void TestBoards::aRefusalCanBeDismissedAndGoesByItself()

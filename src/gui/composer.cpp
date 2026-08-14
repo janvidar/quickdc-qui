@@ -42,6 +42,14 @@ constexpr int MENTION_MINIMUM = 1;
 constexpr int MAX_LINES = 6;
 
 /**
+ * The fewest lines a box that fills its space will shrink to.
+ *
+ * Its floor rather than its height: what it actually gets is whatever the layout has,
+ * and this is only what it refuses to go below when the window is small.
+ */
+constexpr int FILL_LINES = 4;
+
+/**
  * A small, fixed set of emoji.
  *
  * Fixed rather than the whole of Unicode: a full picker needs a searchable
@@ -162,6 +170,25 @@ void Qdc::ComposerEdit::setRichTextEnabled(bool enabled)
 	setAcceptRichText(enabled);
 }
 
+void Qdc::ComposerEdit::setFillAvailable(bool available)
+{
+	if (m_fillAvailable == available) return;
+
+	m_fillAvailable = available;
+
+	/*
+	 * Fixed is what makes the box in a conversation stop at the height its content asks
+	 * for; expanding is what lets the one a post is written in take the room it is given.
+	 * The hints below answer to the same flag, and the three have to move together - a
+	 * policy that expands over a minimum hint that tracks the content would grow and
+	 * never shrink.
+	 */
+	setSizePolicy(QSizePolicy::Expanding,
+	              available ? QSizePolicy::Expanding : QSizePolicy::Fixed);
+
+	updateGeometry();
+}
+
 QSize Qdc::ComposerEdit::sizeHint() const
 {
 	const QFontMetrics metrics(font());
@@ -171,7 +198,16 @@ QSize Qdc::ComposerEdit::sizeHint() const
 	 * Measured from the laid out document rather than counted from the newlines,
 	 * so a single wrapped line takes the room it actually needs.
 	 */
-	const int lines = qBound(1, qCeil(document()->size().height() / line), MAX_LINES);
+	const int wanted = qCeil(document()->size().height() / line);
+
+	/*
+	 * Uncapped where the box fills what it is given: the cap is what keeps a message
+	 * from pushing a conversation off its own screen, and a post has no conversation
+	 * behind it to protect. The layout decides the height either way; this only says
+	 * what would be preferred.
+	 */
+	const int lines = m_fillAvailable
+		? qMax(FILL_LINES, wanted) : qBound(1, wanted, MAX_LINES);
 
 	const int chrome = 2 * frameWidth()
 		+ 2 * qCeil(document()->documentMargin())
@@ -182,6 +218,24 @@ QSize Qdc::ComposerEdit::sizeHint() const
 
 QSize Qdc::ComposerEdit::minimumSizeHint() const
 {
+	/*
+	 * A floor rather than the content, where the box fills what it is given. Returning
+	 * the content height would make the box a ratchet: every line typed would raise the
+	 * minimum, and nothing - not a smaller window, not deleting the text again - could
+	 * ever bring it back down.
+	 */
+	if (m_fillAvailable)
+	{
+		const QFontMetrics metrics(font());
+
+		const int chrome = 2 * frameWidth()
+			+ 2 * qCeil(document()->documentMargin())
+			+ contentsMargins().top() + contentsMargins().bottom();
+
+		return QSize(QTextEdit::minimumSizeHint().width(),
+		             FILL_LINES * metrics.lineSpacing() + chrome);
+	}
+
 	return sizeHint();
 }
 
@@ -652,6 +706,27 @@ void Qdc::Composer::setSendable(bool sendable, const QString& reason)
 		button->setEnabled(sendable && m_richTextEnabled);
 
 	m_edit->setPlaceholderText(sendable ? tr("Write a message") : reason);
+}
+
+void Qdc::Composer::setFill(Fill fill)
+{
+	const bool available = fill == Fill::Available;
+
+	m_edit->setFillAvailable(available);
+
+	/*
+	 * And this widget with it, since a box told to take the height it is given is inside
+	 * one that would otherwise still ask for only as much as its content needs.
+	 */
+	setSizePolicy(sizePolicy().horizontalPolicy(),
+	              available ? QSizePolicy::Expanding : QSizePolicy::Preferred);
+
+	/*
+	 * The send button stays at the foot of the box either way. Aligned to the bottom it
+	 * sits beside the last line of a message, which is where it belongs in a
+	 * conversation and where it still belongs under a post.
+	 */
+	updateGeometry();
 }
 
 void Qdc::Composer::setRichTextEnabled(bool enabled)

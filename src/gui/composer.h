@@ -44,6 +44,9 @@ public:
 	 */
 	void setRichTextEnabled(bool enabled);
 
+	/** Take the height given rather than the height the content asks for; see Composer::Fill. */
+	void setFillAvailable(bool available);
+
 	QSize sizeHint() const override;
 
 	/**
@@ -111,6 +114,9 @@ private:
 	QStringListModel* m_nicknames;
 
 	bool m_richTextEnabled = true;
+
+	/** See Composer::Fill, which this follows. */
+	bool m_fillAvailable = false;
 };
 
 /**
@@ -150,6 +156,25 @@ public:
 	 */
 	void setRichTextEnabled(bool enabled);
 	bool isRichTextEnabled() const;
+
+	/**
+	 * How tall the box wants to be.
+	 *
+	 * A message in a conversation is written at the foot of what is being said, in a box
+	 * that grows a few lines with what is typed and gives the rest of the room back to
+	 * the conversation - which is what the room is for there. A post is the only thing on
+	 * the screen while it is being written, and is written at length, so its box takes
+	 * the height it is given and holds it whether there is one line in it or forty.
+	 */
+	enum class Fill {
+		/** Grow with the content, to a few lines at most. */
+		Content,
+
+		/** Take the height available, and hold it. */
+		Available
+	};
+
+	void setFill(Fill fill);
 
 	/**
 	 * Put a file somebody chose into the message, as a link to its hash.

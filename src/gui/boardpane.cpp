@@ -507,6 +507,15 @@ QWidget* Qdc::BoardPane::buildComposer()
 	layout->addLayout(top);
 
 	m_composer = new Composer(m_composeBox);
+
+	/*
+	 * A post is the only thing on the screen while it is being written, so the box takes
+	 * the area the post being read was in. Left as it is in a conversation it grows a few
+	 * lines and stops, which is right at the foot of a chat and leaves somebody writing a
+	 * post typing into a slot with an empty pane under it.
+	 */
+	m_composer->setFill(Composer::Fill::Available);
+
 	connect(m_composer, &Composer::sendRequested, this, &BoardPane::submit);
 
 	connect(m_composer, &Composer::attachRequested, this, &BoardPane::attachRequested);
