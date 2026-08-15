@@ -3081,16 +3081,23 @@ void TestHubs::aHubsOwnDescriptionReachesThePane()
 	QCOMPARE(pane->header()->title(), url);
 
 	/*
-	 * The pane reads the name and the description back off the bridge rather than
-	 * off the signal, so a signal emitted by hand only pins that the two are wired
-	 * to rebuild the header. What they rebuild it into is theHeaderNamesTheHub...().
+	 * And it is the address until a hub says otherwise, which is the whole of what can
+	 * be checked from here.
+	 *
+	 * The name and the description are cached on the bridge by the session that hears
+	 * them, and the header is rebuilt from that cache rather than from the signal - so
+	 * raising the signal by hand rebuilds the header out of an empty cache and leaves it
+	 * exactly as it was, whether or not anything is connected. Nothing in this test
+	 * could tell the two apart, and the spy that stood here counted a signal the test
+	 * emitted itself.
+	 *
+	 * Driving it properly needs the core side listener, and a view test cannot reach one
+	 * on purpose: see the note in tests/CMakeLists.txt, where only tst_bridge links the
+	 * core. What the header makes of a name once it has one is
+	 * theHeaderNamesTheHubAndKeepsTheAddress().
 	 */
-	QSignalSpy described(pane->hub(), &Qdc::HubBridge::hubDescriptionChanged);
-	QVERIFY(described.isValid());
-
-	emit pane->hub()->hubDescriptionChanged(QStringLiteral("a friendly place"));
-	QCOMPARE(described.count(), 1);
-	QCOMPARE(pane->header()->title(), url);
+	QCOMPARE(pane->header()->subtitle(), QString());
+	QVERIFY(pane->hub()->hubDescription().isEmpty());
 }
 
 void TestHubs::theUserListCanBeFilteredDownToAName()

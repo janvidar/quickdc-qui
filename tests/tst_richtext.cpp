@@ -1244,7 +1244,18 @@ void TestRichText::theHangingIndentOnlyPullsBackTheFirstBlock()
 		QStringLiteral("```\ncode();\n```"), o);
 	QVERIFY(leading.indexOf(QStringLiteral("<b>alice</b>"))
 	        < leading.indexOf(QStringLiteral("code();")));
-	QVERIFY(!leading.contains(QStringLiteral("monospace; color:%1\"><b>alice")));
+	/*
+	 * And the speaker is outside the code span rather than set in it. Checked against
+	 * what precedes the name rather than against a whole span, whose attributes are
+	 * substituted from the options and would have to be rebuilt here to be matched -
+	 * a needle carrying an unsubstituted placeholder matches nothing and passes always.
+	 */
+	const qsizetype speaker = leading.indexOf(QStringLiteral("<b>alice</b>"));
+	QVERIFY(speaker > 0);
+
+	const QString before = leading.left(speaker);
+	QVERIFY2(!before.contains(QStringLiteral("font-family")),
+	         "the speaker was drawn inside the code block's own span");
 }
 
 void TestRichText::aHostileNameIsDisarmedBeforeItIsDrawn()

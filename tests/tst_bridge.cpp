@@ -1107,26 +1107,71 @@ void TestBridge::nothingIsFetchedMerelyBecauseAnEntryArrived()
 	QCOMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Announced);
 
 	const QByteArray hash = ENTRY_TTH.toUtf8();
-	bool queued = true;
 
-	QVERIFY(m_thread->runOnCoreBlocking([this, hash, &queued] {
+	const auto queuedNow = [this, hash] {
+		bool queued = false;
+
+		m_thread->runOnCoreBlocking([this, hash, &queued] {
+			QuickDC::Core* core = m_thread->core();
+			if (!core || !core->queue) return;
+
+			queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
+		});
+
+		return queued;
+	};
+
+	QVERIFY2(!queuedNow(), "an entry arriving put its body in the download queue");
+
+	/* And prefetching is off until a hub is named, so a thread opens the same way. */
+	const QString key = Qdc::BoardBridge::hubKey(hub.url());
+	QVERIFY(!posts.prefetches(key));
+
+	const QVector<Qdc::BoardEntry> thread = {
+		bridge_entry(ENTRY_TTH, QStringLiteral("general"), AUTHOR_CID, 412)
+	};
+
+	posts.prefetchThread(key, thread);
+
+	/*
+	 * Given a chance to happen before it is called absent. What a fetch changes is
+	 * written by a completion delivered to this thread's event loop, and waiting on the
+	 * core runs none of them - so a check that only blocks on the core reads back the
+	 * value it read before and would say the same whether or not anything was fetched.
+	 */
+	QTest::qWait(120);
+
+	QCOMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Announced);
+	QVERIFY2(!queuedNow(), "a thread was prefetched from a hub nobody had named");
+
+	/*
+	 * And named, the same call does fetch it. This half is what makes the other half
+	 * mean anything: without it every assertion above would hold just as well for a
+	 * prefetch that never worked at all, which is the one thing they exist to tell
+	 * apart from a prefetch that is off.
+	 */
+	posts.setPrefetch(key, true);
+	QVERIFY(posts.prefetches(key));
+
+	posts.prefetchThread(key, thread);
+
+	QTRY_COMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Fetching);
+	QTRY_VERIFY2(queuedNow(), "a thread prefetched from a named hub was not fetched");
+
+	/*
+	 * And taken out again, because the queue belongs to the core and the core outlives
+	 * every case in this binary: a file left in it under a hash the other cases use is
+	 * this one deciding what they find.
+	 */
+	QVERIFY(m_thread->runOnCoreBlocking([this, hash] {
 		QuickDC::Core* core = m_thread->core();
 		if (!core || !core->queue) return;
 
-		queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
+		if (QuickDC::QueueFile* file = core->queue->getFileByTTH(hash.constData()))
+			core->queue->remove(file);
 	}));
 
-	QVERIFY2(!queued, "an entry arriving put its body in the download queue");
-
-	/* And prefetching is off until a hub is named, so a thread opens the same way. */
-	QVERIFY(!posts.prefetches(Qdc::BoardBridge::hubKey(hub.url())));
-
-	posts.prefetchThread(Qdc::BoardBridge::hubKey(hub.url()),
-	                     {bridge_entry(ENTRY_TTH, QStringLiteral("general"),
-	                                   AUTHOR_CID, 412)});
-
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
-	QCOMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Announced);
+	QVERIFY(!queuedNow());
 }
 
 /**

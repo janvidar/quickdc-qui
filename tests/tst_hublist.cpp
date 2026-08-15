@@ -12,6 +12,8 @@
 #include <gui/homeview.h>
 #include <gui/hubbrowser.h>
 #include <gui/favouritedelegate.h>
+#include <gui/theme.h>
+#include <gui/favouritedelegate.h>
 #include <gui/hubheader.h>
 #include <gui/hublistmodel.h>
 
@@ -23,10 +25,12 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QPainter>
 #include <QSaveFile>
 #include <QSignalSpy>
 #include <QSortFilterProxyModel>
 #include <QStackedWidget>
+#include <QStandardItemModel>
 #include <QTabWidget>
 #include <QTableView>
 #include <QTextBlock>
@@ -992,6 +996,66 @@ void TestHubList::theExplanationRowHasNoStar()
 	                  QPoint(row.left() + 10, row.center().y()));
 
 	QCOMPARE(changed.count(), 0);
+
+	/*
+	 * And nothing was drawn to press in the first place, which is the half a signal
+	 * count cannot show: Favourites::add() refuses an empty address of its own accord,
+	 * so a star drawn on this row and pressed would still emit nothing, and every
+	 * assertion above would hold with a star sitting on it.
+	 */
+	const QImage note = list->viewport()->grab().toImage();
+	const int strip = qMin(28, row.width());
+	const QRect where(row.left(), row.top(), strip, row.height());
+
+	/*
+	 * And nothing was drawn to press in the first place, which is the half a signal
+	 * count cannot show: Favourites::add() refuses an empty address of its own accord,
+	 * so a star drawn on this row and pressed would still emit nothing, and every
+	 * assertion above would hold with a star sitting on it.
+	 *
+	 * Asked of the delegate rather than of the browser, and of two rows carrying the
+	 * same words. A row's text is drawn in the same corner as its star and moves aside
+	 * to make room for one, so a picture of a real list differs in two ways at once and
+	 * neither can be read on its own. With the text held still the only thing that can
+	 * differ is the star.
+	 */
+	Qdc::FavouriteDelegate delegate(Qdc::FavouriteDelegate::BeforeTheText,
+	                                Qt::UserRole + 1, Qt::UserRole + 2);
+
+	QStandardItemModel rows(2, 1);
+
+	for (int n = 0; n < 2; n++)
+	{
+		rows.setData(rows.index(n, 0), QStringLiteral("A hub"), Qt::DisplayRole);
+		rows.setData(rows.index(n, 0), true, Qt::UserRole + 1);
+	}
+
+	/* The second is a hub and the first is the note, which is the whole difference. */
+	rows.setData(rows.index(1, 0), QStringLiteral("adc://192.0.2.60:412"),
+	             Qt::UserRole + 2);
+
+	const auto painted = [&](int n) {
+		QImage sheet(160, 32, QImage::Format_ARGB32_Premultiplied);
+		sheet.fill(Qt::white);
+
+		QStyleOptionViewItem shown;
+		shown.initFrom(list);
+		shown.rect = QRect(0, 0, sheet.width(), sheet.height());
+		shown.state &= ~QStyle::State_Selected;
+
+		QPainter painter(&sheet);
+		delegate.paint(&painter, shown, rows.index(n, 0));
+		painter.end();
+
+		return sheet;
+	};
+
+	const QImage without = painted(0);
+	const QImage with = painted(1);
+
+	QVERIFY2(without != with,
+	         "the note explaining an empty list was drawn exactly like a hub, so it was "
+	         "given a star to press");
 }
 
 void TestHubList::theStatusLineDrawsWhatASourceSaidAsText()
