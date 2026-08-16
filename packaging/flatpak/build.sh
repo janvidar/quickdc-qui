@@ -95,10 +95,13 @@ flatpak install --user --noninteractive --or-update flathub \
 #
 # A clean checkout, when one is asked for.
 #
-# Not `git clone --recursive`: the submodule URLs are relative and resolve
-# against the SSH remote, so each one is pointed back at the tree already on
-# this disk instead. That also means a nightly does not need network access to
-# anything but the runtime.
+# Not `git clone --recursive`: two of the three submodule URLs are relative and
+# resolve against the SSH remote, and exotic's is a GitHub one, so each is
+# pointed back at the tree already on this disk instead. That also means a
+# nightly does not need network access to anything but the runtime.
+#
+# One pass rather than one per level: the three are siblings, so there is no
+# inner checkout to descend into and init a second time.
 #
 if [ -n "$pristine" ]; then
 	stage="$root/build/flatpak-stage"
@@ -108,12 +111,17 @@ if [ -n "$pristine" ]; then
 	git -C "$stage" checkout --quiet "$pristine"
 
 	git -C "$stage" submodule --quiet init
-	git -C "$stage" config submodule.quickdc.url "$root/quickdc"
-	git -C "$stage" submodule --quiet update
 
-	git -C "$stage/quickdc" submodule --quiet init
-	git -C "$stage/quickdc" config submodule.samurai.url "$root/quickdc/samurai"
-	git -C "$stage/quickdc" submodule --quiet update
+	for module in exotic samurai quickdc; do
+		git -C "$stage" config "submodule.$module.url" "$root/$module"
+	done
+
+	# protocol.file.allow, because pointing a submodule at a path is exactly what
+	# git stopped allowing by default in 2.38.1 - CVE-2022-39253, where a
+	# submodule URL naming a local directory could be made to read one the
+	# cloner did not intend. Every URL here was just written a line above, so
+	# there is nothing here for that to reach.
+	git -C "$stage" -c protocol.file.allow=always submodule --quiet update
 
 	source_root="$stage"
 else

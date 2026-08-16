@@ -6,13 +6,26 @@ Connect file sharing networks.
 ## Building
 
 Qt 6.5 or newer, a C++20 compiler, and CMake 3.16 or newer. OpenSSL 3, zlib and
-bzip2 come from the `quickdc` submodule's dependencies.
+bzip2 are wanted by `samurai`, which the core is built on.
 
 ```sh
-git submodule update --init --recursive
+git submodule update --init
 cmake -S . -B build
 cmake --build build
 ctest --test-dir build
+```
+
+Three submodules, side by side rather than nested: `exotic` is the test
+framework, `samurai` the platform library the core is built on, and `quickdc`
+the core itself. Each is added once, from here, and each finds the ones it needs
+already present - so the init above does not need `--recursive`.
+
+That builds this project's own tests. The core's suite and samurai's are off by
+default, being some 1160 and 1170 tests against this project's 12; ask for
+either and it is built and run from the same build directory:
+
+```sh
+cmake -S . -B build -DQUICKDC_BUILD_TESTS=ON -DSAMURAI_BUILD_TESTS=ON
 ```
 
 `cmake -DCMAKE_PREFIX_PATH=/path/to/qt6` if Qt is somewhere CMake will not find

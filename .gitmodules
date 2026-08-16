@@ -1,3 +1,9 @@
+[submodule "exotic"]
+	path = exotic
+	url = https://github.com/janvidar/exotic.git
+[submodule "samurai"]
+	path = samurai
+	url = ../samurai.git
 [submodule "quickdc"]
 	path = quickdc
 	url = ../quickdc.git

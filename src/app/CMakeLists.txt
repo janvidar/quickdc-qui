@@ -35,7 +35,7 @@ if(APPLE)
     set(QUICKDC_QUI_BUNDLE_NAME "QuickDC")
     set(QUICKDC_QUI_ICNS_NAME "${QUICKDC_QUI_BUNDLE_NAME}")
 
-    set(icon_master ${CMAKE_SOURCE_DIR}/packaging/macos/icon.png)
+    set(icon_master ${PROJECT_SOURCE_DIR}/packaging/macos/icon.png)
     set(iconset ${CMAKE_CURRENT_BINARY_DIR}/${QUICKDC_QUI_ICNS_NAME}.iconset)
     set(icns ${CMAKE_CURRENT_BINARY_DIR}/${QUICKDC_QUI_ICNS_NAME}.icns)
 

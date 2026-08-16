@@ -112,14 +112,15 @@ modules:
       - -DQUICKDC_SANITIZE=OFF
       - -DQUICKDC_ALLOW_LOOPBACK_AUTH=OFF
     sources:
-      # A directory rather than a git source. The submodule URLs in .gitmodules
-      # are relative - ../quickdc.git, ../samurai.git - and resolve against an
-      # ssh:// remote that flatpak-builder has no key for, so a recursive clone
-      # is not available to it. A checkout already has all three trees.
+      # A directory rather than a git source. Two of the three submodule URLs in
+      # .gitmodules are relative - ../quickdc.git, ../samurai.git - and resolve
+      # against an ssh:// remote that flatpak-builder has no key for, so a
+      # recursive clone is not available to it. A checkout already has all four
+      # trees: this one and its three submodules, side by side.
       #
-      # .gitignore is empty and a dir source would not read it anyway, so this
-      # skip list is load-bearing: 6.5.3 alone is an aqtinstall Qt of some
-      # hundreds of megabytes, copied on every build.
+      # The skip list is load-bearing: a dir source does not read .gitignore, and
+      # 6.5.3 alone is an aqtinstall Qt of some hundreds of megabytes, copied on
+      # every build.
       #
       # .git is deliberately not skipped. It is small, the submodules' .git
       # files are relative pointers that survive the copy, and git is in the

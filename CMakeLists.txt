@@ -141,20 +141,66 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 # files that carry no Q_OBJECT, and scanning them all is wasted work.
 
 # ---------------------------------------------------------------------------
-# QuickDC core submodule
+# The submodules
+#
+# Three of them, side by side rather than nested, and added here in the order
+# they depend on each other. Each of them looks for what it needs already being
+# there before it goes looking for a checkout of its own, so adding them from
+# here is what makes this the one place any of them is added.
+#
+# Nested, exotic was reached for twice - once by QuickDC for its own .tcc suites
+# and once by samurai for its - from a directory inside samurai that QuickDC had
+# no business knowing the path of. Both would have defined the same targets, so
+# the two were kept apart by forcing samurai's tests off, and that is what made
+# the core's suite need a build directory of its own.
 # ---------------------------------------------------------------------------
 
-if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/quickdc/CMakeLists.txt)
-    message(FATAL_ERROR
-        "The quickdc submodule is not checked out. Run:\n"
-        "    git submodule update --init --recursive")
+foreach(module IN ITEMS exotic samurai quickdc)
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${module}/CMakeLists.txt)
+        message(FATAL_ERROR
+            "The ${module} submodule is not checked out. Run:\n"
+            "    git submodule update --init")
+    endif()
+endforeach()
+
+# The nested suites are off by default, because they are some 1160 and 1170 tests
+# against this build's 12 and a user interface build has no use for either. No
+# FORCE, unlike before: these are the subprojects' own cache variables and a
+# -D on the command line has already put its value in the cache by the time this
+# runs, so asking for them here is now possible rather than silently undone.
+set(QUICKDC_BUILD_TESTS OFF CACHE BOOL "Build the QuickDC test programs")
+set(SAMURAI_BUILD_TESTS OFF CACHE BOOL "Build the samurai test programs")
+
+# Declared here as well as in QuickDC, because samurai is configured before
+# QuickDC is and the two below are forwarded to it - read any earlier than this
+# and they would be empty, which is neither of the values they can take. QuickDC's
+# own option() calls find these already in the cache and leave them alone, so the
+# defaults and the help text stay that project's to state.
+option(QUICKDC_TRACE
+    "Compile in the QDBG/QNET/QHUB tracing subsystem (writes secrets to disk)" OFF)
+option(QUICKDC_SANITIZE
+    "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+# Samurai's flavour and its two PUBLIC usage requirements, set here because this
+# is the build that adds it and they have to be answered before it is configured.
+# QuickDC checks that the last two agree with its own rather than setting them,
+# since by then samurai has been configured and asking would be too late.
+set(SAMURAI_BUILD_STATIC ON  CACHE BOOL "Build the samurai static library" FORCE)
+set(SAMURAI_BUILD_SHARED OFF CACHE BOOL "Build the samurai shared library" FORCE)
+set(SAMURAI_SANITIZE ${QUICKDC_SANITIZE} CACHE BOOL "Build samurai with sanitizers" FORCE)
+set(SAMURAI_TRACE ${QUICKDC_TRACE} CACHE BOOL "Build samurai with tracing" FORCE)
+
+# Before anything that registers a test, so that ctest run from this build
+# directory sees every suite that was asked for rather than only this project's.
+enable_testing()
+
+# Only where something is going to build tests through it. It is a small C
+# library, but a build with no suite enabled has nothing to compile it for.
+if(QUICKDC_BUILD_TESTS OR SAMURAI_BUILD_TESTS)
+    add_subdirectory(exotic)
 endif()
 
-# The core's own test programs are ~30 executables that a user interface build
-# has no use for. FORCE because this is a cache variable owned by the quickdc
-# subproject.
-set(QUICKDC_BUILD_TESTS OFF CACHE BOOL "Build the QuickDC test programs" FORCE)
-
+add_subdirectory(samurai)
 add_subdirectory(quickdc)
 
 # ---------------------------------------------------------------------------
@@ -171,7 +217,6 @@ if(QUICKDC_QUI_INSTALL)
 endif()
 
 if(QUICKDC_QUI_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(tests)
 endif()
 

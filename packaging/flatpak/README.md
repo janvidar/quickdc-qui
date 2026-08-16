@@ -34,7 +34,7 @@ Nothing but `flatpak` itself. The first run of `build.sh` fills in the rest:
   exist, a bare `flatpak remote-info flathub …` becomes ambiguous and wants
   `--user` or `--system` to say which you meant.
 
-Nothing else is needed for the build itself. Both submodules compile in tree as
+Nothing else is needed for the build itself. The submodules compile in tree as
 static libraries, and OpenSSL, zlib and bzip2 come from the runtime, so the
 manifest has one module in it and fetches nothing.
 
@@ -91,12 +91,13 @@ experiments and all. That is what you want when you are testing a change, and
 the last thing you want in something handed to other people. `--pristine`
 clones into `build/flatpak-stage` and checks out the ref you name.
 
-It does not use `git clone --recursive`, and the reason is worth recording: the
-submodule URLs in `.gitmodules` are *relative* - `../quickdc.git`,
+It does not use `git clone --recursive`, and the reason is worth recording: two
+of the three submodule URLs in `.gitmodules` are *relative* - `../quickdc.git`,
 `../samurai.git` - so they resolve against whatever the superproject's remote
 is, which is an `ssh://` one. The script points each submodule at the copy
 already on this disk instead, which is both faster and means a nightly needs no
-network access beyond the runtime.
+network access beyond the runtime. The three are siblings, so it is one pass
+over them rather than one per level of nesting.
 
 **`--nightly`** writes `packaging/nightly-version.txt` containing something like
 
@@ -264,11 +265,13 @@ which `flatpak update` works like it does for anything else. The pieces:
 Nothing in this layout has to be redone, but four things are missing:
 
 - **A git-source manifest.** Flathub will not take `type: dir`; it wants
-  `type: git` with pinned commits, reachable anonymously. Because the submodule
-  URLs are relative and resolve against an SSH remote, that manifest has to
-  name all three repositories with absolute URLs and explicit `dest:` entries
-  (`quickdc`, `quickdc/samurai`), which bypasses `.gitmodules` altogether. It
-  also needs those repositories to be readable without credentials.
+  `type: git` with pinned commits, reachable anonymously. Because two of the
+  submodule URLs are relative and resolve against an SSH remote, that manifest
+  has to name all four repositories with absolute URLs and explicit `dest:`
+  entries (`exotic`, `samurai`, `quickdc`), which bypasses `.gitmodules`
+  altogether. Now that the three are siblings those are flat paths rather than
+  nested ones. It also needs those repositories to be readable without
+  credentials.
 - **A screenshot.** `appstreamcli validate` warns without one and checks that
   the URL resolves when it is allowed network access, which Flathub's run is.
 - **A real release history** rather than the single `type="development"` entry

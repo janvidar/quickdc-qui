@@ -107,8 +107,9 @@ fi
 
 #
 # A clean checkout, when one is asked for. Same reasoning as the Flatpak
-# script: the submodule URLs are relative and resolve against an ssh:// remote,
-# so each is pointed at the copy already on this disk.
+# script: the submodule URLs point at remotes this may have no credentials for,
+# so each is pointed at the copy already on this disk. The three are siblings,
+# so one pass over them is the whole of it.
 #
 if [ -n "$pristine" ]; then
 	stage="$root/build/macos-stage"
@@ -118,12 +119,15 @@ if [ -n "$pristine" ]; then
 	git -C "$stage" checkout --quiet "$pristine"
 
 	git -C "$stage" submodule --quiet init
-	git -C "$stage" config submodule.quickdc.url "$root/quickdc"
-	git -C "$stage" submodule --quiet update
 
-	git -C "$stage/quickdc" submodule --quiet init
-	git -C "$stage/quickdc" config submodule.samurai.url "$root/quickdc/samurai"
-	git -C "$stage/quickdc" submodule --quiet update
+	for module in exotic samurai quickdc; do
+		git -C "$stage" config "submodule.$module.url" "$root/$module"
+	done
+
+	# protocol.file.allow, for the reason the Flatpak script gives: git stopped
+	# allowing a submodule URL to name a local path by default in 2.38.1, and
+	# every URL here was written a line above.
+	git -C "$stage" -c protocol.file.allow=always submodule --quiet update
 
 	source_root="$stage"
 else
