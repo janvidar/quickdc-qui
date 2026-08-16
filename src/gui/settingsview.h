@@ -75,6 +75,7 @@ signals:
 private:
 	QWidget* buildIdentity();
 	QWidget* buildConnection();
+	QWidget* buildLocalHub();
 	QWidget* buildTransfers();
 	QWidget* buildSharing();
 	QWidget* buildChat();
@@ -128,6 +129,29 @@ private:
 	QSpinBox* m_slots;
 	QSpinBox* m_maxDownloads;
 	QSpinBox* m_chunkSize;
+
+	/*
+	 * The hub this program can run itself, off unless somebody turns it on.
+	 *
+	 * Everything below the switch is what the core's own local hub reads, and every
+	 * bound on them is the bound it clamps to - a figure it would quietly pull into
+	 * range is one this page should not have offered. The fields are held together by
+	 * 'm_localHubFields', which is enabled and disabled with the switch so that the
+	 * labels grey out with the values rather than standing over dead controls.
+	 */
+	QCheckBox* m_localHub;
+	QWidget* m_localHubFields;
+	QLineEdit* m_localHubName;
+	QLineEdit* m_localHubDescription;
+	QSpinBox* m_localHubUsers;
+	QSpinBox* m_localHubHistory;
+	QSpinBox* m_localHubPerAddress;
+	QSpinBox* m_localHubHandshakes;
+	QSpinBox* m_localHubHandshakeTimeout;
+	QSpinBox* m_localHubIdleTimeout;
+	QSpinBox* m_localHubLinger;
+	QSpinBox* m_localHubSendQueue;
+	QCheckBox* m_localHubCheckClaims;
 
 	QLineEdit* m_downloadDir;
 

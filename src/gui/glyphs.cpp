@@ -377,6 +377,35 @@ QPainterPath board_path()
 	return path;
 }
 
+/**
+ * Two units stacked with a light on each, for the hub this program runs itself.
+ *
+ * A machine, because the row it marks is the only hub in the list that is not
+ * somewhere else, and at fifteen pixels beside a speech bubble that has to be a
+ * different shape rather than the same shape with a mark on it.
+ *
+ * The lights are cut out of the units rather than drawn over them, so the glyph is
+ * one shape in one ink like its neighbours. That is a subpath filled odd-even, as
+ * with the gear's centre, which is why the caller must not switch to a winding fill.
+ */
+QPainterPath local_hub_path()
+{
+	QPainterPath units;
+	units.addRoundedRect(QRectF(3.0, 4.5, 18.0, 7.0), 2.0, 2.0);
+	units.addRoundedRect(QRectF(3.0, 13.0, 18.0, 7.0), 2.0, 2.0);
+
+	QPainterPath lights;
+	lights.addEllipse(QPointF(6.75, 8.0), 1.15, 1.15);
+	lights.addEllipse(QPointF(6.75, 16.5), 1.15, 1.15);
+
+	QPainterPath path;
+	path.addPath(units);
+	path.addPath(lights);
+	path.setFillRule(Qt::OddEvenFill);
+
+	return path;
+}
+
 /** A cross, for leaving a conversation. */
 QPainterPath close_path()
 {
@@ -409,6 +438,7 @@ QPainterPath glyph_path(Qdc::Glyph glyph)
 		case Qdc::Glyph::People:      return people_path();
 		case Qdc::Glyph::Close:       return close_path();
 		case Qdc::Glyph::Board:       return board_path();
+		case Qdc::Glyph::LocalHub:    return local_hub_path();
 		case Qdc::Glyph::Person:      return person_path();
 		case Qdc::Glyph::PersonOutline: return person_outline_path();
 	}

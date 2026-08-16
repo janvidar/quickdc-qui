@@ -78,6 +78,23 @@ const QString BOARDS_GROUP = QStringLiteral("Boards");
 /** Where this installation's own client id lives; see HubsView::ownCid(). */
 const QString USER_GROUP = QStringLiteral("User");
 
+/**
+ * The hub this program can run itself; see HubsView::reloadLocalHub().
+ *
+ * The group and the key are the core's own, so that the switch on the settings page,
+ * the row in this tree and the hub in the core are all reading one thing. Its address
+ * is not configured anywhere: the hub answers on the port this client already listens
+ * on, and a connection is sorted onto it by what the peer says first, so the port is
+ * read from the network settings rather than from a setting of the hub's own.
+ */
+const QString LOCAL_HUB_GROUP = QStringLiteral("Local hub");
+const QString LOCAL_HUB_ENABLED = QStringLiteral("Enabled");
+constexpr bool LOCAL_HUB_ENABLED_DEFAULT = false;
+
+const QString NETWORK_GROUP = QStringLiteral("Network");
+const QString NETWORK_PORT = QStringLiteral("Port");
+constexpr int NETWORK_PORT_DEFAULT = 1411;
+
 const QString BOARD_PREFETCH = QStringLiteral("Fetch a thread ahead");
 const QString BOARD_SERVE = QStringLiteral("Offer what I have read");
 const QString BOARD_KEEP = QStringLiteral("Keep posts for days");
@@ -488,6 +505,13 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 					reloadMediaPolicy();
 
 				if (group == BOARDS_GROUP) reloadBoardPolicy();
+
+				/*
+				 * The switch, and the port the hub answers on, which lives with the
+				 * client's own network settings because it is the same port.
+				 */
+				if (group == LOCAL_HUB_GROUP || group == NETWORK_GROUP)
+					reloadLocalHub();
 
 				/*
 				 * Which posts are this user's own, which the identity page can change
@@ -946,6 +970,16 @@ void Qdc::HubsView::saveSession()
 	const QStringList hubs = openHubs();
 
 	/*
+	 * All but the hub this program runs itself. Its row is there because the setting
+	 * says so, so recording it here would have it opened again at the next start
+	 * whether or not the setting still said so - and then closed a moment later, which
+	 * reads as a hub that failed. What is open *on* it is still written down below,
+	 * under its own address like any other hub's.
+	 */
+	QStringList remembered = hubs;
+	if (!m_localHubUrl.isEmpty()) remembered.removeAll(m_localHubUrl);
+
+	/*
 	 * The old entries go first. A list that has grown shorter would otherwise
 	 * leave the tail of the longer one behind it, and those hubs would be opened
 	 * again every time for ever.
@@ -960,12 +994,12 @@ void Qdc::HubsView::saveSession()
 	}
 
 	m_config->setNumber(ConfigStore::Application, WINDOWS_GROUP, WINDOWS_TOTAL,
-	                    static_cast<int>(hubs.size()));
+	                    static_cast<int>(remembered.size()));
 
-	for (int n = 0; n < hubs.size(); ++n)
+	for (int n = 0; n < remembered.size(); ++n)
 	{
 		m_config->setString(ConfigStore::Application, WINDOWS_GROUP,
-		                    WINDOWS_HUB + QString::number(n), hubs.at(n));
+		                    WINDOWS_HUB + QString::number(n), remembered.at(n));
 	}
 
 	m_config->save(ConfigStore::Application);
@@ -1071,6 +1105,18 @@ void Qdc::HubsView::restoreBoards(Entry& entry)
 bool Qdc::HubsView::restoreSession()
 {
 	if (!m_config) return false;
+
+	/*
+	 * The hub this program runs itself, before the hubs somebody left open and not
+	 * counted among them: its row is there because the setting says so, which is not
+	 * by itself a reason to bring this view forward over whatever the window is
+	 * showing.
+	 *
+	 * Here rather than in the constructor because opening a hub builds the board
+	 * bridge, which makes directories - and setBoardDirectory() is allowed to be
+	 * called after this view is built and before a hub is opened.
+	 */
+	reloadLocalHub();
 
 	const int total = m_config->getNumber(ConfigStore::Application, WINDOWS_GROUP,
 	                                      WINDOWS_TOTAL, 0);
@@ -2480,7 +2526,6 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 	const QString shown = RichText::displayText(pane->paneTitle());
 
 	item->setText(NameColumn, decorate(shown, pane->unreadCount()));
-	item->setToolTip(NameColumn, RichText::literalHtml(shown));
 
 	QFont face = item->font(NameColumn);
 	face.setBold(pane->unreadCount() > 0);
@@ -2489,9 +2534,28 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 	const RowKind kind = row_kind(item);
 	const qreal ratio = devicePixelRatioF();
 
-	item->setIcon(NameColumn, row_icon(kind_glyph(kind), ROW_GLYPH, ratio));
-
 	HubBridge* bridge = kind == RowKind::Hub ? pane->hub() : nullptr;
+
+	/*
+	 * The hub this program runs itself, which is the one row in this list that is not
+	 * somewhere else. Drawn as a machine rather than as the speech bubbles every other
+	 * hub gets, and said in the tooltip as well, because a shape says which row and
+	 * only words say why.
+	 *
+	 * Decided by the address rather than by anything the row carries, so that the mark
+	 * follows the setting: a row cannot be left claiming to be the built-in hub after
+	 * that hub has been switched off or moved to another port.
+	 */
+	const bool ownHub = bridge && !m_localHubUrl.isEmpty()
+	                 && bridge->url() == m_localHubUrl;
+
+	item->setIcon(NameColumn, row_icon(ownHub ? Glyph::LocalHub : kind_glyph(kind),
+	                                   ROW_GLYPH, ratio));
+
+	const QString about = ownHub ? tr("%1\nRunning on this computer").arg(shown)
+	                             : shown;
+
+	item->setToolTip(NameColumn, RichText::literalHtml(about));
 
 	/*
 	 * A padlock only while the connection is up, and it says what is true of that
@@ -2519,8 +2583,8 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 	 * being an item of its own with somewhere to put one.
 	 */
 	item->setToolTip(NameColumn, RichText::literalHtml(secure
-		? tr("%1\nEncrypted with TLS").arg(shown)
-		: tr("%1\nNot encrypted").arg(shown)));
+		? tr("%1\nEncrypted with TLS").arg(about)
+		: tr("%1\nNot encrypted").arg(about)));
 }
 
 void Qdc::HubsView::changeEvent(QEvent* event)
@@ -2703,6 +2767,67 @@ void Qdc::HubsView::reloadBoardPolicy()
 	 * one withdraws this client as a source for a post that may have no other copy.
 	 */
 	m_bulletins->evictNow();
+}
+
+QString Qdc::HubsView::localHubUrl() const
+{
+	const int port = m_config
+		? m_config->getNumber(ConfigStore::Application, NETWORK_GROUP, NETWORK_PORT,
+		                      NETWORK_PORT_DEFAULT)
+		: NETWORK_PORT_DEFAULT;
+
+	return HubBridge::normalisedUrl(QStringLiteral("adc://127.0.0.1:%1").arg(port));
+}
+
+void Qdc::HubsView::reloadLocalHub()
+{
+	if (!m_config) return;
+
+	const bool enabled = m_config->getBool(ConfigStore::Application, LOCAL_HUB_GROUP,
+	                                       LOCAL_HUB_ENABLED,
+	                                       LOCAL_HUB_ENABLED_DEFAULT);
+
+	const QString wanted = enabled ? localHubUrl() : QString();
+	if (wanted == m_localHubUrl) return;
+
+	/*
+	 * The old row goes first even when there is a new one to open. The two are the
+	 * same hub answering on a different port, and a list with both in it would say
+	 * this computer runs two.
+	 */
+	if (!m_localHubUrl.isEmpty())
+	{
+		const QString had = m_localHubUrl;
+
+		/* Cleared first, so that what closeHub() writes down is already the truth. */
+		m_localHubUrl.clear();
+		closeHub(had);
+	}
+
+	if (wanted.isEmpty()) return;
+
+	/*
+	 * And set before the hub is opened, because opening one draws its row - and a row
+	 * is marked by comparing against this, so a row drawn before it was set would be
+	 * drawn as somebody else's hub.
+	 */
+	m_localHubUrl = wanted;
+
+	if (!openHub(wanted))
+	{
+		m_localHubUrl.clear();
+		return;
+	}
+
+	/*
+	 * What was open on it last time. Done here rather than by restoreSession(), which
+	 * does this for the hubs it opens and does not open this one.
+	 */
+	if (Entry* entry = entryFor(wanted))
+	{
+		restoreConversations(*entry);
+		restoreBoards(*entry);
+	}
 }
 
 void Qdc::HubsView::applyBoardPolicy(const QString& hubUrl)

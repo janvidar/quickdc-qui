@@ -48,6 +48,16 @@ enum class Glyph {
 	Board,
 
 	/**
+	 * The hub this program runs itself, in the list of what is open.
+	 *
+	 * A machine rather than the speech bubbles every other hub is drawn as. It is
+	 * the one row in that list which is not somewhere else, and the difference has
+	 * to survive being drawn at fifteen pixels next to a bubble - which a bubble
+	 * with something added to it would not.
+	 */
+	LocalHub,
+
+	/**
 	 * One user, in a list of them.
 	 *
 	 * Two forms rather than two colours, as with the star: filled for somebody who

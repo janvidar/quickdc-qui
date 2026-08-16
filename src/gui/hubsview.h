@@ -562,6 +562,27 @@ private:
 	/** Hand one hub's board settings to the bridge that acts on them. */
 	void applyBoardPolicy(const QString& hubUrl);
 
+	/**
+	 * Open, close or move the row for the hub this program runs itself.
+	 *
+	 * That row is there because the setting says so rather than because anybody
+	 * opened it, so this is what decides it: called when the window comes up and
+	 * again whenever the settings are written.
+	 *
+	 * The address follows the client's own listening port, so a change to that port
+	 * moves the hub rather than leaving a row pointing at nothing.
+	 */
+	void reloadLocalHub();
+
+	/**
+	 * Where the built-in hub answers: this client's own port, on the loopback.
+	 *
+	 * The loopback rather than this machine's address on the network, and plaintext
+	 * rather than TLS: the connection never leaves the computer, so there is nothing
+	 * on the way to protect it from and no certificate anybody could check.
+	 */
+	QString localHubUrl() const;
+
 	/** Whether the rest of a thread is fetched when a post on this hub is opened. */
 	bool prefetchesOn(const QString& hubUrl) const;
 
@@ -677,6 +698,16 @@ private:
 	/** Hubs that have decided either of those for themselves. */
 	QHash<QString, bool> m_hubPrefetch;
 	QHash<QString, bool> m_hubServe;
+
+	/**
+	 * The address of the hub this program runs, while it is running one.
+	 *
+	 * Empty when the built-in hub is switched off, which is also what says that no row
+	 * in the tree is that hub - a row is marked by comparing against this rather than
+	 * by carrying anything of its own, so that the mark follows the setting and cannot
+	 * be left behind on a row after the hub it named has gone.
+	 */
+	QString m_localHubUrl;
 
 	QSplitter* m_split;
 	QTreeWidget* m_tree;

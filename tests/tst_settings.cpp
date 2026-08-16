@@ -53,6 +53,10 @@ private slots:
 	void boardsFetchNothingAheadUntilTheyAreTold();
 	void theBoardsPageSaysThatReadingAPostMayBeSeen();
 
+	void theLocalHubIsOffUntilItIsAskedFor();
+	void theLocalHubKeepsItsFiguresInTheUnitsTheCoreReads();
+	void theLocalHubPageSaysWhatTurningItOnDoes();
+
 private:
 	QString scratch(const QString& name) const;
 
@@ -555,6 +559,120 @@ void TestSettings::theBoardsPageSaysThatReadingAPostMayBeSeen()
 	/* And which hubs answer for nothing until they are told to. */
 	QVERIFY(page.contains(QStringLiteral("A hub you have not bookmarked offers "
 	                                     "nothing until you say so on that hub")));
+}
+
+void TestSettings::theLocalHubIsOffUntilItIsAskedFor()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Local hub");
+
+	/* Nothing written, so the form is showing what is really in force. */
+	m_config->remove(ConfigStore::Application, group, QStringLiteral("Enabled"));
+	m_config->save(ConfigStore::Application);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	QVERIFY(view.save());
+
+	/*
+	 * Off, and the default is asked for as true so that the answer cannot be right by
+	 * accident. Running a hub means this computer answering strangers, which is a
+	 * thing to be chosen rather than arrived at by installing the program.
+	 */
+	QCOMPARE(m_config->getBool(ConfigStore::Application, group,
+	                           QStringLiteral("Enabled"), true), false);
+
+	/*
+	 * And the rest of the page is what the core would have used anyway, so that
+	 * turning the hub on later does not also silently change how it behaves.
+	 */
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
+	                             QStringLiteral("Max users")), 128);
+	QCOMPARE(m_config->getString(ConfigStore::Application, group,
+	                             QStringLiteral("Name")),
+	         QStringLiteral("A QuickDC hub"));
+	QCOMPARE(m_config->getBool(ConfigStore::Application, group,
+	                           QStringLiteral("Check reachability claims"), false), true);
+}
+
+void TestSettings::theLocalHubKeepsItsFiguresInTheUnitsTheCoreReads()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Local hub");
+	const QString sendq = QStringLiteral("Max send queue bytes");
+
+	m_config->remove(ConfigStore::Application, group, sendq);
+	m_config->save(ConfigStore::Application);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	QVERIFY(view.save());
+
+	/* The core reads bytes, whatever the form shows; the default is 48 KiB of them. */
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, group, sendq), 48 * 1024);
+
+	m_config->setNumber(ConfigStore::Application, group, sendq, 96 * 1024);
+
+	view.load();
+	QVERIFY(view.save());
+
+	/*
+	 * Back in bytes, unchanged. A page that showed bytes as kibibytes and wrote them
+	 * back as kibibytes would divide the queue by a thousand every time it was saved.
+	 */
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, group, sendq), 96 * 1024);
+
+	/*
+	 * And a figure edited into the file outside the core's own clamp comes back as
+	 * what the hub will actually use, rather than as what was typed: a field that
+	 * accepts a number the program will not use is a field that lies about what it did.
+	 */
+	m_config->setNumber(ConfigStore::Application, group,
+	                    QStringLiteral("Max users"), 999999);
+
+	view.load();
+	QVERIFY(view.save());
+
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
+	                             QStringLiteral("Max users")), 65536);
+}
+
+void TestSettings::theLocalHubPageSaysWhatTurningItOnDoes()
+{
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	QStringList said;
+
+	for (const QLabel* label : view.findChildren<QLabel*>())
+		said.append(label->text());
+
+	const QString page = said.join(QLatin1Char('\n'));
+
+	/*
+	 * In words on the page rather than in a tooltip. This is the one switch in the
+	 * settings that makes the computer answer strangers, and none of what that means
+	 * can be worked out from the switch itself.
+	 */
+	QVERIFY2(page.contains(QStringLiteral("Anyone who can reach that port can join")),
+	         "the page does not say who can join a hub run here");
+
+	QVERIFY2(page.contains(QStringLiteral("there is no password")),
+	         "the page does not say that the hub has no password");
+
+	/* And that it shares the port the Connection tab sets, since there is no other. */
+	QVERIFY(page.contains(QStringLiteral("the same port this client already listens on")));
+
+	/* And that the switch acts at once, which a settings page does not usually promise. */
+	QVERIFY2(page.contains(QStringLiteral("applies it straight away")),
+	         "the page does not say that saving takes effect without a restart");
+
+	QVERIFY2(page.contains(QStringLiteral("disconnects whoever is on it")),
+	         "the page does not say what turning the hub off does to its users");
 }
 
 QTEST_MAIN(TestSettings)

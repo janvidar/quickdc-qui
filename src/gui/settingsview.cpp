@@ -50,6 +50,49 @@ const QString BOARD_KEEP = QStringLiteral("Keep posts for days");
 const QString BOARD_CACHE = QStringLiteral("Cache size");
 
 /**
+ * The hub this program can run itself.
+ *
+ * The group and every key are the core's own - see readConfiguration() in the local
+ * hub - so that this page and the hub are reading the same thing rather than two
+ * spellings of it. The hub answers on the port the Connection tab sets, so there is
+ * no port of its own here: a connection is sorted onto the hub by what the peer says
+ * first rather than by which socket it arrived on.
+ */
+const QString LOCAL_HUB = QStringLiteral("Local hub");
+const QString LOCAL_HUB_ENABLED = QStringLiteral("Enabled");
+const QString LOCAL_HUB_NAME = QStringLiteral("Name");
+const QString LOCAL_HUB_DESCRIPTION = QStringLiteral("Description");
+const QString LOCAL_HUB_USERS = QStringLiteral("Max users");
+const QString LOCAL_HUB_HISTORY = QStringLiteral("Max history");
+const QString LOCAL_HUB_SENDQ = QStringLiteral("Max send queue bytes");
+const QString LOCAL_HUB_PER_ADDRESS = QStringLiteral("Max connections per address");
+const QString LOCAL_HUB_HANDSHAKES = QStringLiteral("Max connections in handshake");
+const QString LOCAL_HUB_HANDSHAKE_TIMEOUT = QStringLiteral("Handshake timeout");
+const QString LOCAL_HUB_IDLE_TIMEOUT = QStringLiteral("Idle timeout");
+const QString LOCAL_HUB_LINGER = QStringLiteral("Linger timeout");
+const QString LOCAL_HUB_CHECK_CLAIMS = QStringLiteral("Check reachability claims");
+
+/**
+ * The core's own defaults for those, so an unset field shows what is really in force.
+ *
+ * Off is the one that is not merely a default: running a hub means answering
+ * strangers on this machine, which is a thing to be chosen rather than arrived at.
+ */
+constexpr bool LOCAL_HUB_ENABLED_DEFAULT = false;
+constexpr bool LOCAL_HUB_CHECK_CLAIMS_DEFAULT = true;
+constexpr int LOCAL_HUB_USERS_DEFAULT = 128;
+constexpr int LOCAL_HUB_HISTORY_DEFAULT = 50;
+constexpr int LOCAL_HUB_SENDQ_KIB_DEFAULT = 48;
+constexpr int LOCAL_HUB_PER_ADDRESS_DEFAULT = 8;
+constexpr int LOCAL_HUB_HANDSHAKES_DEFAULT = 32;
+constexpr int LOCAL_HUB_HANDSHAKE_TIMEOUT_DEFAULT = 30;
+constexpr int LOCAL_HUB_IDLE_TIMEOUT_DEFAULT = 900;
+constexpr int LOCAL_HUB_LINGER_DEFAULT = 30;
+
+const QString LOCAL_HUB_NAME_DEFAULT = QStringLiteral("A QuickDC hub");
+const QString LOCAL_HUB_DESCRIPTION_DEFAULT = QStringLiteral("My QuickDC hub");
+
+/**
  * The one group here that the core does not read.
  *
  * It stores a key outside the list above faithfully and then ignores it, which is
@@ -122,6 +165,7 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 	m_tabs->setDocumentMode(true);
 	m_tabs->addTab(makePage(buildIdentity()), tr("Identity"));
 	m_tabs->addTab(makePage(buildConnection()), tr("Connection"));
+	m_tabs->addTab(makePage(buildLocalHub()), tr("Local hub"));
 	m_tabs->addTab(makePage(buildTransfers()), tr("Transfers"));
 	m_tabs->addTab(makePage(buildSharing()), tr("Sharing"));
 	m_tabs->addTab(makePage(buildChat()), tr("Chat"));
@@ -253,6 +297,165 @@ QWidget* Qdc::SettingsView::buildConnection()
 	connect(m_address, &QLineEdit::textEdited, this, &SettingsView::markModified);
 	connect(m_mode, &QComboBox::currentIndexChanged, this, &SettingsView::markModified);
 	connect(m_port, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+
+	return page;
+}
+
+QWidget* Qdc::SettingsView::buildLocalHub()
+{
+	QWidget* page = new QWidget(this);
+
+	m_localHub = new QCheckBox(tr("Run a hub on this computer"), page);
+	m_localHub->setToolTip(tr("Answer as a hub on the port this client already "
+	                          "listens on, so that other people can connect here"));
+	connect(m_localHub, &QCheckBox::toggled, this, &SettingsView::markModified);
+
+	m_localHubFields = new QWidget(page);
+
+	m_localHubName = new QLineEdit(m_localHubFields);
+	m_localHubName->setMaxLength(63);
+	m_localHubName->setPlaceholderText(LOCAL_HUB_NAME_DEFAULT);
+	connect(m_localHubName, &QLineEdit::textEdited, this, &SettingsView::markModified);
+
+	m_localHubDescription = new QLineEdit(m_localHubFields);
+	m_localHubDescription->setMaxLength(255);
+	m_localHubDescription->setPlaceholderText(LOCAL_HUB_DESCRIPTION_DEFAULT);
+	connect(m_localHubDescription, &QLineEdit::textEdited,
+	        this, &SettingsView::markModified);
+
+	/**
+	 * Every range below is the core's own clamp. A figure outside it would be pulled
+	 * back into range by the hub without saying so, and a field that accepts a number
+	 * the program will not use is a field that lies about what it did.
+	 */
+	m_localHubUsers = new QSpinBox(m_localHubFields);
+	m_localHubUsers->setRange(1, 65536);
+	m_localHubUsers->setToolTip(tr("How many people may be on the hub at once"));
+	connect(m_localHubUsers, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+
+	m_localHubHistory = new QSpinBox(m_localHubFields);
+	m_localHubHistory->setRange(0, 65536);
+	m_localHubHistory->setSuffix(tr(" lines"));
+	m_localHubHistory->setSpecialValueText(tr("keep none"));
+	m_localHubHistory->setToolTip(tr("What somebody arriving is shown of what was "
+	                                 "said before they got here"));
+	connect(m_localHubHistory, &QSpinBox::valueChanged,
+	        this, &SettingsView::markModified);
+
+	m_localHubPerAddress = new QSpinBox(m_localHubFields);
+	m_localHubPerAddress->setRange(1, 65536);
+	m_localHubPerAddress->setToolTip(tr("Connections allowed from one address at a time"));
+	connect(m_localHubPerAddress, &QSpinBox::valueChanged,
+	        this, &SettingsView::markModified);
+
+	m_localHubHandshakes = new QSpinBox(m_localHubFields);
+	m_localHubHandshakes->setRange(1, 65536);
+	m_localHubHandshakes->setToolTip(tr("Connections allowed to sit part way through "
+	                                    "logging in at once"));
+	connect(m_localHubHandshakes, &QSpinBox::valueChanged,
+	        this, &SettingsView::markModified);
+
+	m_localHubHandshakeTimeout = new QSpinBox(m_localHubFields);
+	m_localHubHandshakeTimeout->setRange(0, 86400);
+	m_localHubHandshakeTimeout->setSuffix(tr(" seconds"));
+	m_localHubHandshakeTimeout->setSpecialValueText(tr("no limit"));
+	m_localHubHandshakeTimeout->setToolTip(tr("How long a connection may take over "
+	                                          "logging in before it is dropped"));
+	connect(m_localHubHandshakeTimeout, &QSpinBox::valueChanged,
+	        this, &SettingsView::markModified);
+
+	m_localHubIdleTimeout = new QSpinBox(m_localHubFields);
+	m_localHubIdleTimeout->setRange(0, 86400);
+	m_localHubIdleTimeout->setSuffix(tr(" seconds"));
+	m_localHubIdleTimeout->setSpecialValueText(tr("no limit"));
+	m_localHubIdleTimeout->setToolTip(tr("How long somebody logged in may be silent "
+	                                     "for before they are dropped"));
+	connect(m_localHubIdleTimeout, &QSpinBox::valueChanged,
+	        this, &SettingsView::markModified);
+
+	m_localHubLinger = new QSpinBox(m_localHubFields);
+	m_localHubLinger->setRange(0, 86400);
+	m_localHubLinger->setSuffix(tr(" seconds"));
+	m_localHubLinger->setSpecialValueText(tr("no limit"));
+	m_localHubLinger->setToolTip(tr("How long somebody being kicked is given to read "
+	                                "the reason before the connection goes anyway"));
+	connect(m_localHubLinger, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+
+	m_localHubSendQueue = new QSpinBox(m_localHubFields);
+
+	/* Shown in kibibytes and stored in bytes, the way the chunk size on Transfers is. */
+	m_localHubSendQueue->setRange(4, 16 * KIB);
+	m_localHubSendQueue->setSingleStep(4);
+	m_localHubSendQueue->setSuffix(tr(" KiB"));
+	m_localHubSendQueue->setToolTip(tr("How much may be waiting to go to one person "
+	                                   "before they are skipped for anything but the "
+	                                   "most important messages"));
+	connect(m_localHubSendQueue, &QSpinBox::valueChanged,
+	        this, &SettingsView::markModified);
+
+	m_localHubCheckClaims = new QCheckBox(
+		tr("Check that a client can be connected to"), m_localHubFields);
+	m_localHubCheckClaims->setToolTip(tr("Try the address somebody says they can be "
+	                                     "reached on, so that they can be told when "
+	                                     "they are wrong about it"));
+	connect(m_localHubCheckClaims, &QCheckBox::toggled,
+	        this, &SettingsView::markModified);
+
+	QFormLayout* form = new QFormLayout(m_localHubFields);
+	form->setContentsMargins(0, 0, 0, 0);
+	form->addRow(tr("Hub name"), m_localHubName);
+	form->addRow(tr("Description"), m_localHubDescription);
+	form->addRow(tr("Most people at once"), m_localHubUsers);
+	form->addRow(tr("Show new arrivals"), m_localHubHistory);
+	form->addRow(tr("From one address"), m_localHubPerAddress);
+	form->addRow(tr("Logging in at once"), m_localHubHandshakes);
+	form->addRow(tr("Allowed to log in for"), m_localHubHandshakeTimeout);
+	form->addRow(tr("Drop after silence of"), m_localHubIdleTimeout);
+	form->addRow(tr("After a kick, wait"), m_localHubLinger);
+	form->addRow(tr("Queue for one person"), m_localHubSendQueue);
+	form->addRow(QString(), m_localHubCheckClaims);
+
+	/* Greyed out with their labels rather than left standing over dead controls. */
+	connect(m_localHub, &QCheckBox::toggled, m_localHubFields, &QWidget::setEnabled);
+	m_localHubFields->setEnabled(m_localHub->isChecked());
+
+	QVBoxLayout* column = new QVBoxLayout(page);
+	column->addWidget(m_localHub);
+	column->addWidget(m_localHubFields);
+
+	/*
+	 * Said first, because it is the thing somebody would not think of: this is the
+	 * one switch on this page that makes the computer answer strangers. Everything
+	 * else here decides how QuickDC behaves towards hubs; this decides whether it is
+	 * one.
+	 */
+	column->addWidget(makeNote(tr(
+		"A hub here answers on the same port this client already listens on, which is "
+		"set on the Connection tab, so there is no separate address to give out. "
+		"Anyone who can reach that port can join, and there is no password: the hub "
+		"decides who may connect by address and by how many are already on it, and by "
+		"nothing else.")));
+
+	/*
+	 * Said because turning it off is a thing somebody will do while people are on it,
+	 * and because the switch acting at once is not what a settings page usually
+	 * promises.
+	 */
+	column->addWidget(makeNote(tr(
+		"Saving this page applies it straight away, without restarting. Turning the "
+		"hub off disconnects whoever is on it at the time.")));
+
+	/*
+	 * Said rather than left to be discovered: the hub can serve bulletin boards and
+	 * there is nothing on this page that sets one up, so somebody looking for the
+	 * boards of their own hub would otherwise conclude the feature is broken.
+	 */
+	column->addWidget(makeNote(tr(
+		"Bulletin boards on a hub run here are configured in the file rather than on "
+		"this page, one section per board, and a hub with none configured offers none. "
+		"The Boards tab is about the boards this client reads on other people's hubs.")));
+
+	column->addStretch(1);
 
 	return page;
 }
@@ -592,6 +795,52 @@ void Qdc::SettingsView::load()
 	m_downloadDir->setText(m_config->getString(ConfigStore::Application, DOWNLOADS,
 	                                           QStringLiteral("Directory")));
 
+	const QVariantHash localHub = m_config->readGroup(ConfigStore::Application, LOCAL_HUB, {
+		{LOCAL_HUB_ENABLED, LOCAL_HUB_ENABLED_DEFAULT},
+		{LOCAL_HUB_NAME, LOCAL_HUB_NAME_DEFAULT},
+		{LOCAL_HUB_DESCRIPTION, LOCAL_HUB_DESCRIPTION_DEFAULT},
+		{LOCAL_HUB_USERS, LOCAL_HUB_USERS_DEFAULT},
+		{LOCAL_HUB_HISTORY, LOCAL_HUB_HISTORY_DEFAULT},
+		{LOCAL_HUB_SENDQ, LOCAL_HUB_SENDQ_KIB_DEFAULT * KIB},
+		{LOCAL_HUB_PER_ADDRESS, LOCAL_HUB_PER_ADDRESS_DEFAULT},
+		{LOCAL_HUB_HANDSHAKES, LOCAL_HUB_HANDSHAKES_DEFAULT},
+		{LOCAL_HUB_HANDSHAKE_TIMEOUT, LOCAL_HUB_HANDSHAKE_TIMEOUT_DEFAULT},
+		{LOCAL_HUB_IDLE_TIMEOUT, LOCAL_HUB_IDLE_TIMEOUT_DEFAULT},
+		{LOCAL_HUB_LINGER, LOCAL_HUB_LINGER_DEFAULT},
+		{LOCAL_HUB_CHECK_CLAIMS, LOCAL_HUB_CHECK_CLAIMS_DEFAULT}
+	});
+
+	m_localHub->setChecked(localHub.value(LOCAL_HUB_ENABLED).toBool());
+
+	/*
+	 * Set from the switch rather than left to the toggled signal, which does not fire
+	 * for a value that has not changed - and the value has not changed on the load
+	 * that follows a save.
+	 */
+	m_localHubFields->setEnabled(m_localHub->isChecked());
+
+	m_localHubName->setText(localHub.value(LOCAL_HUB_NAME).toString());
+	m_localHubDescription->setText(localHub.value(LOCAL_HUB_DESCRIPTION).toString());
+
+	/*
+	 * Each pulled into the field's own range, which is the core's clamp: a figure
+	 * edited into the file by hand is shown as what the hub will do with it rather
+	 * than as what was typed.
+	 */
+	m_localHubUsers->setValue(localHub.value(LOCAL_HUB_USERS).toInt());
+	m_localHubHistory->setValue(localHub.value(LOCAL_HUB_HISTORY).toInt());
+	m_localHubPerAddress->setValue(localHub.value(LOCAL_HUB_PER_ADDRESS).toInt());
+	m_localHubHandshakes->setValue(localHub.value(LOCAL_HUB_HANDSHAKES).toInt());
+	m_localHubHandshakeTimeout->setValue(
+		localHub.value(LOCAL_HUB_HANDSHAKE_TIMEOUT).toInt());
+	m_localHubIdleTimeout->setValue(localHub.value(LOCAL_HUB_IDLE_TIMEOUT).toInt());
+	m_localHubLinger->setValue(localHub.value(LOCAL_HUB_LINGER).toInt());
+	m_localHubCheckClaims->setChecked(localHub.value(LOCAL_HUB_CHECK_CLAIMS).toBool());
+
+	/* Stored in bytes, shown in KiB. */
+	const int sendq = localHub.value(LOCAL_HUB_SENDQ).toInt();
+	m_localHubSendQueue->setValue(qMax(m_localHubSendQueue->minimum(), sendq / KIB));
+
 	const QVariantHash media = m_config->readGroup(ConfigStore::Application, CHAT_MEDIA, {
 		{QStringLiteral("Fetch automatically"), false},
 		{QStringLiteral("Maximum size"), 2 * MIB},
@@ -671,6 +920,31 @@ bool Qdc::SettingsView::save()
 
 	m_config->setString(ConfigStore::Application, DOWNLOADS,
 	                    QStringLiteral("Directory"), m_downloadDir->text().trimmed());
+
+	m_config->setBool(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_ENABLED,
+	                  m_localHub->isChecked());
+	m_config->setString(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_NAME,
+	                    m_localHubName->text().trimmed());
+	m_config->setString(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_DESCRIPTION,
+	                    m_localHubDescription->text().trimmed());
+	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_USERS,
+	                    m_localHubUsers->value());
+	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_HISTORY,
+	                    m_localHubHistory->value());
+	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_SENDQ,
+	                    m_localHubSendQueue->value() * KIB);
+	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_PER_ADDRESS,
+	                    m_localHubPerAddress->value());
+	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_HANDSHAKES,
+	                    m_localHubHandshakes->value());
+	m_config->setNumber(ConfigStore::Application, LOCAL_HUB,
+	                    LOCAL_HUB_HANDSHAKE_TIMEOUT, m_localHubHandshakeTimeout->value());
+	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_IDLE_TIMEOUT,
+	                    m_localHubIdleTimeout->value());
+	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_LINGER,
+	                    m_localHubLinger->value());
+	m_config->setBool(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_CHECK_CLAIMS,
+	                  m_localHubCheckClaims->isChecked());
 
 	m_config->setBool(ConfigStore::Application, CHAT_MEDIA,
 	                  QStringLiteral("Fetch automatically"), m_fetchMedia->isChecked());
