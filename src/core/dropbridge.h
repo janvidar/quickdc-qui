@@ -165,7 +165,7 @@ public:
 	 * get it but to measure again, which is a request to a third party for an
 	 * answer that is already in hand.
 	 */
-	ReachabilityVerdict verdict() const;
+	ReachabilityVerdict verdict(bool ipv6) const;
 
 	/**
 	 * Measure again, from the settings as they stand now.
@@ -234,7 +234,15 @@ private:
 	/** Where an event from the core lands; see Qdc::Relay. */
 	std::shared_ptr<Relay> m_relay;
 
-	ReachabilityVerdict m_verdict;
+	/**
+	 * One per family, because one run answers for one of them.
+	 *
+	 * Held apart rather than as the last verdict seen: the two arrive one after
+	 * the other, so a single slot would leave a page showing whichever finished
+	 * last and claiming it described the client.
+	 */
+	ReachabilityVerdict m_verdictV4;
+	ReachabilityVerdict m_verdictV6;
 };
 
 }

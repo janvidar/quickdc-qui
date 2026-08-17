@@ -7,6 +7,12 @@
 
 #include "view.h"
 
+/*
+ * For ReachabilityVerdict by value: this page keeps the last one seen for each
+ * family, since one run answers for one family and the page shows both at once.
+ */
+#include <core/dropbridge.h>
+
 #include <functional>
 
 class QCheckBox;
@@ -21,10 +27,7 @@ class QTabWidget;
 namespace Qdc {
 
 class ConfigBridge;
-class DropBridge;
 class Shares;
-
-struct ReachabilityVerdict;
 
 /**
  * The configuration, bound to the core's, a tab at a time.
@@ -188,6 +191,16 @@ private:
 	 * loading.
 	 */
 	void clearVerdict();
+
+	/**
+	 * The last verdict seen for each family, since one run answers for one.
+	 *
+	 * Kept here rather than drawn as they arrive, because the page shows both at
+	 * once and they arrive one after the other: rendering each on its own would
+	 * have the second wipe the first off a page claiming to describe the client.
+	 */
+	ReachabilityVerdict m_verdictV4;
+	ReachabilityVerdict m_verdictV6;
 
 	/** A note under a group, in the muted colour. */
 	QLabel* makeNote(const QString& text);

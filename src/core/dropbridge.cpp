@@ -173,7 +173,7 @@ protected:
 		const ReachabilityVerdict copied = convert(verdict);
 
 		report([copied](DropBridge* bridge) {
-			bridge->m_verdict = copied;
+			(copied.ipv6 ? bridge->m_verdictV6 : bridge->m_verdictV4) = copied;
 			emit bridge->verdictChanged(copied);
 		});
 	}
@@ -269,9 +269,9 @@ Qdc::DropBridge::~DropBridge()
 	});
 }
 
-Qdc::ReachabilityVerdict Qdc::DropBridge::verdict() const
+Qdc::ReachabilityVerdict Qdc::DropBridge::verdict(bool ipv6) const
 {
-	return m_verdict;
+	return ipv6 ? m_verdictV6 : m_verdictV4;
 }
 
 void Qdc::DropBridge::recheck()

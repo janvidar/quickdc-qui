@@ -228,7 +228,8 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge
 		connect(m_drop, &DropBridge::verdictChanged, this, &SettingsView::showVerdict);
 		connect(m_drop, &DropBridge::checkFailed, this, &SettingsView::showCheckFailed);
 
-		showVerdict(m_drop->verdict());
+		showVerdict(m_drop->verdict(false));
+		showVerdict(m_drop->verdict(true));
 
 		connect(m_dropCheck, &QPushButton::clicked, this, [this] {
 			m_dropAttempt->setText(tr("Checking…"));
@@ -1108,7 +1109,10 @@ void Qdc::SettingsView::clearVerdict()
 
 void Qdc::SettingsView::showVerdict(const ReachabilityVerdict& verdict)
 {
-	if (!verdict.ran)
+	if (verdict.ran)
+		(verdict.ipv6 ? m_verdictV6 : m_verdictV4) = verdict;
+
+	if (!m_verdictV4.ran && !m_verdictV6.ran)
 	{
 		clearVerdict();
 		return;
@@ -1117,62 +1121,95 @@ void Qdc::SettingsView::showVerdict(const ReachabilityVerdict& verdict)
 	m_dropAttempt->clear();
 	m_dropAttempt->setVisible(false);
 
-	const QString family = verdict.ipv6 ? tr("IPv6") : tr("IPv4");
+	QStringList addresses;
+	QStringList reachable;
+	QStringList explanation;
+	QStringList notes;
+	QDateTime oldest;
 
-	if (verdict.publicAddress.isEmpty())
-		m_dropAddress->setText(tr("not measured yet"));
-	else if (verdict.classification.isEmpty())
-		m_dropAddress->setText(tr("%1 (%2)").arg(verdict.publicAddress, family));
-	else
-		m_dropAddress->setText(tr("%1 (%2) — %3")
-			.arg(verdict.publicAddress, family, verdict.classification));
-
-	QString reachable;
-
-	switch (verdict.mode)
+	for (const ReachabilityVerdict* one : {&m_verdictV4, &m_verdictV6})
 	{
-		case ReachabilityMode::Active:
-			reachable = tr("yes, a connection from outside got in");
-			break;
+		const QString family = one->ipv6 ? tr("IPv6") : tr("IPv4");
 
-		case ReachabilityMode::Passive:
-			reachable = tr("no, nothing from outside got in");
-			break;
+		/*
+		 * A family nobody has measured says so, rather than being left out. Absent
+		 * from a page listing the other family reads as a family that failed, and
+		 * the two are not the same thing to somebody deciding what to change.
+		 */
+		if (!one->ran)
+		{
+			addresses += tr("%1: not measured").arg(family);
+			continue;
+		}
 
-		case ReachabilityMode::Unknown:
-			reachable = tr("nothing was established");
-			break;
+		if (one->publicAddress.isEmpty())
+			addresses += tr("%1: not measured").arg(family);
+		else if (one->classification.isEmpty())
+			addresses += tr("%1: %2").arg(family, one->publicAddress);
+		else
+			addresses += tr("%1: %2 — %3")
+				.arg(family, one->publicAddress, one->classification);
+
+		QString said;
+
+		switch (one->mode)
+		{
+			case ReachabilityMode::Active:
+				said = tr("yes, a connection from outside got in");
+				break;
+
+			case ReachabilityMode::Passive:
+				said = tr("no, nothing from outside got in");
+				break;
+
+			case ReachabilityMode::Unknown:
+				said = tr("nothing was established");
+				break;
+		}
+
+		QStringList ports;
+
+		if (!one->tcp.isEmpty())
+			ports += tr("TCP %1: %2").arg(one->port).arg(one->tcp);
+
+		if (!one->udp.isEmpty())
+			ports += tr("UDP %1: %2").arg(one->port).arg(one->udp);
+
+		if (!ports.isEmpty())
+			said += QStringLiteral(" — ") + ports.join(tr(", "));
+
+		reachable += tr("%1: %2").arg(family, said);
+
+		/*
+		 * The older of the two, because it is the one that says how much of this
+		 * page can still be relied on: a reader told the time of the newer would
+		 * be told the whole of it was that fresh.
+		 */
+		if (one->observedAt.isValid() && (!oldest.isValid() || one->observedAt < oldest))
+			oldest = one->observedAt;
+
+		if (!one->reason.isEmpty()) explanation += tr("%1: %2").arg(family, one->reason);
+
+		for (const QString& remedy : one->remedies)
+			explanation += QStringLiteral("• ") + remedy;
+
+		if (!one->note.isEmpty()) notes += one->note;
 	}
 
-	QStringList ports;
+	m_dropAddress->setText(addresses.join(QLatin1Char('\n')));
+	m_dropReachable->setText(reachable.isEmpty() ? tr("not measured yet")
+	                                             : reachable.join(QLatin1Char('\n')));
 
-	if (!verdict.tcp.isEmpty())
-		ports += tr("TCP %1: %2").arg(verdict.port).arg(verdict.tcp);
-
-	if (!verdict.udp.isEmpty())
-		ports += tr("UDP %1: %2").arg(verdict.port).arg(verdict.udp);
-
-	if (!ports.isEmpty())
-		reachable += QStringLiteral(" — ") + ports.join(tr(", "));
-
-	m_dropReachable->setText(reachable);
-
-	m_dropChecked->setText(verdict.observedAt.isValid()
-		? QLocale().toString(verdict.observedAt, QLocale::ShortFormat)
+	m_dropChecked->setText(oldest.isValid()
+		? QLocale().toString(oldest, QLocale::ShortFormat)
 		: tr("never"));
-
-	QStringList explanation;
-
-	if (!verdict.reason.isEmpty()) explanation += verdict.reason;
-
-	for (const QString& remedy : verdict.remedies)
-		explanation += QStringLiteral("• ") + remedy;
 
 	m_dropReason->setText(explanation.join(QLatin1Char('\n')));
 	m_dropReason->setVisible(!explanation.isEmpty());
 
-	m_dropNote->setText(verdict.note);
-	m_dropNote->setVisible(!verdict.note.isEmpty());
+	notes.removeDuplicates();
+	m_dropNote->setText(notes.join(QLatin1Char('\n')));
+	m_dropNote->setVisible(!notes.isEmpty());
 }
 
 void Qdc::SettingsView::showCheckFailed(const QString& reason)
