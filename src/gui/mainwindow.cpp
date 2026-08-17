@@ -173,8 +173,10 @@ Qdc::MainWindow::~MainWindow()
 {
 	/*
 	 * The bridges have to be gone before the core thread stops, because each one
-	 * unregisters something from the core as it goes and blocks until that has
-	 * happened. They are children of this window, so ~QObject would destroy them
+	 * unregisters something from the core as it goes, and the job that does it has
+	 * to be able to run - CoreThread::shutdown() drains what is already queued, so
+	 * a bridge destroyed after the thread has stopped never unregisters at all.
+	 * They are children of this window, so ~QObject would destroy them
 	 * anyway - but only after this body has run, and a subclass member destroyed
 	 * before then could take a view with it that is still connected to one.
 	 * Doing it here fixes the order rather than relying on it.

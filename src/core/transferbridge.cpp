@@ -761,8 +761,8 @@ void Qdc::TransferBridge::setPriority(const QString& filename, Priority priority
 	 *
 	 * The captures are by value because the job outlives this call.
 	 */
-	m_thread->post([this, name, priority] {
-		QuickDC::Core* core = m_thread->core();
+	m_thread->post([thread = m_thread, name, priority] {
+		QuickDC::Core* core = thread->core();
 		if (!core || !core->queue) return;
 
 		if (QuickDC::QueueFile* file = core->queue->getFileByName(name.constData()))
@@ -782,8 +782,8 @@ void Qdc::TransferBridge::removeFromQueue(const QString& filename, bool deletePa
 
 	const QByteArray name = filename.toUtf8();
 
-	m_thread->post([this, name, deletePartial] {
-		QuickDC::Core* core = m_thread->core();
+	m_thread->post([thread = m_thread, name, deletePartial] {
+		QuickDC::Core* core = thread->core();
 		if (!core || !core->queue) return;
 
 		QuickDC::QueueFile* file = core->queue->getFileByName(name.constData());
@@ -816,8 +816,8 @@ void Qdc::TransferBridge::enqueue(const QString& filename, const QString& tth,
 	 * is queued from the message path, so waiting here stopped the interface once per
 	 * message on a hub where people send pictures.
 	 */
-	m_thread->post([this, name, hash, size] {
-		QuickDC::Core* core = m_thread->core();
+	m_thread->post([thread = m_thread, name, hash, size] {
+		QuickDC::Core* core = thread->core();
 		if (!core || !core->queue) return;
 
 		core->queue->add(name.constData(),
@@ -837,8 +837,8 @@ void Qdc::TransferBridge::enqueueForReading(const QString& filename,
 	const QByteArray hash = tth.toUtf8();
 	const QByteArray only = hubUrl.toUtf8();
 
-	m_thread->post([this, name, hash, size, only] {
-		QuickDC::Core* core = m_thread->core();
+	m_thread->post([thread = m_thread, name, hash, size, only] {
+		QuickDC::Core* core = thread->core();
 		if (!core || !core->queue) return;
 
 		QuickDC::QueueFile* file =
@@ -873,8 +873,8 @@ void Qdc::TransferBridge::addFallbackSource(const QString& tth,
 	const QByteArray hub = hubUrl.toUtf8();
 	const QByteArray user = cid.toUtf8();
 
-	m_thread->post([this, hash, hub, user] {
-		QuickDC::Core* core = m_thread->core();
+	m_thread->post([thread = m_thread, hash, hub, user] {
+		QuickDC::Core* core = thread->core();
 		if (!core || !core->queue) return;
 
 		QuickDC::QueueFile* file = core->queue->getFileByTTH(hash.constData());
@@ -907,8 +907,8 @@ void Qdc::TransferBridge::enqueue(const QString& filename, const Qdc::SearchHit&
 	const QByteArray remote = hit.name.toUtf8();
 	const quint64 size = hit.size;
 
-	m_thread->post([this, name, hash, hub, source, remote, size] {
-		QuickDC::Core* core = m_thread->core();
+	m_thread->post([thread = m_thread, name, hash, hub, source, remote, size] {
+		QuickDC::Core* core = thread->core();
 		if (!core || !core->queue) return;
 
 		QuickDC::QueueFile* file = core->queue->add(
