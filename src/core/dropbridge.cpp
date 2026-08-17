@@ -157,7 +157,13 @@ public:
 		(void) server;
 		(void) port;
 
-		if (!QuickDC::startDropCheck())
+		/*
+		 * IPv4 only from here, which starts the sequence rather than being all
+		 * of it: the core runs the other family once this one has finished, one
+		 * check having one session and one armed window. Both verdicts arrive
+		 * through this same listener as they are established.
+		 */
+		if (!QuickDC::startDropCheck(false))
 			return;
 	}
 
@@ -240,8 +246,12 @@ Qdc::DropBridge::DropBridge(CoreThread* thread, QObject* parent)
 
 		QuickDC::setDropCheckListener(holder->watcher);
 
-		const QuickDC::DropVerdict known = QuickDC::lastDropVerdict();
-		if (known.ran) holder->watcher->replay(known);
+		/* Both families, since either may have been measured before this existed. */
+		for (const bool ipv6 : {false, true})
+		{
+			const QuickDC::DropVerdict known = QuickDC::lastDropVerdict(ipv6);
+			if (known.ran) holder->watcher->replay(known);
+		}
 	});
 }
 
