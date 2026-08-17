@@ -43,11 +43,13 @@
  * Finding a hub: the public lists, the cache under them, and the two stores of
  * hubs somebody has already been to or kept.
  *
- * Nothing here reaches the network, and that is deliberate rather than incidental:
- * every source in these tests is either given no core to fetch with or has its list
- * put into the cache directly, which is what HubDirectory::cacheFileFor() is public
- * for. The one thing that cannot be tested without a server - a hublist coming off
- * a socket - is the core's own, and the core tests it.
+ * Nothing here reaches a name server or another host, and that is deliberate rather
+ * than incidental: every source in these tests is either given no core to fetch with
+ * or has its list put into the cache directly, which is what HubDirectory::cacheFileFor()
+ * is public for. The one exception knocks on a closed port of the loopback address on
+ * purpose, because a download failing inside the core is the only way to see what the
+ * core says to a view when one does. A hublist that arrives whole needs a server, so
+ * that half is the core's to test and the core tests it.
  *
  * What a list says is a stranger's text, so how it is drawn belongs here too: the
  * status line under the table, the rows of the two other tabs, and the header of a
@@ -73,6 +75,7 @@ private slots:
 
 	void aBadAddressIsRefusedWithoutTheCore();
 	void aFetchWithoutACoreSaysSo();
+	void aRefusedConnectionFailsThroughTheCore();
 
 	void theModelSortsOnNumbersAndFiltersOnEveryColumn();
 
@@ -537,6 +540,59 @@ void TestHubList::aFetchWithoutACoreSaysSo()
 	QCOMPARE(failures.at(0).at(0).toString(),
 	         QStringLiteral("https://lists.example.org/hublist.xml.bz2"));
 	QVERIFY(failures.at(0).at(1).toString().contains(QStringLiteral("core")));
+}
+
+void TestHubList::aRefusedConnectionFailsThroughTheCore()
+{
+	/*
+	 * A download that fails inside the core, which in an ordinary run is the only
+	 * thing that reaches HubListFetch::report() at all - and so the only closure
+	 * carried from the core thread to this one.
+	 *
+	 * Port 1 of the loopback address, so this fails by connection refused within a
+	 * moment: nothing listens there, and a literal address is never handed to a
+	 * resolver, which keeps the suite offline and quick.
+	 *
+	 * Worth being exact about what this does not cover. The abort that made
+	 * HubListFetch::report() a template was only ever seen on the other failure -
+	 * a name that cannot be looked up - and does not reproduce through a refused
+	 * connection however many times it is run. So this pins the reporting path and
+	 * the sentence it produces, and nothing about that abort. Covering it would
+	 * mean a test that depends on name resolution and still only fails about two
+	 * runs in three, which is not a test this suite should carry.
+	 */
+	Qdc::HubListBridge bridge(m_thread);
+
+	const QString url = QStringLiteral("http://127.0.0.1:1/hublist.xml");
+
+	QSignalSpy failures(&bridge, &Qdc::HubListBridge::failed);
+	QVERIFY(failures.isValid());
+
+	bridge.fetch(url);
+
+	/* Off to the core rather than refused here, which is the difference that makes
+	   this a test of the path above. */
+	QVERIFY(bridge.isFetching(url));
+
+	/* Bounded, and generous next to a connect to a port on this machine, so nothing
+	   arriving fails the test instead of hanging it. */
+	QVERIFY2(failures.wait(15000),
+	         "the core never reported the refused download as failed");
+
+	QCOMPARE(failures.count(), 1);
+	QCOMPARE(failures.at(0).at(0).toString(), url);
+
+	/*
+	 * The wording the core side half puts in front of the core's own reason, asserted
+	 * because HubListBridge::fetch() answers an address it will not use with a reason
+	 * of its own - and an answer from there would say nothing about a closure crossing
+	 * a thread.
+	 */
+	QVERIFY2(failures.at(0).at(1).toString()
+			.contains(QStringLiteral("could not be fetched")),
+	         qPrintable(failures.at(0).at(1).toString()));
+
+	QVERIFY(!bridge.isFetching());
 }
 
 void TestHubList::theModelSortsOnNumbersAndFiltersOnEveryColumn()

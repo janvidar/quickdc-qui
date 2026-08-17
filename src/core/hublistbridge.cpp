@@ -96,8 +96,6 @@ public:
 	}
 
 private:
-	using Work = std::function<void(HubListBridge*)>;
-
 	void fail(const QString& reason)
 	{
 		report([reason, url = m_url](HubListBridge* bridge) {
@@ -105,6 +103,30 @@ private:
 		});
 	}
 
+	/**
+	 * Run 'work' on the bridge's thread.
+	 *
+	 * Addressed to the relay rather than to the bridge, and the relay is held by
+	 * the closure: an event may be in flight when the bridge is destroyed, and
+	 * there is no way to test a bridge pointer for that from this thread. The
+	 * relay is detached instead, which is what turns 'work' into nothing.
+	 *
+	 * A template over the callable rather than a std::function, and that is not a
+	 * matter of taste. Held as a std::function this aborted the process: on the
+	 * path where a source fails to resolve, the function was observed valid on
+	 * entry here and empty by the time the queued call ran on the other thread,
+	 * so calling it threw bad_function_call. Measured over twenty starts against
+	 * a hublist whose host does not resolve, it aborted fourteen times as a
+	 * std::function and none as a template.
+	 *
+	 * Why the function ends up empty is not established - only that a
+	 * std::function has an empty state to end up in, that this is the one shape
+	 * in which it happened, and that the other bridges have always held their
+	 * callable by its own type. It is worth knowing that a source failing to
+	 * connect rather than to resolve does not show it, so a reproduction has to
+	 * go through a name that cannot be looked up.
+	 */
+	template<typename Work>
 	void report(Work work)
 	{
 		HubListBridge* bridge = m_bridge;
