@@ -173,7 +173,8 @@ QStringList Qdc::HubDirectory::defaultSources()
 	 */
 	return {
 		QStringLiteral("https://dchublist.org/hublist.xml.bz2"),
-		QStringLiteral("https://te-home.net/?do=hublist&get=hublist.xml.bz2")
+		QStringLiteral("https://te-home.net/?do=hublist&get=hublist.xml.bz2"),
+		QStringLiteral("https://hublist.eu/hublist.xml.bz2")
 	};
 }
 
