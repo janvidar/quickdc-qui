@@ -1935,8 +1935,17 @@ void TestHubs::emojiPickerGivesEveryEmojiRoomToDraw()
 	bool ragged = false;
 	QSize uniform;
 
-	/* The picker is a menu and runs its own event loop, so the looking happens inside. */
-	QTimer::singleShot(100, [&] {
+	/*
+	 * The picker is a menu and runs its own event loop, so the looking happens
+	 * inside. Scoped for a second reason as well as the net's: this one reads the
+	 * locals above by reference, and in exactly the case the net exists for - a
+	 * picker that never opened - click() returns at once and the frame those live
+	 * in is gone before a single shot would fire.
+	 */
+	QTimer look;
+	look.setSingleShot(true);
+
+	QObject::connect(&look, &QTimer::timeout, [&] {
 		QMenu* menu = nullptr;
 
 		for (QWidget* top : QApplication::topLevelWidgets())
@@ -1971,11 +1980,24 @@ void TestHubs::emojiPickerGivesEveryEmojiRoomToDraw()
 		menu->close();
 	});
 
-	/* So the test cannot hang in the menu's loop if the picker never appeared. */
-	QTimer::singleShot(4000, [] {
+	look.start(100);
+
+	/*
+	 * So the test cannot hang in the menu's loop if the picker never appeared, and
+	 * scoped to this test rather than left running: a single shot cannot be
+	 * cancelled, and one that outlives the picker closes whatever menu a later test
+	 * has open - which is a board row's menu two tests further on, failing an
+	 * assertion about boards for a reason that lives here.
+	 */
+	QTimer net;
+	net.setSingleShot(true);
+
+	QObject::connect(&net, &QTimer::timeout, [] {
 		for (QWidget* top : QApplication::topLevelWidgets())
 			if (QMenu* menu = qobject_cast<QMenu*>(top)) menu->close();
 	});
+
+	net.start(4000);
 
 	opener->click();
 
