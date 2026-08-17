@@ -95,12 +95,13 @@ flatpak install --user --noninteractive --or-update flathub \
 #
 # A clean checkout, when one is asked for.
 #
-# Not `git clone --recursive`: two of the three submodule URLs are relative and
-# resolve against the SSH remote, and exotic's is a GitHub one, so each is
-# pointed back at the tree already on this disk instead. That also means a
-# nightly does not need network access to anything but the runtime.
+# Not `git clone --recursive`: every submodule URL is relative and resolves
+# against whichever remote this was cloned from, which is one this may have no
+# credentials for, so each is pointed back at the tree already on this disk
+# instead. That also means a nightly does not need network access to anything
+# but the runtime.
 #
-# One pass rather than one per level: the three are siblings, so there is no
+# One pass rather than one per level: the four are siblings, so there is no
 # inner checkout to descend into and init a second time.
 #
 if [ -n "$pristine" ]; then
@@ -112,7 +113,7 @@ if [ -n "$pristine" ]; then
 
 	git -C "$stage" submodule --quiet init
 
-	for module in exotic samurai quickdc; do
+	for module in exotic samurai libdrop-cpp quickdc; do
 		git -C "$stage" config "submodule.$module.url" "$root/$module"
 	done
 

@@ -78,11 +78,11 @@ finish-args:
 # portal, and a portal needs no permission at all.
 
 cleanup:
-  # The two vendored libraries install themselves: a static archive each, the
-  # whole of their headers, and a CMake package. Those rules are unconditional
-  # and nothing in /app consumes any of it - this build links both libraries
-  # into the one executable - so it is swept up here rather than by patching a
-  # pinned submodule.
+  # The submodules install themselves: a static archive each, the whole of their
+  # headers, and in two cases a CMake package. Those rules are unconditional and
+  # nothing in /app consumes any of it - what this executable uses is linked into
+  # it, and libdrop-cpp is built but not yet linked by anything - so it is swept
+  # up here rather than by patching a pinned submodule.
   #
   # Not /lib/debug: that is where flatpak-builder stages the .Debug extension.
   - /include
@@ -113,11 +113,11 @@ modules:
       - -DQUICKDC_ALLOW_LOOPBACK_AUTH=OFF
     sources:
       # A directory rather than a git source. Every submodule URL in .gitmodules
-      # is relative - ../exotic.git, ../samurai.git, ../quickdc.git - so they
-      # resolve against whichever host this was cloned from, and here that is an
-      # ssh:// remote flatpak-builder has no key for. A recursive clone is
-      # therefore not available to it, and a checkout already has all four trees:
-      # this one and its three submodules, side by side.
+      # is relative - ../exotic.git, ../samurai.git, ../libdrop-cpp.git,
+      # ../quickdc.git - so they resolve against whichever host this was cloned
+      # from, and here that is an ssh:// remote flatpak-builder has no key for. A
+      # recursive clone is therefore not available to it, and a checkout already
+      # has all five trees: this one and its four submodules, side by side.
       #
       # The skip list is load-bearing: a dir source does not read .gitignore, and
       # 6.5.3 alone is an aqtinstall Qt of some hundreds of megabytes, copied on

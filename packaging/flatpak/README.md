@@ -93,10 +93,11 @@ clones into `build/flatpak-stage` and checks out the ref you name.
 
 It does not use `git clone --recursive`, and the reason is worth recording: every
 submodule URL in `.gitmodules` is *relative* - `../exotic.git`, `../samurai.git`,
-`../quickdc.git` - so they resolve against whatever the superproject's remote is,
+`../libdrop-cpp.git`, `../quickdc.git` - so they resolve against whatever the
+superproject's remote is,
 which here is an `ssh://` one. The script points each submodule at the copy
 already on this disk instead, which is both faster and means a nightly needs no
-network access beyond the runtime. The three are siblings, so it is one pass
+network access beyond the runtime. The four are siblings, so it is one pass
 over them rather than one per level of nesting.
 
 **`--nightly`** writes `packaging/nightly-version.txt` containing something like
@@ -265,11 +266,11 @@ which `flatpak update` works like it does for anything else. The pieces:
 Nothing in this layout has to be redone, but four things are missing:
 
 - **A git-source manifest.** Flathub will not take `type: dir`; it wants
-  `type: git` with pinned commits, reachable anonymously. Because two of the
-  submodule URLs are relative and resolve against an SSH remote, that manifest
-  has to name all four repositories with absolute URLs and explicit `dest:`
-  entries (`exotic`, `samurai`, `quickdc`), which bypasses `.gitmodules`
-  altogether. Now that the three are siblings those are flat paths rather than
+  `type: git` with pinned commits, reachable anonymously. Because the submodule
+  URLs are relative and resolve against an SSH remote, that manifest has to name
+  all five repositories with absolute URLs and explicit `dest:` entries
+  (`exotic`, `samurai`, `libdrop-cpp`, `quickdc`), which bypasses `.gitmodules`
+  altogether. Now that the four are siblings those are flat paths rather than
   nested ones. It also needs those repositories to be readable without
   credentials.
 - **A screenshot.** `appstreamcli validate` warns without one and checks that

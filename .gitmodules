@@ -4,6 +4,9 @@
 [submodule "samurai"]
 	path = samurai
 	url = ../samurai.git
+[submodule "libdrop-cpp"]
+	path = libdrop-cpp
+	url = ../libdrop-cpp.git
 [submodule "quickdc"]
 	path = quickdc
 	url = ../quickdc.git

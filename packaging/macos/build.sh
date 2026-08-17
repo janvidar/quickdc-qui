@@ -108,7 +108,7 @@ fi
 #
 # A clean checkout, when one is asked for. Same reasoning as the Flatpak
 # script: the submodule URLs point at remotes this may have no credentials for,
-# so each is pointed at the copy already on this disk. The three are siblings,
+# so each is pointed at the copy already on this disk. The four are siblings,
 # so one pass over them is the whole of it.
 #
 if [ -n "$pristine" ]; then
@@ -120,7 +120,7 @@ if [ -n "$pristine" ]; then
 
 	git -C "$stage" submodule --quiet init
 
-	for module in exotic samurai quickdc; do
+	for module in exotic samurai libdrop-cpp quickdc; do
 		git -C "$stage" config "submodule.$module.url" "$root/$module"
 	done
 

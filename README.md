@@ -15,24 +15,30 @@ cmake --build build
 ctest --test-dir build
 ```
 
-Three submodules, side by side rather than nested: `exotic` is the test
-framework, `samurai` the platform library the core is built on, and `quickdc`
-the core itself. Each is added once, from here, and each finds the ones it needs
-already present - so the init above does not need `--recursive`.
+Four submodules, side by side rather than nested: `exotic` is the test
+framework, `samurai` the platform library the core is built on, `libdrop-cpp`
+the NAT and firewall detection built on samurai, and `quickdc` the core itself.
+Each is added once, from here, and each finds the ones it needs already present -
+so the init above does not need `--recursive`.
 
-All three are named relatively, as `../exotic.git` and so on, so they are
+All four are named relatively, as `../exotic.git` and so on, so they are
 fetched from whichever host this repository was cloned from and never from a
 host named in a file. A clone from the staging remote takes its submodules from
 there and a clone from the public one takes them from there, without either
 having to be told which it is.
 
-That builds this project's own tests. The core's suite and samurai's are off by
-default, being some 1160 and 1170 tests against this project's 12; ask for
-either and it is built and run from the same build directory:
+That builds this project's own tests. The other suites are off by default - the
+core's and samurai's are some 1160 and 1170 tests against this project's 12 -
+and any of them is built and run from the same build directory when asked for:
 
 ```sh
-cmake -S . -B build -DQUICKDC_BUILD_TESTS=ON -DSAMURAI_BUILD_TESTS=ON
+cmake -S . -B build -DQUICKDC_BUILD_TESTS=ON \
+                    -DSAMURAI_BUILD_TESTS=ON \
+                    -DDROP_BUILD_TESTS=ON
 ```
+
+`-DDROP_BUILD_TOOLS=ON` additionally builds `dropcheck`, which reports what a
+NAT does from a terminal.
 
 `cmake -DCMAKE_PREFIX_PATH=/path/to/qt6` if Qt is somewhere CMake will not find
 by itself.

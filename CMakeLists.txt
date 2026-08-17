@@ -143,7 +143,7 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 # ---------------------------------------------------------------------------
 # The submodules
 #
-# Three of them, side by side rather than nested, and added here in the order
+# Four of them, side by side rather than nested, and added here in the order
 # they depend on each other. Each of them looks for what it needs already being
 # there before it goes looking for a checkout of its own, so adding them from
 # here is what makes this the one place any of them is added.
@@ -155,7 +155,7 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 # the core's suite need a build directory of its own.
 # ---------------------------------------------------------------------------
 
-foreach(module IN ITEMS exotic samurai quickdc)
+foreach(module IN ITEMS exotic samurai libdrop-cpp quickdc)
     if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${module}/CMakeLists.txt)
         message(FATAL_ERROR
             "The ${module} submodule is not checked out. Run:\n"
@@ -170,6 +170,11 @@ endforeach()
 # runs, so asking for them here is now possible rather than silently undone.
 set(QUICKDC_BUILD_TESTS OFF CACHE BOOL "Build the QuickDC test programs")
 set(SAMURAI_BUILD_TESTS OFF CACHE BOOL "Build the samurai test programs")
+set(DROP_BUILD_TESTS OFF CACHE BOOL "Build the libdrop-cpp test suite")
+
+# And its command line tool, which diagnoses a NAT from a terminal rather than
+# from anything this interface does. Nothing here runs it.
+set(DROP_BUILD_TOOLS OFF CACHE BOOL "Build the dropcheck command line tool")
 
 # Declared here as well as in QuickDC, because samurai is configured before
 # QuickDC is and the two below are forwarded to it - read any earlier than this
@@ -196,11 +201,17 @@ enable_testing()
 
 # Only where something is going to build tests through it. It is a small C
 # library, but a build with no suite enabled has nothing to compile it for.
-if(QUICKDC_BUILD_TESTS OR SAMURAI_BUILD_TESTS)
+if(QUICKDC_BUILD_TESTS OR SAMURAI_BUILD_TESTS OR DROP_BUILD_TESTS)
     add_subdirectory(exotic)
 endif()
 
 add_subdirectory(samurai)
+
+# NAT and firewall detection - STUN, RFC 5780 behaviour discovery and a UPnP
+# gateway of its own. After samurai, which it links, and before QuickDC so that
+# the four read in the order they depend on each other; nothing links it yet.
+add_subdirectory(libdrop-cpp)
+
 add_subdirectory(quickdc)
 
 # ---------------------------------------------------------------------------
