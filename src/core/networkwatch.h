@@ -6,6 +6,8 @@
 #define HAVE_QUICKDC_QUI_NETWORKWATCH_H
 
 #include <QObject>
+#include <QString>
+#include <QStringList>
 
 class QTimer;
 
@@ -34,12 +36,14 @@ namespace Qdc {
  * reactor itself and never calls exec(), so an instance made over there would
  * sit silent forever.
  *
- * And it does not see an address change on its own. QNetworkInformation reports
- * reachability and the kind of link, not the local addresses, so a DHCP lease
- * renewed onto a different address, or a VPN coming up over an interface that
- * was already online, can pass without a word from here. The transitions it
- * does report - a link dropping and returning, WiFi replacing Ethernet - cover
- * the case this exists for. Anything needing more has to poll.
+ * And the addresses are watched by asking, not by being told. Qt reports
+ * reachability and the kind of link but never the local addresses, so a DHCP
+ * lease renewed onto a different address, or a VPN coming up over an interface
+ * that was already online, would otherwise pass without a word - the link never
+ * dropped and the medium never changed, yet everything measured about the old
+ * address is now about somebody else's. Those are found by comparing the
+ * addresses against the last set seen, which is why this reports a change up to
+ * a poll late rather than as it happens.
  */
 class NetworkWatch final : public QObject {
 	Q_OBJECT
@@ -69,14 +73,39 @@ public:
 	~NetworkWatch() override;
 
 	/**
-	 * Whether a backend was found and transitions will actually be reported.
+	 * Whether Qt's backend was found, and transitions are reported as they happen.
 	 *
-	 * False is not an error and needs no handling beyond deciding what to tell
-	 * the user: on a platform Qt has no backend for, this is a watcher that
-	 * never fires, and everything else carries on working exactly as it did
-	 * before anybody asked to be told about the network.
+	 * False is not an error and needs no handling beyond deciding what to tell the
+	 * user. It does not mean nothing is watched: the addresses are polled either
+	 * way, so a platform Qt has no backend for still reports a network being
+	 * swapped - a poll later, and only once the addresses differ, which a link
+	 * dropped and restored onto the same lease does not.
 	 */
 	bool isWatching() const;
+
+	/**
+	 * The addresses worth comparing, as one string, in a fixed order.
+	 *
+	 * Loopback is dropped because it is on every machine and changes on none, and
+	 * link-local with it: an address the host gave itself is what is there while
+	 * DHCP is still deciding, so keeping it would report the negotiation as a
+	 * change of network and then report the real answer as a second one.
+	 *
+	 * What is left is sorted, so that two enumerations of an unchanged machine
+	 * compare equal whatever order the platform returned them in - the interface
+	 * list is not ordered by contract, and comparing it as given would report a
+	 * change every time the order moved.
+	 *
+	 * Takes the addresses as text rather than as QHostAddress so that this header
+	 * names nothing from Qt's network module, which is a private dependency of
+	 * this library: a signature mentioning one would put that module on the
+	 * include path of everything that reads this. Nothing is lost by it - an
+	 * address round trips through its own string form, scope and all.
+	 *
+	 * Public because it is the whole of what counts as a change, and testable
+	 * only from outside: real interfaces cannot be made to change on demand.
+	 */
+	static QString addressFingerprint(const QStringList& addresses);
 
 	/**
 	 * Whether the machine looks reachable right now.
@@ -127,7 +156,65 @@ private:
 	 */
 	void settle();
 
+	/**
+	 * Enumerate the addresses, and treat a different set as a transition.
+	 *
+	 * Reported through the same quiet period as everything else, so that an
+	 * address arriving at the end of a switch this had already noticed is one
+	 * check rather than a second.
+	 */
+	void pollAddresses();
+
+	/**
+	 * Record what the backend now says a state is, and report a change only where
+	 * there was one.
+	 *
+	 * Qt announces the state it found as though it had just changed: a backend
+	 * finishes loading after the object asking is built, so the first thing heard
+	 * about an unchanged network is that it is online and on WiFi. Acting on those
+	 * would mean a measurement a few seconds into every launch, of the network the
+	 * client started on, which is the one already measured at start-up.
+	 *
+	 * So a value equal to the one held says nothing, and neither does the first
+	 * value after 'not known' - that is the backend working out what was true
+	 * before anybody asked. Only a move between two established values is a
+	 * network that changed under us.
+	 */
+	void noteLearned(int& held, int now);
+
+	/**
+	 * The same, for the states Qt reports as a plain bool.
+	 *
+	 * These have no value for 'not known', so the first one heard is taken as
+	 * what was already the case rather than as a change to it.
+	 */
+	void noteFlag(int& held, bool now);
+
 	QTimer* m_settle;
+
+	/** Drives pollAddresses(); see the note above about being told versus asking. */
+	QTimer* m_poll;
+
+	/**
+	 * The last set seen, to compare the next one against.
+	 *
+	 * Taken before the polling starts rather than left empty, or the first poll
+	 * would find every address on the machine to be new and report a network
+	 * that had not changed.
+	 */
+	QString m_addresses;
+
+	/**
+	 * The last state heard from the backend, held as int so that this header
+	 * names nothing from Qt's network module; see addressFingerprint() for why
+	 * that matters. The two enums are seeded from the backend when it loads, and
+	 * the two flags start at -1 for a value never heard.
+	 */
+	int m_reachability = 0;
+	int m_medium = 0;
+	int m_metered = -1;
+	int m_captive = -1;
+
 	bool m_watching = false;
 };
 

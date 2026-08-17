@@ -8,6 +8,7 @@
 #include <core/filelistbridge.h>
 #include <core/hubbridge.h>
 #include <core/hublistbridge.h>
+#include <core/networkwatch.h>
 #include <core/mediabridge.h>
 #include <core/searchbridge.h>
 #include <core/transferbridge.h>
@@ -89,6 +90,11 @@ private slots:
 	void aBoardReadBackKnowsWhichDocumentsItHolds();
 	void aHeldDocumentIsReadWithoutAskingAnybody();
 	void aDocumentKnownNotToBeThePostIsNotOfferedAsFetchable();
+
+	void anAddressChangeIsWhatCountsAsTheNetworkChanging();
+	void addressesTheMachineAlwaysHasAreNotAChange();
+	void theOrderInterfacesComeBackInIsNotAChange();
+	void aWatchSaysNothingAboutANetworkThatHasNotChanged();
 
 private:
 	QString path(const QString& name) const;
@@ -2197,6 +2203,115 @@ void TestBridge::aPostHeldFromAnEarlierSessionIsOfferedWhenItsBoardIsReadBack()
 
 	QTRY_VERIFY2(isOffered(tth_of(document).toUtf8()),
 	             "a board was read back and the post held on it offered to nobody");
+}
+
+/*
+ * What the watch is for: a lease renewed onto a different address, or a VPN
+ * coming up over an interface that was already online. Neither drops the link
+ * nor changes the transport medium, so neither is reported by Qt - and both
+ * leave everything measured about the old address describing somebody else's.
+ */
+void TestBridge::anAddressChangeIsWhatCountsAsTheNetworkChanging()
+{
+	const QString before = Qdc::NetworkWatch::addressFingerprint(
+		{(QStringLiteral("192.168.1.10"))});
+
+	const QString after = Qdc::NetworkWatch::addressFingerprint(
+		{(QStringLiteral("192.168.1.11"))});
+
+	QVERIFY2(before != after, "a different address read as the same network");
+
+	/* A second interface is a change too: it is where traffic may now leave from. */
+	const QString added = Qdc::NetworkWatch::addressFingerprint(
+		{(QStringLiteral("192.168.1.10")),
+		 (QStringLiteral("10.8.0.2"))});
+
+	QVERIFY2(added != before, "an interface appearing read as the same network");
+
+	/* And so is one going, which is a VPN dropping. */
+	QVERIFY2(Qdc::NetworkWatch::addressFingerprint({}) != before,
+	         "every address disappearing read as the same network");
+}
+
+/*
+ * Loopback is on every machine and changes on none, and a link-local address is
+ * what the host gives itself while DHCP is still deciding. Counting either would
+ * mean reporting a change that had not happened, and in the link-local case
+ * reporting the negotiation and then the answer as two.
+ */
+void TestBridge::addressesTheMachineAlwaysHasAreNotAChange()
+{
+	const QString real = Qdc::NetworkWatch::addressFingerprint(
+		{(QStringLiteral("192.168.1.10"))});
+
+	const QString padded = Qdc::NetworkWatch::addressFingerprint(
+		{(QStringLiteral("127.0.0.1")),
+		 (QStringLiteral("::1")),
+		 (QStringLiteral("169.254.3.4")),
+		 (QStringLiteral("fe80::1")),
+		 (QStringLiteral("192.168.1.10"))});
+
+	QCOMPARE(padded, real);
+
+	/* A machine with nothing but those has no addresses worth comparing. */
+	QVERIFY(Qdc::NetworkWatch::addressFingerprint(
+		{(QStringLiteral("127.0.0.1")),
+		 (QStringLiteral("fe80::1"))}).isEmpty());
+}
+
+/*
+ * The interface list is not ordered by contract, so the same machine can enumerate
+ * the same addresses in a different order. Comparing them as given would report a
+ * network change every time that order moved, and each one starts a measurement.
+ */
+void TestBridge::theOrderInterfacesComeBackInIsNotAChange()
+{
+	const QStringList one = {QStringLiteral("192.168.1.10"),
+	                         QStringLiteral("10.8.0.2"),
+	                         QStringLiteral("2001:db8::5")};
+
+	const QStringList other = {QStringLiteral("2001:db8::5"),
+	                           QStringLiteral("192.168.1.10"),
+	                           QStringLiteral("10.8.0.2")};
+
+	QCOMPARE(Qdc::NetworkWatch::addressFingerprint(one),
+	         Qdc::NetworkWatch::addressFingerprint(other));
+
+	/* The same address twice is the same address; two interfaces can carry it. */
+	QCOMPARE(Qdc::NetworkWatch::addressFingerprint(
+		{(QStringLiteral("192.168.1.10")),
+		 (QStringLiteral("192.168.1.10"))}),
+	         Qdc::NetworkWatch::addressFingerprint(
+		{(QStringLiteral("192.168.1.10"))}));
+
+}
+
+/*
+ * Nothing is reported for the network the client started on, which is the one
+ * already measured at start-up.
+ *
+ * Two things would say otherwise and neither is a change. The addresses are
+ * compared against a baseline taken when the watch is built, or the first poll
+ * would find every address on the machine to be new. And Qt announces the state
+ * it found as though it had just arrived - a backend finishes loading after the
+ * object asking for it exists, so the first thing heard about an unchanged
+ * network is that it is online and on WiFi.
+ *
+ * Waited out rather than sampled, because what this guards arrives late:
+ * transitions are collected and reported only once the line has held still, so
+ * anything armed by the backend settling appears a whole quiet period after the
+ * signal that armed it, and a shorter wait would pass without having looked.
+ */
+void TestBridge::aWatchSaysNothingAboutANetworkThatHasNotChanged()
+{
+	Qdc::NetworkWatch watch;
+
+	QSignalSpy changed(&watch, &Qdc::NetworkWatch::connectivityChanged);
+	QVERIFY(changed.isValid());
+
+	QTest::qWait(3500);
+
+	QCOMPARE(changed.count(), 0);
 }
 
 QTEST_GUILESS_MAIN(TestBridge)
