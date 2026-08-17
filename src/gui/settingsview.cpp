@@ -9,10 +9,12 @@
 #include "widgets.h"
 
 #include <core/configbridge.h>
+#include <core/dropbridge.h>
 #include <core/shares.h>
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDateTime>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -20,6 +22,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
@@ -132,15 +135,27 @@ constexpr int DEFAULT_CHUNK_KIB = 1024;
 const QString DEFAULT_BIND = QStringLiteral("0.0.0.0");
 const QString DEFAULT_DOWNLOAD_DIR = QStringLiteral("~/.quickdc/downloads");
 
+/**
+ * The key the core reads a DROP server's name from, and a name to show as an example.
+ *
+ * Shown as a placeholder and not as a default, because there is no default: asking a
+ * server tells it this client's address and the port it listens on, so the field is
+ * empty until somebody puts a name in it.
+ */
+const QString REACHABILITY_SERVER = QStringLiteral("Reachability server");
+const QString REACHABILITY_SERVER_EXAMPLE = QStringLiteral("drop.quickdc.org");
+
 /** Chunk size is stored in bytes and shown in KiB. */
 constexpr int KIB = 1024;
 
 }
 
-Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* parent)
+Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge* drop,
+                                QWidget* parent)
 	: View(parent)
 	, m_config(config)
 	, m_shares(shares)
+	, m_drop(drop)
 	, m_tabs(new QTabWidget(this))
 	, m_nickname(new QLineEdit(this))
 	, m_description(new QLineEdit(this))
@@ -150,6 +165,11 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 	, m_port(new QSpinBox(this))
 	, m_bind(new QLineEdit(this))
 	, m_address(new QLineEdit(this))
+	, m_dropServer(new QLineEdit(this))
+	, m_dropAddress(new QLabel(this))
+	, m_dropReachable(new QLabel(this))
+	, m_dropChecked(new QLabel(this))
+	, m_dropCheck(new QPushButton(tr("Check now"), this))
 	, m_slots(new QSpinBox(this))
 	, m_maxDownloads(new QSpinBox(this))
 	, m_chunkSize(new QSpinBox(this))
@@ -189,6 +209,42 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, QWidget* p
 
 	connect(m_save, &QPushButton::clicked, this, [this] { save(); });
 	connect(m_revert, &QPushButton::clicked, this, &SettingsView::load);
+
+	/*
+	 * Whatever has been measured already, and then whatever arrives afterwards.
+	 * Nothing is asked for here and nothing is waited for: a check is several round
+	 * trips to a stranger's server that may not answer at all, so the page draws with
+	 * what is in hand and draws again when there is more. The start-up check is
+	 * usually finished long before this window is built, and asking for that answer
+	 * again would be asking a third party for something already known.
+	 */
+	clearVerdict();
+
+	if (m_drop)
+	{
+		connect(m_drop, &DropBridge::verdictChanged, this, &SettingsView::showVerdict);
+		connect(m_drop, &DropBridge::checkFailed, this, &SettingsView::showCheckFailed);
+
+		showVerdict(m_drop->verdict());
+
+		connect(m_dropCheck, &QPushButton::clicked, this, [this] {
+			/*
+			 * Said in words rather than by disabling the button. A button disabled on
+			 * the way out has to be re-enabled by something coming back, and a request
+			 * the bridge decides not to make - no server named yet, or one already in
+			 * flight - reports nothing at all, which would leave the button dead for
+			 * the life of the window.
+			 */
+			m_dropAttempt->setText(tr("Checking…"));
+			m_dropAttempt->setVisible(true);
+
+			m_drop->recheck();
+		});
+	}
+	else
+	{
+		m_dropCheck->setEnabled(false);
+	}
 
 	if (!m_config)
 	{
@@ -283,6 +339,39 @@ QWidget* Qdc::SettingsView::buildConnection()
 	m_bind->setPlaceholderText(DEFAULT_BIND);
 	m_address->setPlaceholderText(tr("Detected automatically"));
 
+	m_dropServer->setMaxLength(255);
+	m_dropServer->setPlaceholderText(REACHABILITY_SERVER_EXAMPLE);
+
+	/*
+	 * The three status rows and the two paragraphs under them carry text a server
+	 * wrote, so none of them is left on Qt::AutoText: a label asked to guess reads a
+	 * sentence with an angle bracket in it as markup, and the whole point of showing
+	 * these words unaltered is lost if the label edits them on the way to the screen.
+	 */
+	for (QLabel* field : {m_dropAddress, m_dropReachable, m_dropChecked})
+	{
+		field->setTextFormat(Qt::PlainText);
+		field->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	}
+
+	m_dropReason = makeNote(QString());
+	m_dropReason->setTextFormat(Qt::PlainText);
+
+	m_dropNote = makeNote(QString());
+	m_dropNote->setTextFormat(Qt::PlainText);
+
+	m_dropAttempt = makeNote(QString());
+	m_dropAttempt->setTextFormat(Qt::PlainText);
+
+	m_dropCheck->setToolTip(tr("Ask the server above what it sees, now, rather than "
+	                           "waiting for the next time QuickDC starts"));
+
+	/* Beside its own width rather than stretched across the field column. */
+	QHBoxLayout* checkRow = new QHBoxLayout;
+	checkRow->setContentsMargins(0, 0, 0, 0);
+	checkRow->addWidget(m_dropCheck);
+	checkRow->addStretch(1);
+
 	QFormLayout* form = new QFormLayout(page);
 	form->addRow(tr("Connection"), m_mode);
 	form->addRow(tr("Port"), m_port);
@@ -293,8 +382,45 @@ QWidget* Qdc::SettingsView::buildConnection()
 		"The client tag hubs see is built from the version and whether this is "
 		"active or passive, and cannot be changed.")));
 
+	form->addRow(tr("Reachability server"), m_dropServer);
+
+	/*
+	 * Said before the rows it fills in, because it is the reason the field is empty.
+	 * Whether this client can be connected to cannot be worked out from here - it is
+	 * established by something arriving from outside and by nothing else - so the only
+	 * way to know is to ask somebody to try, and asking is a disclosure rather than a
+	 * lookup.
+	 */
+	form->addRow(makeNote(tr(
+		"Asking a server whether this client can be reached tells that server the "
+		"address it is connecting from and the port it listens on, and has it connect "
+		"back to prove the answer. That is why the field above is empty until somebody "
+		"puts a name in it: while it is empty, nobody is asked anything.")));
+
+	form->addRow(tr("Public address"), m_dropAddress);
+	form->addRow(tr("Reachable"), m_dropReachable);
+	form->addRow(tr("Last checked"), m_dropChecked);
+	form->addRow(QString(), checkRow);
+
+	form->addRow(m_dropAttempt);
+	form->addRow(m_dropReason);
+	form->addRow(m_dropNote);
+
+	/*
+	 * Said because the answer looks like a property of this installation and is a
+	 * property of one network. Somebody who was told they are reachable at a desk and
+	 * carries the machine to a cafe has been told something that was true when it was
+	 * measured and is not true now, and the timestamp above is the whole of what
+	 * distinguishes the two.
+	 */
+	form->addRow(makeNote(tr(
+		"An answer describes the network as it was at the moment it was measured. Move "
+		"to another one - a different WiFi, a cable, a VPN coming up - and the address "
+		"and the verdict may both be wrong until it is checked again.")));
+
 	connect(m_bind, &QLineEdit::textEdited, this, &SettingsView::markModified);
 	connect(m_address, &QLineEdit::textEdited, this, &SettingsView::markModified);
+	connect(m_dropServer, &QLineEdit::textEdited, this, &SettingsView::markModified);
 	connect(m_mode, &QComboBox::currentIndexChanged, this, &SettingsView::markModified);
 	connect(m_port, &QSpinBox::valueChanged, this, &SettingsView::markModified);
 
@@ -776,6 +902,7 @@ void Qdc::SettingsView::load()
 		{QStringLiteral("Port"), DEFAULT_PORT},
 		{QStringLiteral("Bind"), QString()},
 		{QStringLiteral("Address"), QString()},
+		{REACHABILITY_SERVER, QString()},
 		{QStringLiteral("Slots"), DEFAULT_SLOTS},
 		{QStringLiteral("Max downloads"), DEFAULT_MAX_DOWNLOADS},
 		{QStringLiteral("Chunk size"), DEFAULT_CHUNK_KIB * KIB}
@@ -785,6 +912,15 @@ void Qdc::SettingsView::load()
 	m_port->setValue(network.value(QStringLiteral("Port")).toInt());
 	m_bind->setText(network.value(QStringLiteral("Bind")).toString());
 	m_address->setText(network.value(QStringLiteral("Address")).toString());
+
+	/*
+	 * The field is reloaded and the status rows are not. A Revert undoes edits, and a
+	 * measurement is not an edit: throwing away what was measured because somebody
+	 * pressed Revert would lose the one thing on this page that cannot be read again
+	 * from the file.
+	 */
+	m_dropServer->setText(network.value(REACHABILITY_SERVER).toString());
+
 	m_slots->setValue(network.value(QStringLiteral("Slots")).toInt());
 	m_maxDownloads->setValue(network.value(QStringLiteral("Max downloads")).toInt());
 
@@ -910,6 +1046,8 @@ bool Qdc::SettingsView::save()
 	                    QStringLiteral("Bind"), m_bind->text().trimmed());
 	m_config->setString(ConfigStore::Application, NETWORK,
 	                    QStringLiteral("Address"), m_address->text().trimmed());
+	m_config->setString(ConfigStore::Application, NETWORK,
+	                    REACHABILITY_SERVER, m_dropServer->text().trimmed());
 
 	m_config->setNumber(ConfigStore::Application, NETWORK,
 	                    QStringLiteral("Slots"), m_slots->value());
@@ -994,6 +1132,136 @@ bool Qdc::SettingsView::save()
 
 	emit saved();
 	return true;
+}
+
+void Qdc::SettingsView::clearVerdict()
+{
+	m_dropAddress->setText(tr("not measured yet"));
+	m_dropReachable->setText(tr("not measured yet"));
+	m_dropChecked->setText(tr("never"));
+
+	/*
+	 * Hidden rather than left empty. Three paragraphs of nothing between the button and
+	 * the note below it is a gap somebody reads as a page still loading.
+	 */
+	for (QLabel* paragraph : {m_dropAttempt, m_dropReason, m_dropNote})
+	{
+		paragraph->clear();
+		paragraph->setVisible(false);
+	}
+}
+
+void Qdc::SettingsView::showVerdict(const ReachabilityVerdict& verdict)
+{
+	/* A run that established nothing is not an answer, whatever else it carries. */
+	if (!verdict.ran)
+	{
+		clearVerdict();
+		return;
+	}
+
+	m_dropAttempt->clear();
+	m_dropAttempt->setVisible(false);
+
+	/*
+	 * Which family was measured is part of the answer rather than a detail of how it
+	 * was arrived at: one connection has one source address, so a run answers for IPv4
+	 * or for IPv6 and never for both, and a dual-stack host that is reachable over one
+	 * of them would otherwise read as reachable full stop.
+	 */
+	const QString family = verdict.ipv6 ? tr("IPv6") : tr("IPv4");
+
+	/*
+	 * The classification is the server's own word for the address it saw, and that
+	 * address need not be one this machine has - behind a carrier-grade NAT it is the
+	 * provider's - which is exactly what the classification is there to say.
+	 */
+	if (verdict.publicAddress.isEmpty())
+		m_dropAddress->setText(tr("not measured yet"));
+	else if (verdict.classification.isEmpty())
+		m_dropAddress->setText(tr("%1 (%2)").arg(verdict.publicAddress, family));
+	else
+		m_dropAddress->setText(tr("%1 (%2) — %3")
+			.arg(verdict.publicAddress, family, verdict.classification));
+
+	QString reachable;
+
+	switch (verdict.mode)
+	{
+		case ReachabilityMode::Active:
+			reachable = tr("yes, a connection from outside got in");
+			break;
+
+		case ReachabilityMode::Passive:
+			reachable = tr("no, nothing from outside got in");
+			break;
+
+		case ReachabilityMode::Unknown:
+			reachable = tr("nothing was established");
+			break;
+	}
+
+	/*
+	 * The per-port outcomes in the words they arrived in, and only for the ports that
+	 * were tested: an empty one is a test the server does not offer rather than a port
+	 * that failed, and reporting it as a failure would argue somebody into turning off
+	 * a feature that works.
+	 */
+	QStringList ports;
+
+	if (!verdict.tcp.isEmpty())
+		ports += tr("TCP %1: %2").arg(verdict.port).arg(verdict.tcp);
+
+	if (!verdict.udp.isEmpty())
+		ports += tr("UDP %1: %2").arg(verdict.port).arg(verdict.udp);
+
+	if (!ports.isEmpty())
+		reachable += QStringLiteral(" — ") + ports.join(tr(", "));
+
+	m_dropReachable->setText(reachable);
+
+	/*
+	 * An invalid time is a measurement the core recorded no time for, and is shown as
+	 * never rather than as the epoch: dating an answer to 1970 reads as a bug in the
+	 * clock instead of as a gap in what was recorded.
+	 */
+	m_dropChecked->setText(verdict.observedAt.isValid()
+		? QLocale().toString(verdict.observedAt, QLocale::ShortFormat)
+		: tr("never"));
+
+	/*
+	 * The reason and the remedies as they were written, one remedy to a line. Bulleted
+	 * and not a word otherwise: whoever measured wrote these for a user to read, and a
+	 * client that reworded them would be handing somebody who compares two clients two
+	 * accounts of one network and no way to tell which to believe.
+	 */
+	QStringList explanation;
+
+	if (!verdict.reason.isEmpty()) explanation += verdict.reason;
+
+	for (const QString& remedy : verdict.remedies)
+		explanation += QStringLiteral("• ") + remedy;
+
+	m_dropReason->setText(explanation.join(QLatin1Char('\n')));
+	m_dropReason->setVisible(!explanation.isEmpty());
+
+	m_dropNote->setText(verdict.note);
+	m_dropNote->setVisible(!verdict.note.isEmpty());
+}
+
+void Qdc::SettingsView::showCheckFailed(const QString& reason)
+{
+	/*
+	 * Only this line changes, and every row above it is left exactly as it was. A check
+	 * that could not be run says nothing about whether this client is reachable - only
+	 * that nobody found out this time - so an earlier measurement is still the best
+	 * thing known, and the time it was taken is already beside it.
+	 */
+	m_dropAttempt->setText(reason.isEmpty()
+		? tr("The check could not be run.")
+		: tr("The check could not be run: %1").arg(reason));
+
+	m_dropAttempt->setVisible(true);
 }
 
 void Qdc::SettingsView::refreshShareList()

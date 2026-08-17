@@ -15,6 +15,8 @@ add_library(qdcbridge STATIC
     corethread.cpp
     corethread.h
     coretypes.h
+    dropbridge.cpp
+    dropbridge.h
     favourites.cpp
     favourites.h
     filelistbridge.cpp
@@ -29,6 +31,7 @@ add_library(qdcbridge STATIC
     hublistbridge.h
     mediabridge.cpp
     mediabridge.h
+    networkwatch.cpp
     recenthubs.cpp
     recenthubs.h
     relay.cpp
@@ -57,10 +60,13 @@ target_include_directories(qdcbridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 # isolation rule is enforced by the build rather than by good intentions.
 #
 # Qt6::Core is PUBLIC because the bridge headers are full of QObject and QString.
+# Qt6::Network is where QNetworkInformation lives, which is what networkwatch.cpp
+# watches this machine's own connectivity through.
 target_link_libraries(qdcbridge
     PUBLIC
         Qt6::Core
     PRIVATE
+        Qt6::Network
         quickdc::quickdc)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

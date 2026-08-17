@@ -15,6 +15,8 @@
 
 #include <core/completed.h>
 #include <core/configbridge.h>
+#include <core/dropbridge.h>
+#include <core/networkwatch.h>
 #include <core/corethread.h>
 #include <core/favourites.h>
 #include <core/filelistbridge.h>
@@ -59,6 +61,8 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	, m_completed(new Completed(m_config, this))
 	, m_shares(new Shares(m_config, this))
 	, m_recent(new RecentHubs(m_config, this))
+	, m_drop(new DropBridge(thread, this))
+	, m_watch(new NetworkWatch(this))
 	, m_directory(new HubDirectory(thread, m_config, QString(), this))
 	, m_hubs(new HubsView(thread, m_favourites, m_filelists, m_transfers, m_config,
 	                      m_completed, m_recent))
@@ -139,7 +143,17 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 
 	/* Settings sits apart from the destinations, at the foot of the rail. */
 	m_rail->addTrailingSpace();
-	addView(new SettingsView(m_config, m_shares));
+	addView(new SettingsView(m_config, m_shares, m_drop));
+
+	/*
+	 * A network that changed is a verdict that no longer describes anything: the
+	 * address the server saw and the path back to this port are both properties of
+	 * the network that has just gone. The watcher has already waited for the
+	 * transitions to stop and for the machine to be online again, so this asks at
+	 * the first moment an answer is obtainable.
+	 */
+	connect(m_watch, &NetworkWatch::connectivityChanged,
+	        m_drop, &DropBridge::recheck);
 
 	connect(m_rail, &NavigationRail::currentIndexChanged,
 	        this, &MainWindow::showView);
@@ -226,6 +240,17 @@ Qdc::MainWindow::~MainWindow()
 
 	delete m_favourites;
 	m_favourites = nullptr;
+
+	/*
+	 * The watcher first: it is what asks for a measurement, and one asked for
+	 * while the bridge below is going would be posted at a bridge that has
+	 * detached its relay.
+	 */
+	delete m_watch;
+	m_watch = nullptr;
+
+	delete m_drop;
+	m_drop = nullptr;
 
 	delete m_config;
 	m_config = nullptr;

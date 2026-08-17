@@ -15,6 +15,7 @@ namespace Qdc {
 
 class Completed;
 class ConfigBridge;
+class DropBridge;
 class CornerMask;
 class CoreThread;
 class Favourites;
@@ -22,6 +23,7 @@ class FilelistBridge;
 class HomeView;
 class HubDirectory;
 class HubsView;
+class NetworkWatch;
 class RecentHubs;
 class SearchBridge;
 class SearchView;
@@ -93,6 +95,19 @@ private:
 	Completed* m_completed;
 	Shares* m_shares;
 	RecentHubs* m_recent;
+
+	/**
+	 * Whether anything outside can reach this client, and what says to ask again.
+	 *
+	 * The bridge is one per window rather than one per view: a measurement is a
+	 * property of this client's own port and not of anything being shown, and two
+	 * of them would ask a service twice for the same answer. The watcher is beside
+	 * it because it has to live where there is a Qt event loop - the core thread
+	 * runs a reactor and never calls exec(), so a watcher made there would sit
+	 * silent for ever.
+	 */
+	DropBridge* m_drop;
+	NetworkWatch* m_watch;
 
 	/**
 	 * The public hub lists.

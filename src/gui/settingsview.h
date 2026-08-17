@@ -21,7 +21,10 @@ class QTabWidget;
 namespace Qdc {
 
 class ConfigBridge;
+class DropBridge;
 class Shares;
+
+struct ReachabilityVerdict;
 
 /**
  * The configuration, bound to the core's, a tab at a time.
@@ -41,6 +44,12 @@ class Shares;
  * say so in the form itself: a global rate limit, which nothing in the core
  * enforces, and a separate folder for incomplete files, which the core does not
  * have - a partial download lives beside its finished name with ".part" appended.
+ *
+ * The reachability rows on the Connection tab are the one thing here that is not a
+ * setting: they are what a measurement concluded, shown read-only beside the field
+ * that turns the measurement on. That is inside the rule above rather than an
+ * exception to it - the setting is the server's name, and an answer with nowhere to
+ * be read is an answer nobody can act on.
  */
 class SettingsView final : public View {
 	Q_OBJECT
@@ -50,8 +59,12 @@ public:
 	 * @param config where everything is read and written. May be null, in which
 	 *        case the form is shown disabled.
 	 * @param shares the shared folder list; may be null.
+	 * @param drop where a reachability measurement comes from; may be null, in
+	 *        which case the status rows say nothing has been measured and the
+	 *        button that would ask for one is disabled.
 	 */
-	SettingsView(ConfigBridge* config, Shares* shares, QWidget* parent = nullptr);
+	SettingsView(ConfigBridge* config, Shares* shares, DropBridge* drop = nullptr,
+	             QWidget* parent = nullptr);
 
 	QString title() const override;
 	Glyph glyph() const override;
@@ -108,11 +121,21 @@ private:
 	void renameSelectedShare();
 	void chooseDownloadDirectory();
 
+	/** Show what a measurement concluded, whatever it concluded. */
+	void showVerdict(const ReachabilityVerdict& verdict);
+
+	/** Show why nobody measured, which says nothing about being reachable. */
+	void showCheckFailed(const QString& reason);
+
+	/** What the status rows say before anything has been measured. */
+	void clearVerdict();
+
 	/** A note under a group, in the muted colour. */
 	QLabel* makeNote(const QString& text);
 
 	ConfigBridge* m_config;
 	Shares* m_shares;
+	DropBridge* m_drop;
 
 	QTabWidget* m_tabs;
 
@@ -125,6 +148,31 @@ private:
 	QSpinBox* m_port;
 	QLineEdit* m_bind;
 	QLineEdit* m_address;
+
+	/*
+	 * Whether anything outside can reach the port above, and who was asked.
+	 *
+	 * The server's name is the only setting of the group; everything under it is
+	 * read-only, because a measurement is not a preference and a field offering to
+	 * edit one would be offering to edit the network. The three sentences the
+	 * measuring library writes - 'm_dropReason' carries its reason and its remedies,
+	 * 'm_dropNote' its note - are shown as they arrive rather than reworded: a user
+	 * who is given two different explanations of the same network by two clients
+	 * concludes that one of them is broken.
+	 *
+	 * 'm_dropAttempt' is how the last attempt went, which is a different thing from
+	 * what was measured and so has a label of its own. A check that could not be run
+	 * says nothing about whether this client is reachable, so it must not overwrite an
+	 * answer that was measured earlier and still stands.
+	 */
+	QLineEdit* m_dropServer;
+	QLabel* m_dropAddress;
+	QLabel* m_dropReachable;
+	QLabel* m_dropChecked;
+	QPushButton* m_dropCheck;
+	QLabel* m_dropReason;
+	QLabel* m_dropNote;
+	QLabel* m_dropAttempt;
 
 	QSpinBox* m_slots;
 	QSpinBox* m_maxDownloads;
