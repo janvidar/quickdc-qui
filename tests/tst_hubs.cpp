@@ -2197,6 +2197,34 @@ void TestHubs::aPastedPictureIsOfferedLikeAChosenFile()
 	QCOMPARE(pasted.count(), 2);
 }
 
+namespace {
+
+/**
+ * Points the home directory somewhere harmless for as long as it is in scope.
+ *
+ * A failing QVERIFY returns from the test that runs it, so anything restoring the
+ * real home on the line after the last assertion is skipped by exactly the run that
+ * needed it - leaving every later test in the binary pointed at a temporary
+ * directory that is deleted when the fixture goes.
+ */
+class HomeRedirect {
+public:
+	explicit HomeRedirect(const QString& to) : m_real(qgetenv("HOME"))
+	{
+		qputenv("HOME", to.toUtf8());
+	}
+
+	~HomeRedirect() { qputenv("HOME", m_real); }
+
+	HomeRedirect(const HomeRedirect&) = delete;
+	HomeRedirect& operator=(const HomeRedirect&) = delete;
+
+private:
+	const QByteArray m_real;
+};
+
+}
+
 void TestHubs::aPastedPictureIsWrittenDownWhereItCanBeServed()
 {
 	Qdc::ConfigBridge config(m_thread);
@@ -2221,14 +2249,12 @@ void TestHubs::aPastedPictureIsWrittenDownWhereItCanBeServed()
 	 * directory is pointed at the temporary one for the length of this test rather than
 	 * writing into the home of whoever is running it.
 	 */
-	const QByteArray realHome = qgetenv("HOME");
-	qputenv("HOME", m_dir.path().toUtf8());
-
 	const QString folder = m_dir.path() + QStringLiteral("/.quickdc/media");
 
-	emit pane->imagePasted(png, QStringLiteral("png"));
-
-	qputenv("HOME", realHome);
+	{
+		HomeRedirect home(m_dir.path());
+		emit pane->imagePasted(png, QStringLiteral("png"));
+	}
 
 	/*
 	 * A hash names a file and a peer asks for a file, so the clipboard's bytes have to
@@ -2303,8 +2329,7 @@ void TestHubs::aDroppedFileIsOfferedRatherThanNamed()
 void TestHubs::oldPastedPicturesAreSweptAway()
 {
 	/* The home directory is pointed at the temporary one, as the paste test does. */
-	const QByteArray realHome = qgetenv("HOME");
-	qputenv("HOME", m_dir.path().toUtf8());
+	HomeRedirect home(m_dir.path());
 
 	const QString folder = m_dir.path() + QStringLiteral("/.quickdc/media");
 	QVERIFY(QDir().mkpath(folder));
@@ -2372,8 +2397,6 @@ void TestHubs::oldPastedPicturesAreSweptAway()
 	}
 
 	QVERIFY2(QFile::exists(again), "everything should be kept when there is no limit");
-
-	qputenv("HOME", realHome);
 }
 
 void TestHubs::composerFlattensFormattingWhereItCannotBeSent()
@@ -4327,12 +4350,10 @@ void TestHubs::aComposedPostIsTheDocumentItsHashCovers()
 	 * pointed at the temporary one for the length of this test rather than writing into
 	 * the home of whoever is running it.
 	 */
-	const QByteArray realHome = qgetenv("HOME");
-	qputenv("HOME", m_dir.path().toUtf8());
-
-	emit pane->threadSubmitted(QStringLiteral("Hub upgrade on Saturday"), body, true);
-
-	qputenv("HOME", realHome);
+	{
+		HomeRedirect home(m_dir.path());
+		emit pane->threadSubmitted(QStringLiteral("Hub upgrade on Saturday"), body, true);
+	}
 
 	/*
 	 * Written down before the hub is told anything, because until the first reader has
