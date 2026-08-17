@@ -91,10 +91,10 @@ experiments and all. That is what you want when you are testing a change, and
 the last thing you want in something handed to other people. `--pristine`
 clones into `build/flatpak-stage` and checks out the ref you name.
 
-It does not use `git clone --recursive`, and the reason is worth recording: two
-of the three submodule URLs in `.gitmodules` are *relative* - `../quickdc.git`,
-`../samurai.git` - so they resolve against whatever the superproject's remote
-is, which is an `ssh://` one. The script points each submodule at the copy
+It does not use `git clone --recursive`, and the reason is worth recording: every
+submodule URL in `.gitmodules` is *relative* - `../exotic.git`, `../samurai.git`,
+`../quickdc.git` - so they resolve against whatever the superproject's remote is,
+which here is an `ssh://` one. The script points each submodule at the copy
 already on this disk instead, which is both faster and means a nightly needs no
 network access beyond the runtime. The three are siblings, so it is one pass
 over them rather than one per level of nesting.

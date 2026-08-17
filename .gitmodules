@@ -1,6 +1,6 @@
 [submodule "exotic"]
 	path = exotic
-	url = https://github.com/janvidar/exotic.git
+	url = ../exotic.git
 [submodule "samurai"]
 	path = samurai
 	url = ../samurai.git
