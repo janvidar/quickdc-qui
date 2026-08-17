@@ -130,11 +130,11 @@ public:
 	 * to draw and no way to get it but to ask a third party for an answer that is
 	 * already in hand.
 	 *
-	 * From then on the core reports to this watcher rather than to the listener it
-	 * set up for itself. That one only logged and asked the hubs to republish; this
-	 * does the same through the bridge, and is also read by a settings page.
-	 * Displacing it cancels a run in flight, since the connect-back is recognised
-	 * through whichever check the core names.
+	 * From then on the core reports to this watcher as well as to the listener it
+	 * set up for itself, which goes on recording the measurement and asking the
+	 * hubs to republish. Attaching displaces nothing and cancels nothing: what the
+	 * core does with a verdict must not depend on whether a window is open, and a
+	 * run in flight when this is built is the one the core started on launch.
 	 */
 	explicit DropBridge(CoreThread* thread, QObject* parent = nullptr);
 
@@ -144,9 +144,10 @@ public:
 	 * Nothing blocks here either. The core may still call the watcher about a run
 	 * it is finishing, but the call is addressed to the relay rather than to this
 	 * object and the relay is detached first, so an event landing between the
-	 * detach and the job running has nowhere to go. The watcher stops being the
-	 * core's listener before it is freed, or the core would report a finishing run
-	 * to a listener that no longer exists.
+	 * detach and the job running has nowhere to go. The watcher is taken off the
+	 * check before it is freed, or the core would report a finishing run to a
+	 * listener that no longer exists - which leaves the core's own listener in
+	 * place, so a measurement taken after the last window closes is still recorded.
 	 *
 	 * The job finds the watcher through the shared box rather than through a
 	 * member, because by the time it runs there is no bridge left to read one from.
