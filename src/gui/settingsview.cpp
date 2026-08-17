@@ -145,6 +145,17 @@ const QString DEFAULT_DOWNLOAD_DIR = QStringLiteral("~/.quickdc/downloads");
 const QString REACHABILITY_SERVER = QStringLiteral("Reachability server");
 const QString REACHABILITY_SERVER_EXAMPLE = QStringLiteral("drop.quickdc.org");
 
+/**
+ * The key that makes the core claim active mode before consulting anything.
+ *
+ * Off by default, because a claim nothing has established is one every peer on the hub
+ * acts on: the core reads this ahead of the measurement, the connection that arrived and
+ * the reports of peers that could not get through, so it is the only setting on the page
+ * that can make this client wrong about itself on purpose.
+ */
+const QString FORCE_ACTIVE = QStringLiteral("Force active mode");
+constexpr bool FORCE_ACTIVE_DEFAULT = false;
+
 /** Chunk size is stored in bytes and shown in KiB. */
 constexpr int KIB = 1024;
 
@@ -366,6 +377,12 @@ QWidget* Qdc::SettingsView::buildConnection()
 	m_dropCheck->setToolTip(tr("Ask the server above what it sees, now, rather than "
 	                           "waiting for the next time QuickDC starts"));
 
+	m_forceActive = new QCheckBox(
+		tr("Tell hubs a peer can connect here, whatever was measured"), page);
+	m_forceActive->setToolTip(tr("Announce active mode on every hub without waiting for "
+	                             "a measurement or a peer to establish it"));
+	connect(m_forceActive, &QCheckBox::toggled, this, &SettingsView::markModified);
+
 	/* Beside its own width rather than stretched across the field column. */
 	QHBoxLayout* checkRow = new QHBoxLayout;
 	checkRow->setContentsMargins(0, 0, 0, 0);
@@ -417,6 +434,26 @@ QWidget* Qdc::SettingsView::buildConnection()
 		"An answer describes the network as it was at the moment it was measured. Move "
 		"to another one - a different WiFi, a cable, a VPN coming up - and the address "
 		"and the verdict may both be wrong until it is checked again.")));
+
+	form->addRow(QString(), m_forceActive);
+
+	/*
+	 * Said in full, and said here rather than in the tooltip, because this is the one
+	 * setting on the page whose cost is paid by somebody else. A peer acts on the claim
+	 * by connecting, and when it cannot the transfer fails at that peer's end - so the
+	 * symptom never appears beside the switch that caused it, and nothing a user sees
+	 * points back here.
+	 */
+	form->addRow(makeNote(tr(
+		"Turning this on tells every hub that a peer can connect here, whatever the "
+		"check above concluded and whatever peers have reported. The rows above and this "
+		"setting can disagree on screen, and this setting is the one the hubs are told "
+		"about. It is meant for a network where the check cannot work but you know that "
+		"incoming connections do arrive: a check against one server is one server's "
+		"opinion, and there is no second one configured to confirm it. When the claim is "
+		"wrong, every peer that acts on it by dialling this client fails to reach it and "
+		"the transfer fails at their end, so what you see is a download that never "
+		"starts rather than a setting to turn off.")));
 
 	connect(m_bind, &QLineEdit::textEdited, this, &SettingsView::markModified);
 	connect(m_address, &QLineEdit::textEdited, this, &SettingsView::markModified);
@@ -903,6 +940,7 @@ void Qdc::SettingsView::load()
 		{QStringLiteral("Bind"), QString()},
 		{QStringLiteral("Address"), QString()},
 		{REACHABILITY_SERVER, QString()},
+		{FORCE_ACTIVE, FORCE_ACTIVE_DEFAULT},
 		{QStringLiteral("Slots"), DEFAULT_SLOTS},
 		{QStringLiteral("Max downloads"), DEFAULT_MAX_DOWNLOADS},
 		{QStringLiteral("Chunk size"), DEFAULT_CHUNK_KIB * KIB}
@@ -920,6 +958,8 @@ void Qdc::SettingsView::load()
 	 * from the file.
 	 */
 	m_dropServer->setText(network.value(REACHABILITY_SERVER).toString());
+
+	m_forceActive->setChecked(network.value(FORCE_ACTIVE).toBool());
 
 	m_slots->setValue(network.value(QStringLiteral("Slots")).toInt());
 	m_maxDownloads->setValue(network.value(QStringLiteral("Max downloads")).toInt());
@@ -1048,6 +1088,8 @@ bool Qdc::SettingsView::save()
 	                    QStringLiteral("Address"), m_address->text().trimmed());
 	m_config->setString(ConfigStore::Application, NETWORK,
 	                    REACHABILITY_SERVER, m_dropServer->text().trimmed());
+	m_config->setBool(ConfigStore::Application, NETWORK,
+	                  FORCE_ACTIVE, m_forceActive->isChecked());
 
 	m_config->setNumber(ConfigStore::Application, NETWORK,
 	                    QStringLiteral("Slots"), m_slots->value());

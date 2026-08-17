@@ -174,6 +174,17 @@ private:
 	QLabel* m_dropNote;
 	QLabel* m_dropAttempt;
 
+	/*
+	 * Announce active mode whatever was measured, which the core reads before it looks
+	 * at the measurement at all.
+	 *
+	 * Under the switch it overrides rather than beside it, because the two can disagree
+	 * on screen and this one wins: a page that put the claim above the answer it defeats
+	 * would be showing the answer as though it still applied. It is a setting and not a
+	 * verdict, so it is the one editable thing below the read-only rows.
+	 */
+	QCheckBox* m_forceActive;
+
 	QSpinBox* m_slots;
 	QSpinBox* m_maxDownloads;
 	QSpinBox* m_chunkSize;

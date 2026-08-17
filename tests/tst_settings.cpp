@@ -50,6 +50,10 @@ private slots:
 	void formChunkSizeIsShownInKibibytes();
 	void formAddsAFolderWithQtsOwnChooser();
 
+	void activeModeIsNotForcedUntilItIsAskedFor();
+	void forcedActiveModeSurvivesTheForm();
+	void theConnectionPageSaysWhatForcingActiveModeCosts();
+
 	void boardsFetchNothingAheadUntilTheyAreTold();
 	void theBoardsPageSaysThatReadingAPostMayBeSeen();
 
@@ -483,6 +487,95 @@ void TestSettings::formAddsAFolderWithQtsOwnChooser()
 	QCOMPARE(shares.folders().first().name, QStringLiteral("Clicked"));
 
 	shares.setFolders({});
+}
+
+void TestSettings::activeModeIsNotForcedUntilItIsAskedFor()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Network");
+	const QString key = QStringLiteral("Force active mode");
+
+	/* Nothing written, so the form is showing what is really in force. */
+	m_config->remove(ConfigStore::Application, group, key);
+	m_config->save(ConfigStore::Application);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	QVERIFY(view.save());
+
+	/*
+	 * Off, and the default is asked for as true so that the answer cannot be right by
+	 * accident. The core reads this before it consults the measurement at all, so a
+	 * client that arrived at it by installing the program would be telling every hub
+	 * something nothing has established.
+	 */
+	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, true), false);
+}
+
+void TestSettings::forcedActiveModeSurvivesTheForm()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Network");
+	const QString key = QStringLiteral("Force active mode");
+
+	m_config->setBool(ConfigStore::Application, group, key, true);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	view.load();
+
+	/*
+	 * Taken back out of the store between the load and the save, so that finding it there
+	 * afterwards can only mean the form carried it: left in place, this would pass
+	 * against a page that read the key and never wrote it again.
+	 */
+	m_config->remove(ConfigStore::Application, group, key);
+	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), false);
+
+	QVERIFY(view.save());
+
+	/*
+	 * Still set. A page that offered the switch but dropped it on the way back would
+	 * turn the setting off every time anything else on the form was saved.
+	 */
+	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), true);
+
+	m_config->remove(ConfigStore::Application, group, key);
+	m_config->save(ConfigStore::Application);
+}
+
+void TestSettings::theConnectionPageSaysWhatForcingActiveModeCosts()
+{
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	QStringList said;
+
+	for (const QLabel* label : view.findChildren<QLabel*>())
+		said.append(label->text());
+
+	const QString page = said.join(QLatin1Char('\n'));
+
+	/*
+	 * In words on the page, because this is the one setting here whose cost is paid
+	 * somewhere the user cannot see it: the peer that believed the claim is the one whose
+	 * transfer fails, so the symptom never appears beside the switch that caused it.
+	 */
+	QVERIFY2(page.contains(QStringLiteral("every peer that acts on it by dialling this "
+	                                      "client fails to reach it")),
+	         "the page does not say that peers fail to connect when the claim is wrong");
+
+	QVERIFY2(page.contains(QStringLiteral("a download that never starts rather than a "
+	                                      "setting to turn off")),
+	         "the page does not say what the failure looks like");
+
+	/* And that it defeats the measurement shown directly above it. */
+	QVERIFY2(page.contains(QStringLiteral("whatever the check above concluded")),
+	         "the page does not say that the claim overrides the measurement");
 }
 
 void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()
