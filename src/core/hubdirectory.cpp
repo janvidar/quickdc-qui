@@ -173,9 +173,19 @@ QStringList Qdc::HubDirectory::defaultSources()
 	 */
 	return {
 		QStringLiteral("https://dchublist.org/hublist.xml.bz2"),
-		QStringLiteral("https://te-home.net/?do=hublist&get=hublist.xml.bz2"),
-		QStringLiteral("https://dchublist.biz/hublist.xml.bz2")
+		QStringLiteral("https://te-home.net/?do=hublist&get=hublist.xml.bz2")
 	};
+}
+
+QStringList Qdc::HubDirectory::retiredSources()
+{
+	/*
+	 * dchublist.biz answers 403 to everything, its own front page included, and
+	 * has done for long enough to stop shipping. The address redirects to a query
+	 * form of itself which is what refuses, so the failure arrives one hop in and
+	 * reads as a client fault rather than a server that has gone.
+	 */
+	return { QStringLiteral("https://dchublist.biz/hublist.xml.bz2") };
 }
 
 QString Qdc::HubDirectory::defaultCacheDirectory()
@@ -195,10 +205,15 @@ void Qdc::HubDirectory::loadSources()
 		&& m_config->contains(ConfigStore::Application, GROUP, TOTAL);
 
 	QStringList urls;
+	bool rewritten = false;
+	int stored = 0;
 
 	if (configured)
 	{
 		const int total = m_config->getNumber(ConfigStore::Application, GROUP, TOTAL, 0);
+		const QStringList retired = retiredSources();
+
+		stored = qMin(total, SOURCE_LIMIT);
 
 		for (int n = 0; n < qMin(total, SOURCE_LIMIT); ++n)
 		{
@@ -208,27 +223,50 @@ void Qdc::HubDirectory::loadSources()
 			/* A gap in the numbering of a hand-edited file, or the same list twice. */
 			if (url.isEmpty() || urls.contains(url)) continue;
 
+			/* One this program wrote and has since withdrawn; see retiredSources(). */
+			if (retired.contains(url))
+			{
+				rewritten = true;
+				continue;
+			}
+
 			urls.append(url);
 		}
 	}
 	else
 	{
 		urls = defaultSources();
+		rewritten = true;
+	}
 
-		/* Written out so that they can be found and edited. Somebody who then
-		   removes them all gets a Total of nought, which is respected. */
-		if (m_config)
-		{
-			QList<QPair<QString, QString>> values;
-			values.reserve(urls.size() + 1);
+	/*
+	 * Written out so that they can be found and edited, and written again when a
+	 * withdrawn one was dropped above - otherwise it is read, skipped and left in
+	 * the file to be skipped again on every start, and a user reading that file
+	 * sees a list this program has quietly stopped using.
+	 *
+	 * Somebody who then removes them all gets a Total of nought, which is
+	 * respected: 'configured' was asked before anything was read.
+	 */
+	if (rewritten && m_config)
+	{
+		/*
+		 * Cleared against the count that was there rather than the one being
+		 * written, so that a list which has shrunk does not leave its old tail
+		 * behind - a stale 'List 2' past a Total of two is read by nobody and
+		 * puzzles anyone who opens the file.
+		 */
+		QStringList stale;
+		for (int n = 0; n < stored; ++n) stale.append(list_key(n));
 
-			for (int n = 0; n < urls.size(); ++n) values.append({list_key(n), urls.at(n)});
-			values.append({TOTAL, QString::number(urls.size())});
+		QList<QPair<QString, QString>> values;
+		values.reserve(urls.size() + 1);
 
-			m_config->replaceGroup(ConfigStore::Application, GROUP, QStringList(),
-			                       values);
-			m_config->save(ConfigStore::Application);
-		}
+		for (int n = 0; n < urls.size(); ++n) values.append({list_key(n), urls.at(n)});
+		values.append({TOTAL, QString::number(urls.size())});
+
+		m_config->replaceGroup(ConfigStore::Application, GROUP, stale, values);
+		m_config->save(ConfigStore::Application);
 	}
 
 	for (const QString& url : urls)

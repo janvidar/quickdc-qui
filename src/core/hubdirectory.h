@@ -118,6 +118,21 @@ public:
 	/** The lists read when the configuration names none. */
 	static QStringList defaultSources();
 
+	/**
+	 * Lists this once shipped as a default and no longer does.
+	 *
+	 * Dropped from a stored configuration as well as from the defaults, because
+	 * every one of them was written into that configuration by this program
+	 * rather than chosen: withdrawing a default that has stopped answering while
+	 * leaving it in the file would fix nothing for anybody who had already
+	 * started the program once, which is everybody.
+	 *
+	 * Only what was shipped, matched exactly. A list somebody added themselves is
+	 * theirs, and a server that refuses today may answer next month - that is a
+	 * judgement for whoever chose it, not one to make on their behalf.
+	 */
+	static QStringList retiredSources();
+
 	/** Where the caches go when no directory was given. */
 	static QString defaultCacheDirectory();
 

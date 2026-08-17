@@ -70,6 +70,8 @@ private slots:
 
 	void aDirectoryWithNoConfigurationWritesTheDefaults();
 	void aDirectoryReadsItsSourcesInOrder();
+	void aWithdrawnListIsTakenOutOfAStoredConfiguration();
+	void noWithdrawnListIsStillShipped();
 	void severalListsMergeIntoOne();
 	void aCacheWrittenForAnotherSourceIsIgnored();
 
@@ -1253,6 +1255,77 @@ void TestHubList::aFinishedDownloadShowsItsWholePathAsText()
 	/* Whole, because a path is read in order to go and find the file with it: escaped
 	   and not reduced, so nothing of it is cut and no ellipsis stands in for the rest. */
 	QCOMPARE(asShown(tooltip), entry.filename);
+}
+
+/*
+ * A list this program shipped and has since withdrawn is taken out of the file
+ * it was written into.
+ *
+ * Withdrawing it from the defaults alone would fix nothing for anybody who had
+ * already started the program once - the defaults are consulted only when the
+ * configuration names no sources at all, so every existing installation would go
+ * on fetching a server that has stopped answering and logging the failure at
+ * every start.
+ */
+void TestHubList::aWithdrawnListIsTakenOutOfAStoredConfiguration()
+{
+	const QStringList retired = Qdc::HubDirectory::retiredSources();
+	QVERIFY2(!retired.isEmpty(), "nothing is withdrawn, so there is nothing to test");
+
+	const QString kept = QStringLiteral("https://example.org/hublist.xml.bz2");
+	const QString mine = QStringLiteral("https://example.net/mine.xml.bz2");
+
+	/* A stored list holding a withdrawn one between two that stay. */
+	m_config->setString(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
+	                    QStringLiteral("List 0"), kept);
+	m_config->setString(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
+	                    QStringLiteral("List 1"), retired.first());
+	m_config->setString(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
+	                    QStringLiteral("List 2"), mine);
+	m_config->setNumber(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
+	                    QStringLiteral("Total"), 3);
+	m_config->save(Qdc::ConfigStore::Application);
+
+	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+
+	QStringList urls;
+	for (const Qdc::HubListSource& source : directory.sources())
+		urls.append(source.url);
+
+	/* Gone, and the others kept in the order they were in. */
+	QCOMPARE(urls, QStringList({kept, mine}));
+
+	/*
+	 * And taken out of the file rather than merely skipped, or it is read past on
+	 * every start and anyone opening the file sees a list nothing uses.
+	 */
+	QCOMPARE(m_config->getNumber(Qdc::ConfigStore::Application,
+	                             QStringLiteral("Hublists"), QStringLiteral("Total")), 2);
+	QCOMPARE(m_config->getString(Qdc::ConfigStore::Application,
+	                             QStringLiteral("Hublists"), QStringLiteral("List 0")), kept);
+	QCOMPARE(m_config->getString(Qdc::ConfigStore::Application,
+	                             QStringLiteral("Hublists"), QStringLiteral("List 1")), mine);
+
+	/* The tail of the longer list it replaced is gone with it. */
+	QVERIFY(!m_config->contains(Qdc::ConfigStore::Application,
+	                            QStringLiteral("Hublists"), QStringLiteral("List 2")));
+
+	/* Read back a second time, nothing is rewritten and nothing has moved. */
+	Qdc::HubDirectory again(nullptr, m_config, cacheDir());
+
+	QStringList second;
+	for (const Qdc::HubListSource& source : again.sources())
+		second.append(source.url);
+
+	QCOMPARE(second, QStringList({kept, mine}));
+}
+
+/* Nothing withdrawn is still offered as a default. */
+void TestHubList::noWithdrawnListIsStillShipped()
+{
+	for (const QString& gone : Qdc::HubDirectory::retiredSources())
+		QVERIFY2(!Qdc::HubDirectory::defaultSources().contains(gone),
+		         "a list is both shipped and withdrawn");
 }
 
 QTEST_MAIN(TestHubList)
