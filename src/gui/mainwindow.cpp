@@ -145,13 +145,6 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	m_rail->addTrailingSpace();
 	addView(new SettingsView(m_config, m_shares, m_drop));
 
-	/*
-	 * A network that changed is a verdict that no longer describes anything: the
-	 * address the server saw and the path back to this port are both properties of
-	 * the network that has just gone. The watcher has already waited for the
-	 * transitions to stop and for the machine to be online again, so this asks at
-	 * the first moment an answer is obtainable.
-	 */
 	connect(m_watch, &NetworkWatch::connectivityChanged,
 	        m_drop, &DropBridge::recheck);
 
@@ -241,11 +234,6 @@ Qdc::MainWindow::~MainWindow()
 	delete m_favourites;
 	m_favourites = nullptr;
 
-	/*
-	 * The watcher first: it is what asks for a measurement, and one asked for
-	 * while the bridge below is going would be posted at a bridge that has
-	 * detached its relay.
-	 */
 	delete m_watch;
 	m_watch = nullptr;
 

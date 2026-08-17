@@ -105,6 +105,16 @@ private:
 	 * it because it has to live where there is a Qt event loop - the core thread
 	 * runs a reactor and never calls exec(), so a watcher made there would sit
 	 * silent for ever.
+	 *
+	 * The watcher asks the bridge for a fresh measurement whenever the network
+	 * changed, because a verdict then describes a network that has gone: the address
+	 * a server saw and the path back to this port are both properties of it. The
+	 * watcher has already waited for the transitions to stop and for the machine to
+	 * be online again, so that is the first moment an answer is obtainable.
+	 *
+	 * On the way out the watcher goes before the bridge, being what asks: a
+	 * measurement asked for while the bridge is going would be posted at a bridge
+	 * that has detached its relay.
 	 */
 	DropBridge* m_drop;
 	NetworkWatch* m_watch;

@@ -96,15 +96,6 @@ public:
 	DropWatcher& operator=(const DropWatcher&) = delete;
 
 	/**
-	 * Measure again, from the settings as they stand.
-	 *
-	 * Read here rather than passed in, and read from the store rather than from
-	 * the bridge's copy of it: what is worth testing is the port the core is
-	 * actually listening on. The group a preference store reads from is mutable
-	 * state of the store's own, so it is selected immediately before the read and
-	 * nothing relies on one set earlier.
-	 */
-	/**
 	 * Report a verdict the core already had, as though it had just arrived.
 	 *
 	 * For the one that the start-up check finished before this bridge existed:
@@ -116,6 +107,30 @@ public:
 		EventDropCheckFinished(verdict);
 	}
 
+	/**
+	 * Measure again, from the settings as they stand.
+	 *
+	 * Read here rather than passed in, and read from the store rather than from
+	 * the bridge's copy of it: what is worth testing is the port the core is
+	 * actually listening on. The group a preference store reads from is mutable
+	 * state of the store's own, so it is selected immediately before the read and
+	 * nothing relies on one set earlier.
+	 *
+	 * An unset server is refused before anything is attempted, because that is a
+	 * setting somebody has not made yet rather than a network that did not answer.
+	 * Asking at all tells that server this client's address and the port it listens
+	 * on, so there is deliberately no host to fall back to.
+	 *
+	 * The run itself goes through the core's own call rather than by touching the
+	 * check, which is declared in a header naming Drop's types - a private
+	 * dependency of the core precisely so that nothing above it needs them. That
+	 * call reads the server and the port again on its own, which is the same pair
+	 * read here; they are read here only to refuse the unconfigured case with a
+	 * sentence worth showing, since a bare false says nothing about why. A refusal
+	 * for any other reason means a run is already going, and that one reports
+	 * through this same listener when it finishes, so there is nothing to say and
+	 * nothing to correct.
+	 */
 	void restart(QuickDC::Core* core)
 	{
 		QuickDC::Preferences* config = core ? core->config : nullptr;
@@ -132,12 +147,6 @@ public:
 		const uint16_t port =
 			static_cast<uint16_t>(config->getNumber("Port", DEFAULT_PORT));
 
-		/*
-		 * Refused before anything is attempted, because this is a setting
-		 * somebody has not made yet rather than a network that did not answer.
-		 * Asking at all tells that server this client's address and the port it
-		 * listens on, so there is deliberately no host to fall back to.
-		 */
 		if (server.empty())
 		{
 			fail(QStringLiteral("No reachability server has been configured, so "
@@ -145,25 +154,11 @@ public:
 			return;
 		}
 
-		/*
-		 * Through the core's own call rather than by touching the check, which is
-		 * declared in a header naming Drop's types - a private dependency of the
-		 * core precisely so that nothing above it needs them. That call reads the
-		 * server and the port again on its own, which is the same pair read above:
-		 * this reads them only to refuse the unconfigured case with a sentence
-		 * worth showing, since a bare false says nothing about why.
-		 */
 		(void) server;
 		(void) port;
 
 		if (!QuickDC::startDropCheck())
-		{
-			/*
-			 * A run already going will report through this same listener when it
-			 * finishes, so there is nothing to say and nothing to correct.
-			 */
 			return;
-		}
 	}
 
 protected:
@@ -238,32 +233,13 @@ Qdc::DropBridge::DropBridge(CoreThread* thread, QObject* parent)
 
 	CoreThread* core = m_thread.data();
 
-	/*
-	 * Posted rather than waited on. The listener belongs to the core thread and
-	 * has to be built there, and there is nothing to miss by not waiting: a run
-	 * started at start-up reports through the core's own listener, which records
-	 * it, and this is a constructor a window is being built out of - waiting
-	 * would cost it a whole core turn at whatever the reactor is busy with.
-	 */
 	m_thread->post([holder = m_watch, relay = m_relay, core, bridge = this] {
 		if (!core->core()) return;
 
 		holder->watcher = new DropWatcher(bridge, relay);
 
-		/*
-		 * And the core reports to it from now on rather than to the listener it
-		 * set up for itself. That one only logged and asked the hubs to republish;
-		 * this does the same through the bridge, and is also read by a settings
-		 * page. Displacing it cancels a run in flight, since the connect-back is
-		 * recognised through whichever check the core names.
-		 */
 		QuickDC::setDropCheckListener(holder->watcher);
 
-		/*
-		 * What the start-up check already established, if it finished before this
-		 * was built - otherwise a page opened a moment later would have to ask a
-		 * third party for an answer that is already in hand.
-		 */
 		const QuickDC::DropVerdict known = QuickDC::lastDropVerdict();
 		if (known.ran) holder->watcher->replay(known);
 	});
@@ -271,26 +247,11 @@ Qdc::DropBridge::DropBridge(CoreThread* thread, QObject* parent)
 
 Qdc::DropBridge::~DropBridge()
 {
-	/* Nothing in flight has anywhere to report to from here on. */
 	m_relay->detach();
 
 	if (!m_thread) return;
 
-	/*
-	 * Posted, and it does not have to block. The core may still call the watcher
-	 * about a run it is finishing, but the call goes to the relay rather than to
-	 * this object and the relay is detached above - so an event landing between
-	 * here and the job running has nowhere to go.
-	 *
-	 * The box rather than a member, because by the time this job runs there is no
-	 * bridge left to read one from. A core that has already stopped drops the job
-	 * and leaks the watcher, which is the lesser evil: the object is small, and
-	 * the alternative is deleting something the reactor may be inside on a thread
-	 * that no longer runs it.
-	 */
 	m_thread->post([holder = m_watch] {
-		/* Before the object goes, or the core would report a finishing run to a
-		   listener that has been freed. */
 		QuickDC::setDropCheckListener(nullptr);
 
 		delete holder->watcher;
@@ -313,11 +274,6 @@ void Qdc::DropBridge::recheck()
 
 	CoreThread* core = m_thread.data();
 
-	/*
-	 * Nothing of this thread's is captured, and the watcher is found through the
-	 * box: the job that builds it is already queued when this runs, so a check
-	 * asked for before the core thread got round to it still finds one.
-	 */
 	m_thread->post([holder = m_watch, relay = m_relay, core, bridge = this] {
 		if (holder->watcher)
 		{
@@ -325,15 +281,6 @@ void Qdc::DropBridge::recheck()
 			return;
 		}
 
-		/*
-		 * Only reachable when the core was not running when this bridge was
-		 * built. Said rather than swallowed: somebody is waiting in front of a
-		 * settings page, and silence reads as a check that is still running.
-		 *
-		 * The sentence is built on the far side, where it is going to be read. A
-		 * QString shares its buffer with its copies, so one made here would cross
-		 * between the threads still held on this one.
-		 */
 		Relay* target = relay.get();
 
 		QMetaObject::invokeMethod(target, [relay, bridge] {

@@ -124,6 +124,10 @@ public:
 	 * The transcripts come back with them, so a conversation carries on rather
 	 * than starting over. Does nothing without a ConfigBridge to have recorded it.
 	 *
+	 * The hub this program runs itself is opened first and is not counted among them,
+	 * its row being there because the setting says so - which is not by itself a
+	 * reason to bring this view forward over whatever the window is showing.
+	 *
 	 * @return whether anything was opened, so that a caller can bring this view
 	 *         forward - somebody who left a conversation on screen should find it
 	 *         there, not have to go looking for it behind the home page.
@@ -135,6 +139,12 @@ public:
 	 *
 	 * Called as conversations open and close rather than only on the way out, so
 	 * that a session which ends in a crash still comes back.
+	 *
+	 * All the hubs but the one this program runs itself. That row is there because the
+	 * setting says so, so recording it here would have it opened again at the next
+	 * start whether or not the setting still said so - and then closed a moment later,
+	 * which reads as a hub that failed. What is open *on* it is still written down,
+	 * under its own address like any other hub's.
 	 */
 	void saveSession();
 
@@ -566,11 +576,23 @@ private:
 	 * Open, close or move the row for the hub this program runs itself.
 	 *
 	 * That row is there because the setting says so rather than because anybody
-	 * opened it, so this is what decides it: called when the window comes up and
-	 * again whenever the settings are written.
+	 * opened it, so this is what decides it: called when the window comes up, and
+	 * again whenever the switch or the port the hub answers on is written - that port
+	 * living with the client's own network settings because it is the same port.
 	 *
 	 * The address follows the client's own listening port, so a change to that port
-	 * moves the hub rather than leaving a row pointing at nothing.
+	 * moves the hub rather than leaving a row pointing at nothing. The old row is
+	 * closed even when there is a new one to open: the two are the same hub answering
+	 * elsewhere, and a list with both in it would say this computer runs two.
+	 * 'm_localHubUrl' is cleared before the old row is closed, so that what closeHub()
+	 * writes down is already the truth, and set before the new hub is opened, because
+	 * opening one draws its row - and a row drawn before it was set would be drawn as
+	 * somebody else's hub. What was open on the hub is put back here, because
+	 * restoreSession() does that for the hubs it opens and does not open this one.
+	 *
+	 * Called from restoreSession() rather than from the constructor: opening a hub
+	 * builds the board bridge, and setBoardDirectory() is allowed to be called after
+	 * this view is built and before a hub is opened.
 	 */
 	void reloadLocalHub();
 
@@ -626,7 +648,15 @@ private:
 	/** Sum every pane's unread count into the rail badge. */
 	void refreshBadge();
 
-	/** Redraw a row's label, which carries the unread count. */
+	/**
+	 * Redraw a row's label, which carries the unread count.
+	 *
+	 * The hub this program runs itself is drawn as a machine rather than as the speech
+	 * bubbles every other hub gets, and said in the tooltip as well, because a shape
+	 * says which row and only words say why. Which row that is comes from the address
+	 * rather than from anything the row carries, so that the mark follows the setting;
+	 * see 'm_localHubUrl'.
+	 */
 	void refreshItem(QTreeWidgetItem* item, ChatPane* pane);
 
 	/**

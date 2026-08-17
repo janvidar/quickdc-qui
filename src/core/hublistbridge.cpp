@@ -111,11 +111,8 @@ private:
 	 * there is no way to test a bridge pointer for that from this thread. The
 	 * relay is detached instead, which is what turns 'work' into nothing.
 	 *
-	 * A template over the callable, as every other bridge here holds one, rather
-	 * than a std::function. The difference stopped being load bearing once
-	 * InetAddress::EventHostError stopped writing to itself after the callback
-	 * that frees it, which is what used to reach in and null this object's
-	 * innards; holding the lambda by its own type is now only consistency.
+	 * A template over the callable rather than a std::function, holding the lambda
+	 * by its own type as every other bridge here does.
 	 */
 	template<typename Work>
 	void report(Work work)

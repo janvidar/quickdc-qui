@@ -45,6 +45,26 @@ class NetworkWatch final : public QObject {
 	Q_OBJECT
 
 public:
+	/**
+	 * Loads Qt's network backend and starts listening for transitions.
+	 *
+	 * The backend is process wide and static, so loading it a second time is
+	 * loading it once: another watcher costs nothing, and no instance of this owns
+	 * what QNetworkInformation::instance() returns. A platform Qt has no backend
+	 * for leaves a watcher that never fires rather than a failure to report; see
+	 * isWatching().
+	 *
+	 * Every transition the backend offers is listened for - reachability, the
+	 * transport medium, metered, captive portal - because any of them can be the
+	 * first sign of a different network and none of them is reliably the last.
+	 * Reachability alone misses a switch between two working links; the transport
+	 * medium alone misses a cable pulled and put back. Since the change is only
+	 * reported once the quiet period ends, listening too widely costs a timer
+	 * restart and nothing else.
+	 *
+	 * Each connection is made with this as its context object, so all of them go
+	 * when this does - the sender is the process' own and outlives us.
+	 */
 	explicit NetworkWatch(QObject* parent = nullptr);
 	~NetworkWatch() override;
 
@@ -88,10 +108,23 @@ signals:
 	void connectivityChanged();
 
 private:
-	/** A transition arrived: start the quiet period over. */
+	/**
+	 * A transition arrived: start the quiet period over.
+	 *
+	 * Restarted rather than left to run, which is the difference between reporting
+	 * the state the network ended up in and reporting the first step of getting
+	 * there. A link that flaps for a minute is worth exactly one check, and it is
+	 * the one after the flapping stops.
+	 */
 	void noteTransition();
 
-	/** The quiet period elapsed. Report it, if there is anything to report to. */
+	/**
+	 * The quiet period elapsed. Report it, if there is anything to report to.
+	 *
+	 * Says nothing while the machine is still offline: the link coming back is
+	 * itself a transition, so the check that was owed here happens then, against a
+	 * network that can answer it.
+	 */
 	void settle();
 
 	QTimer* m_settle;

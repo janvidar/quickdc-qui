@@ -69,7 +69,7 @@ struct ReachabilityVerdict {
 
 	ReachabilityMode mode = ReachabilityMode::Unknown;
 
-	/* The per-port outcomes, named. Empty where the test was not run. */
+	/** The per-port outcomes, named. Empty where the test was not run. */
 	QString tcp;
 	QString udp;
 
@@ -117,7 +117,43 @@ class DropBridge final : public QObject {
 	Q_OBJECT
 
 public:
+	/**
+	 * Builds the core side watcher, and measures nothing.
+	 *
+	 * The watcher belongs to the core thread and has to be built there, in a job
+	 * that is posted rather than waited on: this is a constructor a window is being
+	 * built out of, and waiting would cost it a whole core turn at whatever the
+	 * reactor happens to be busy with. Nothing is missed by not waiting. A run
+	 * started at start-up reports through the core's own listener, which records
+	 * it, and that recorded verdict is replayed through the watcher as soon as it
+	 * exists - otherwise a settings page opened a moment later would have nothing
+	 * to draw and no way to get it but to ask a third party for an answer that is
+	 * already in hand.
+	 *
+	 * From then on the core reports to this watcher rather than to the listener it
+	 * set up for itself. That one only logged and asked the hubs to republish; this
+	 * does the same through the bridge, and is also read by a settings page.
+	 * Displacing it cancels a run in flight, since the connect-back is recognised
+	 * through whichever check the core names.
+	 */
 	explicit DropBridge(CoreThread* thread, QObject* parent = nullptr);
+
+	/**
+	 * Detaches the relay and posts the watcher's deletion.
+	 *
+	 * Nothing blocks here either. The core may still call the watcher about a run
+	 * it is finishing, but the call is addressed to the relay rather than to this
+	 * object and the relay is detached first, so an event landing between the
+	 * detach and the job running has nowhere to go. The watcher stops being the
+	 * core's listener before it is freed, or the core would report a finishing run
+	 * to a listener that no longer exists.
+	 *
+	 * The job finds the watcher through the shared box rather than through a
+	 * member, because by the time it runs there is no bridge left to read one from.
+	 * A core that has already stopped drops the job and leaks the watcher, which is
+	 * the lesser evil: the object is small, and the alternative is deleting
+	 * something the reactor may be inside, on a thread that no longer runs it.
+	 */
 	~DropBridge() override;
 
 	/**
@@ -139,7 +175,20 @@ public:
 	 *
 	 * Returns at once. The outcome arrives as verdictChanged() or checkFailed(),
 	 * and a check involves a stranger's server connecting back, so that is
-	 * seconds away rather than milliseconds.
+	 * seconds away rather than milliseconds. Nothing here may block: a settings
+	 * page draws once without an answer and again when one arrives.
+	 *
+	 * The job captures nothing of this thread's and finds the watcher through the
+	 * shared box, so a check asked for before the core thread got round to building
+	 * one still finds it - the job that builds it is already queued.
+	 *
+	 * Where there is no watcher at all, which is only reachable when the core was
+	 * not running when this bridge was built, checkFailed() says so rather than
+	 * nothing being said: somebody is waiting in front of a settings page, and
+	 * silence reads as a check that is still running. That sentence is built on the
+	 * thread that is going to read it, because a QString shares its buffer with its
+	 * copies and one made on the core thread would cross between the threads still
+	 * held over there.
 	 */
 	void recheck();
 

@@ -3430,6 +3430,27 @@ void TestHubs::theBoardGlyphIsAThirdFigureInTheSameSpace()
 	QVERIFY(hole > 0);
 }
 
+/**
+ * The row for the hub this program runs is marked apart from everybody else's.
+ *
+ * The session total is cleared first, so that every row in the tree is one this test asked
+ * for; and restoreSession() is what puts the row there, since nothing has been asked to
+ * open a hub and the row exists only because the setting says this computer runs one. A
+ * hub somebody else runs is then opened beside it, which is what the marking is a
+ * difference from.
+ *
+ * The glyph is compared as a rendered image at the size the row was drawn at, asked of the
+ * icon rather than assumed, so the comparison pins which glyph a row carries and not how
+ * large the tree draws one. The comparison is then checked to discriminate: the hub run
+ * here and a hub somewhere else are not the same picture, so matching one of them was not
+ * matching anything at all. A shape says which row it is, and only words say why, so the
+ * tooltip is asserted too.
+ *
+ * The mark follows the setting rather than sticking to the row, so switching the hub off
+ * takes its row away and leaves the hub somebody actually opened. That is written back
+ * whatever this test found, because the store is shared with every other test in this file
+ * and a hub left running would put a row in their trees.
+ */
 void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 {
 	using Qdc::ConfigStore;
@@ -3439,10 +3460,6 @@ void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 	const QString localHub = QStringLiteral("Local hub");
 	const QString enabled = QStringLiteral("Enabled");
 
-	/*
-	 * Nothing of any other test's session, so that every row in the tree below is one
-	 * this test asked for.
-	 */
 	config.setNumber(ConfigStore::Application, QStringLiteral("Windows"),
 	                 QStringLiteral("Total"), 0);
 
@@ -3454,10 +3471,6 @@ void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
 	hubs.setBoardDirectory(boardScratch(QStringLiteral("localhub")));
 
-	/*
-	 * Which is what puts the row there. Nothing has been asked to open a hub: the row
-	 * exists because the setting says this computer runs one.
-	 */
 	hubs.restoreSession();
 
 	QTreeWidget* rows = hubTree(hubs);
@@ -3467,17 +3480,12 @@ void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 	QTreeWidgetItem* ownRow = rows->topLevelItem(0);
 	QVERIFY(ownRow);
 
-	/* And somebody else's hub beside it, which is what the marking is a difference from. */
 	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.61:412")));
 	QCOMPARE(rows->topLevelItemCount(), 2);
 
 	QTreeWidgetItem* otherRow = rows->topLevelItem(1);
 	QVERIFY(otherRow);
 
-	/*
-	 * The size the row was drawn at, asked of the icon rather than assumed, so this
-	 * pins which glyph a row carries and not how large the tree draws one.
-	 */
 	const qreal ratio = hubs.devicePixelRatioF();
 	const QList<QSize> stored = ownRow->icon(0).availableSizes();
 	QVERIFY(!stored.isEmpty());
@@ -3497,39 +3505,35 @@ void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 	QCOMPARE(rowGlyph(ownRow->icon(0)), expected(Qdc::Glyph::LocalHub));
 	QCOMPARE(rowGlyph(otherRow->icon(0)), expected(Qdc::Glyph::Hubs));
 
-	/*
-	 * And the comparison discriminates: the hub run here and a hub somewhere else are
-	 * not the same picture, so matching one of them was not matching anything at all.
-	 */
 	QVERIFY2(expected(Qdc::Glyph::LocalHub) != expected(Qdc::Glyph::Hubs),
 	         "the hub this program runs was drawn exactly like everybody else's");
 
-	/* A shape says which row it is, and only words say why. */
 	QVERIFY2(ownRow->toolTip(0).contains(QStringLiteral("Running on this computer")),
 	         "the row does not say that this hub runs here");
 
 	QVERIFY(!otherRow->toolTip(0).contains(QStringLiteral("Running on this computer")));
 
-	/*
-	 * And the mark follows the setting rather than sticking to the row: switching the
-	 * hub off takes its row away and leaves the hub somebody actually opened.
-	 *
-	 * Written back whatever this test found, because the store is shared with every
-	 * other test in this file and a hub left running would put a row in their trees.
-	 */
 	config.setBool(ConfigStore::Application, localHub, enabled, false);
 
 	QCOMPARE(rows->topLevelItemCount(), 1);
 	QCOMPARE(rows->topLevelItem(0), otherRow);
 }
 
+/**
+ * The glyph for the hub run here is a fourth figure drawn in the same space as the rest.
+ *
+ * Painted into a box with margin all round it, because nothing clips a glyph: one drawn
+ * outside the grid its neighbours share would overrun the row beside it, and ink on the
+ * margin here is what says it does. There has to be enough ink to be a figure at the
+ * weight of the bubbles beside it.
+ *
+ * The lights are cut out of the units rather than drawn over them, which is only true
+ * while the path is filled odd-even - so a line through one of them has a hole in it, with
+ * ink on both sides. And the gap between the two units is what makes them two things
+ * rather than one block, so a line down the middle of the figure crosses no ink.
+ */
 void TestHubs::theLocalHubGlyphIsAFourthFigureInTheSameSpace()
 {
-	/*
-	 * Painted into a box with margin all round it, because nothing clips a glyph: one
-	 * drawn outside the grid its neighbours share would overrun the row beside it, and
-	 * ink on the margin here is what says it does.
-	 */
 	constexpr int BOX = 48;
 	constexpr int MARGIN = 8;
 
@@ -3558,14 +3562,8 @@ void TestHubs::theLocalHubGlyphIsAFourthFigureInTheSameSpace()
 		}
 	}
 
-	/* Enough of it to be a figure at the weight of the bubbles beside it. */
 	QVERIFY(ink > BOX * BOX / 5);
 
-	/*
-	 * The lights are cut out of the units rather than drawn over them, which is only
-	 * true while the path is filled odd-even - so a line through one of them has a
-	 * hole in it, with ink on both sides.
-	 */
 	const int through = MARGIN + BOX / 3;
 
 	int first = -1;
@@ -3587,10 +3585,6 @@ void TestHubs::theLocalHubGlyphIsAFourthFigureInTheSameSpace()
 
 	QVERIFY2(hole > 0, "the lights were drawn over the units rather than cut out of them");
 
-	/*
-	 * And the gap between the two units, which is what makes them two things rather
-	 * than one block: a line down the middle of the figure crosses no ink.
-	 */
 	const int middle = MARGIN + BOX / 2;
 	QCOMPARE(qAlpha(drawn.pixel(MARGIN + BOX / 2, middle)), 0);
 }

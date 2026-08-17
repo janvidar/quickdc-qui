@@ -56,6 +56,13 @@ class SettingsView final : public View {
 
 public:
 	/**
+	 * The page is built from whatever has been measured already, and asks for
+	 * nothing and waits for nothing: a check is several round trips to a stranger's
+	 * server that may not answer at all, so the rows are drawn with what is in hand
+	 * and drawn again when there is more. The start-up check is usually finished long
+	 * before this window is built, and asking for that answer again would be asking a
+	 * third party for something already known.
+	 *
 	 * @param config where everything is read and written. May be null, in which
 	 *        case the form is shown disabled.
 	 * @param shares the shared folder list; may be null.
@@ -69,7 +76,20 @@ public:
 	QString title() const override;
 	Glyph glyph() const override;
 
-	/** Discard any edits and read the stored values again. */
+	/**
+	 * Discard any edits and read the stored values again.
+	 *
+	 * The reachability server's name is read back with the rest and the status rows are
+	 * left alone: a Revert undoes edits, and a measurement is not an edit, so throwing
+	 * away what was measured because somebody pressed Revert would lose the one thing
+	 * on this page that cannot be read again from the file.
+	 *
+	 * The local hub's fields are enabled from the switch here rather than left to its
+	 * toggled signal, which does not fire for a value that has not changed - and the
+	 * value has not changed on the load that follows a save. Its figures land in spin
+	 * boxes whose ranges are the core's own clamps, so a figure edited into the file by
+	 * hand is shown as what the hub will do with it rather than as what was typed.
+	 */
 	void load();
 
 	/**
@@ -121,13 +141,52 @@ private:
 	void renameSelectedShare();
 	void chooseDownloadDirectory();
 
-	/** Show what a measurement concluded, whatever it concluded. */
+	/**
+	 * Show what a measurement concluded, whatever it concluded.
+	 *
+	 * A run that established nothing is not an answer, whatever else it carries, and is
+	 * shown as nothing having been measured.
+	 *
+	 * Which family was measured is part of the answer rather than a detail of how it was
+	 * arrived at: one connection has one source address, so a run answers for IPv4 or
+	 * for IPv6 and never for both, and a dual-stack host reachable over one of them
+	 * would otherwise read as reachable full stop. The classification beside the address
+	 * is the server's own word for what it saw, and that address need not be one this
+	 * machine has - behind a carrier-grade NAT it is the provider's - which is exactly
+	 * what the classification is there to say.
+	 *
+	 * The per-port outcomes are shown in the words they arrived in and only for the
+	 * ports that were tested: an empty one is a test the server does not offer rather
+	 * than a port that failed, and reporting it as a failure would argue somebody into
+	 * turning off a feature that works. The reason and the remedies go up as they were
+	 * written, one remedy to a line, bulleted and not a word otherwise - whoever
+	 * measured wrote them for a user to read, and a client that reworded them would hand
+	 * somebody comparing two clients two accounts of one network and no way to tell
+	 * which to believe.
+	 *
+	 * A time that is not valid is a measurement the core recorded no time for, and is
+	 * shown as never rather than as the epoch: dating an answer to 1970 reads as a bug
+	 * in the clock instead of as a gap in what was recorded.
+	 */
 	void showVerdict(const ReachabilityVerdict& verdict);
 
-	/** Show why nobody measured, which says nothing about being reachable. */
+	/**
+	 * Show why nobody measured, which says nothing about being reachable.
+	 *
+	 * Only that one line changes and every row above it is left exactly as it was. A
+	 * check that could not be run says nothing about whether this client is reachable -
+	 * only that nobody found out this time - so an earlier measurement is still the best
+	 * thing known, and the time it was taken is already beside it.
+	 */
 	void showCheckFailed(const QString& reason);
 
-	/** What the status rows say before anything has been measured. */
+	/**
+	 * What the status rows say before anything has been measured.
+	 *
+	 * The paragraphs are hidden rather than left empty: three paragraphs of nothing
+	 * between the button and the note below it is a gap somebody reads as a page still
+	 * loading.
+	 */
 	void clearVerdict();
 
 	/** A note under a group, in the muted colour. */
@@ -158,12 +217,20 @@ private:
 	 * measuring library writes - 'm_dropReason' carries its reason and its remedies,
 	 * 'm_dropNote' its note - are shown as they arrive rather than reworded: a user
 	 * who is given two different explanations of the same network by two clients
-	 * concludes that one of them is broken.
+	 * concludes that one of them is broken. Every one of these labels is on
+	 * Qt::PlainText for the same reason, none of them left to guess: a label asked to
+	 * guess reads a sentence with an angle bracket in it as markup, and showing the
+	 * words unaltered is the whole point.
 	 *
 	 * 'm_dropAttempt' is how the last attempt went, which is a different thing from
 	 * what was measured and so has a label of its own. A check that could not be run
 	 * says nothing about whether this client is reachable, so it must not overwrite an
-	 * answer that was measured earlier and still stands.
+	 * answer that was measured earlier and still stands. It is also where a check that
+	 * has been asked for says so, rather than 'm_dropCheck' being disabled on the way
+	 * out: a button disabled there has to be re-enabled by something coming back, and a
+	 * request the bridge decides not to make - no server named yet, or one already in
+	 * flight - reports nothing at all, which would leave the button dead for the life
+	 * of the window.
 	 */
 	QLineEdit* m_dropServer;
 	QLabel* m_dropAddress;
@@ -182,6 +249,11 @@ private:
 	 * on screen and this one wins: a page that put the claim above the answer it defeats
 	 * would be showing the answer as though it still applied. It is a setting and not a
 	 * verdict, so it is the one editable thing below the read-only rows.
+	 *
+	 * What it costs is said on the page rather than in the tooltip, because it is the
+	 * one setting here whose cost is paid by somebody else: a peer acts on the claim by
+	 * connecting, and when it cannot the transfer fails at that peer's end, so the
+	 * symptom never appears beside the switch that caused it.
 	 */
 	QCheckBox* m_forceActive;
 
@@ -197,6 +269,9 @@ private:
 	 * range is one this page should not have offered. The fields are held together by
 	 * 'm_localHubFields', which is enabled and disabled with the switch so that the
 	 * labels grey out with the values rather than standing over dead controls.
+	 *
+	 * 'm_localHubSendQueue' is shown in kibibytes and stored in bytes, the way the
+	 * chunk size on Transfers is.
 	 */
 	QCheckBox* m_localHub;
 	QWidget* m_localHubFields;
