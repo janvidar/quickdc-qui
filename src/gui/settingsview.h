@@ -270,6 +270,17 @@ private:
 	 */
 	QCheckBox* m_forceActive;
 
+	/*
+	 * Ask the internet gateway to forward the peer port, off unless somebody turns it
+	 * on.
+	 *
+	 * A setting rather than something the client does when a check says passive: a
+	 * search tells every host on the local segment that this machine is here and what
+	 * it runs, and that disclosure is the cost of the feature. It sits with the port it
+	 * is about, since what it forwards is that port and no other.
+	 */
+	QCheckBox* m_useUpnp;
+
 	QSpinBox* m_slots;
 	QSpinBox* m_maxDownloads;
 	QSpinBox* m_chunkSize;

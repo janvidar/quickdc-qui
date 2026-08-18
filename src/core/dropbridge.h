@@ -193,6 +193,21 @@ public:
 	 */
 	void recheck();
 
+	/**
+	 * Bring the gateway mapping into line with [Network] UseUPnP as it now
+	 * stands, starting a search or releasing what was granted.
+	 *
+	 * Called after the setting is written, so that turning it on forwards the
+	 * port now rather than at the next start: a user who turned it on because a
+	 * check said passive is waiting for that check to say something else.
+	 *
+	 * Returns at once and reports nothing. Whether the port ended up forwarded
+	 * is answered by measuring again, which is the only thing that can answer
+	 * it - a gateway reports success without knowing whether anything above it
+	 * honours the mapping.
+	 */
+	void applyForwarding();
+
 signals:
 	/** A run completed, whatever it concluded. */
 	void verdictChanged(const Qdc::ReachabilityVerdict& verdict);

@@ -53,6 +53,9 @@ private slots:
 	void activeModeIsNotForcedUntilItIsAskedFor();
 	void forcedActiveModeSurvivesTheForm();
 	void theConnectionPageSaysWhatForcingActiveModeCosts();
+	void theGatewayIsNotAskedForAMappingUntilItIsAskedFor();
+	void askingTheGatewayToForwardSurvivesTheForm();
+	void theConnectionPageSaysWhatSearchingForAGatewayDiscloses();
 
 	void boardsFetchNothingAheadUntilTheyAreTold();
 	void theBoardsPageSaysThatReadingAPostMayBeSeen();
@@ -581,6 +584,95 @@ void TestSettings::theConnectionPageSaysWhatForcingActiveModeCosts()
 
 	QVERIFY2(page.contains(QStringLiteral("whatever the check above concluded")),
 	         "the page does not say that the claim overrides the measurement");
+}
+
+/**
+ * Nothing is asked of a gateway until somebody asks for it.
+ *
+ * The default has to be off in the form as well as in the core: finding a gateway means
+ * searching the local segment, which tells every host on it that this machine is here
+ * and what it runs, and a form that saved the switch on would make that disclosure on
+ * behalf of a user who never chose it.
+ */
+void TestSettings::theGatewayIsNotAskedForAMappingUntilItIsAskedFor()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Network");
+	const QString key = QStringLiteral("UseUPnP");
+
+	m_config->remove(ConfigStore::Application, group, key);
+	m_config->save(ConfigStore::Application);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	QVERIFY(view.save());
+
+	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, true), false);
+}
+
+/**
+ * A gateway mapping asked for in the file is still asked for after the form saves.
+ *
+ * The key is taken back out of the store between the load() and the save(), for the
+ * reason the forced-active test gives: left in place, this would pass against a page
+ * that read the switch and never wrote it back, and such a page would turn forwarding
+ * off every time anything else was saved - leaving a user passive with no sign of why.
+ */
+void TestSettings::askingTheGatewayToForwardSurvivesTheForm()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Network");
+	const QString key = QStringLiteral("UseUPnP");
+
+	m_config->setBool(ConfigStore::Application, group, key, true);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	view.load();
+
+	m_config->remove(ConfigStore::Application, group, key);
+	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), false);
+
+	QVERIFY(view.save());
+
+	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), true);
+
+	m_config->remove(ConfigStore::Application, group, key);
+	m_config->save(ConfigStore::Application);
+}
+
+/**
+ * The connection page says what turning forwarding on tells the local network.
+ *
+ * On the page rather than in the tooltip, because the cost is not paid where the switch
+ * is: a search is a broadcast to every host on the segment, and nothing on screen would
+ * ever show that it happened. The page also has to say that a router granting a mapping
+ * settles nothing on its own, so that a user reading a passive verdict with forwarding
+ * on looks above the router rather than at the switch.
+ */
+void TestSettings::theConnectionPageSaysWhatSearchingForAGatewayDiscloses()
+{
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	QStringList said;
+
+	for (const QLabel* label : view.findChildren<QLabel*>())
+		said.append(label->text());
+
+	const QString page = said.join(QLatin1Char('\n'));
+
+	QVERIFY2(page.contains(QStringLiteral("tells every host on it that this machine is "
+	                                      "here and what it runs")),
+	         "the page does not say what a gateway search discloses");
+
+	QVERIFY2(page.contains(QStringLiteral("does not know whether anything above it "
+	                                      "honours one")),
+	         "the page does not say that a granted mapping settles nothing on its own");
 }
 
 void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()

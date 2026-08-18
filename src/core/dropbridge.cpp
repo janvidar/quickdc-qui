@@ -9,6 +9,7 @@
 #include <api/config.h>
 #include <api/core.h>
 #include <api/dropverdict.h>
+#include <network/portforward.h>
 
 #include <QMetaObject>
 
@@ -272,6 +273,34 @@ Qdc::DropBridge::~DropBridge()
 Qdc::ReachabilityVerdict Qdc::DropBridge::verdict(bool ipv6) const
 {
 	return ipv6 ? m_verdictV6 : m_verdictV4;
+}
+
+void Qdc::DropBridge::applyForwarding()
+{
+	if (!m_thread) return;
+
+	CoreThread* thread = m_thread.data();
+
+	m_thread->post([thread] {
+		QuickDC::Core* core = thread->core();
+		if (!core || !core->portforward || !core->config) return;
+
+		core->config->setGroup("Network");
+
+		const bool wanted = core->config->getBool("UseUPnP", false);
+		const bool have = core->portforward->isForwarded() || core->portforward->isBusy();
+
+		if (wanted == have) return;
+
+		if (wanted)
+		{
+			core->portforward->start(
+				static_cast<uint16_t>(core->config->getNumber("Port", DEFAULT_PORT)));
+			return;
+		}
+
+		core->portforward->stop();
+	});
 }
 
 void Qdc::DropBridge::recheck()

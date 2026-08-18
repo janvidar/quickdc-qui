@@ -156,6 +156,18 @@ const QString REACHABILITY_SERVER_EXAMPLE = QStringLiteral("drop.quickdc.org");
 const QString FORCE_ACTIVE = QStringLiteral("Force active mode");
 constexpr bool FORCE_ACTIVE_DEFAULT = false;
 
+/**
+ * The key that has the core ask the internet gateway to forward the peer port.
+ *
+ * Off by default, and the reason is not caution about the gateway: finding one means
+ * sending a search to the whole local segment, which tells every host on it that this
+ * machine is here and what it runs. That is a disclosure whoever owns the machine
+ * should choose, and a client that cannot be connected to still works - it is only
+ * passive.
+ */
+const QString USE_UPNP = QStringLiteral("UseUPnP");
+constexpr bool USE_UPNP_DEFAULT = false;
+
 /** Chunk size is stored in bytes and shown in KiB. */
 constexpr int KIB = 1024;
 
@@ -357,6 +369,12 @@ QWidget* Qdc::SettingsView::buildConnection()
 	m_dropCheck->setToolTip(tr("Ask the server above what it sees, now, rather than "
 	                           "waiting for the next time QuickDC starts"));
 
+	m_useUpnp = new QCheckBox(
+		tr("Ask the router to forward this port (UPnP-IGD)"), page);
+	m_useUpnp->setToolTip(tr("Search the local network for an internet gateway and ask "
+	                         "it to forward the port above to this machine"));
+	connect(m_useUpnp, &QCheckBox::toggled, this, &SettingsView::markModified);
+
 	m_forceActive = new QCheckBox(
 		tr("Tell hubs a peer can connect here, whatever was measured"), page);
 	m_forceActive->setToolTip(tr("Announce active mode on every hub without waiting for "
@@ -373,6 +391,15 @@ QWidget* Qdc::SettingsView::buildConnection()
 	form->addRow(tr("Port"), m_port);
 	form->addRow(tr("Bind to"), m_bind);
 	form->addRow(tr("External address"), m_address);
+
+	form->addRow(QString(), m_useUpnp);
+
+	form->addRow(makeNote(tr(
+		"Forwarding is asked for by searching the local network for a gateway, which "
+		"tells every host on it that this machine is here and what it runs. A router "
+		"that grants a mapping does not know whether anything above it honours one, so "
+		"the check below is what settles whether it helped - and where it did not, the "
+		"mapping is given up again rather than left open.")));
 
 	form->addRow(makeNote(tr(
 		"The client tag hubs see is built from the version and whether this is "
@@ -876,6 +903,7 @@ void Qdc::SettingsView::load()
 		{QStringLiteral("Address"), QString()},
 		{REACHABILITY_SERVER, QString()},
 		{FORCE_ACTIVE, FORCE_ACTIVE_DEFAULT},
+		{USE_UPNP, USE_UPNP_DEFAULT},
 		{QStringLiteral("Slots"), DEFAULT_SLOTS},
 		{QStringLiteral("Max downloads"), DEFAULT_MAX_DOWNLOADS},
 		{QStringLiteral("Chunk size"), DEFAULT_CHUNK_KIB * KIB}
@@ -889,6 +917,8 @@ void Qdc::SettingsView::load()
 	m_dropServer->setText(network.value(REACHABILITY_SERVER).toString());
 
 	m_forceActive->setChecked(network.value(FORCE_ACTIVE).toBool());
+
+	m_useUpnp->setChecked(network.value(USE_UPNP).toBool());
 
 	m_slots->setValue(network.value(QStringLiteral("Slots")).toInt());
 	m_maxDownloads->setValue(network.value(QStringLiteral("Max downloads")).toInt());
@@ -1008,6 +1038,8 @@ bool Qdc::SettingsView::save()
 	                    REACHABILITY_SERVER, m_dropServer->text().trimmed());
 	m_config->setBool(ConfigStore::Application, NETWORK,
 	                  FORCE_ACTIVE, m_forceActive->isChecked());
+	m_config->setBool(ConfigStore::Application, NETWORK,
+	                  USE_UPNP, m_useUpnp->isChecked());
 
 	m_config->setNumber(ConfigStore::Application, NETWORK,
 	                    QStringLiteral("Slots"), m_slots->value());
@@ -1075,6 +1107,14 @@ bool Qdc::SettingsView::save()
 	 * asked, and this is the ask.
 	 */
 	m_config->notifyChanged();
+
+	/*
+	 * The gateway mapping, brought into line with the switch that was just written.
+	 * After the writes above rather than before them, because the core reads the
+	 * setting rather than being handed it, and the jobs carrying both run in the
+	 * order they were posted.
+	 */
+	if (m_drop) m_drop->applyForwarding();
 
 	/*
 	 * Here rather than as the combo changes: a theme applied while somebody is moving
