@@ -12,6 +12,7 @@
  * family, since one run answers for one family and the page shows both at once.
  */
 #include <core/dropbridge.h>
+#include <core/networkmode.h>
 
 #include <functional>
 
@@ -126,6 +127,21 @@ private:
 	 */
 	QWidget* makePage(QWidget* page);
 
+	/**
+	 * Show what the chosen connection mode is about, and hide the rest.
+	 *
+	 * Every mode keeps the reachability rows, since what the network does is worth
+	 * knowing whichever mode asked; the plumbing, the forwarding and the forced claim
+	 * belong to advanced alone, because in the other two modes they are derived rather
+	 * than answered - see save(), which writes them from the mode and not from the
+	 * controls.
+	 *
+	 * Called from the combo and again at the end of load(), for the reason the local
+	 * hub's fields are: a signal does not fire for a value that has not changed, and on
+	 * the load that follows a save the value has not changed.
+	 */
+	void applyConnectionMode();
+
 	/** Mark the form dirty and enable Save. Connected to every field. */
 	void markModified();
 
@@ -179,26 +195,55 @@ private:
 	QLineEdit* m_email;
 	QLabel* m_clientId;
 
+	/*
+	 * The mode, and the fields each mode is about, held one container to a mode.
+	 *
+	 * Containers rather than loose fields because a form layout hides a field without
+	 * hiding the label beside it, and a page of orphaned labels is worse than a page
+	 * that shows a setting the mode does not use. Advanced has two, since the claim it
+	 * offers belongs under the measurement it overrides and its plumbing above it.
+	 */
 	QComboBox* m_mode;
+	QWidget* m_automaticFields;
+	QWidget* m_advancedFields;
+	QWidget* m_advancedClaim;
+	QWidget* m_passiveFields;
 	QSpinBox* m_port;
 	QLineEdit* m_bind;
 	QLineEdit* m_address;
 
 	/*
-	 * Whether anything outside can reach the port above, and who was asked.
+	 * Whether anything outside can reach the port above.
 	 *
-	 * The server's name is the only setting of the group; the panel beside it is
-	 * read-only, because a measurement is not a preference and a field offering to
-	 * edit one would be offering to edit the network.
-	 *
-	 * The panel holds the verdicts and everything said about them, one per family,
-	 * and this page does no more than pass them on. That is what lets a test put an
-	 * answer on screen: every settings test builds this page with no bridge behind
-	 * it, so before the panel existed nothing here was ever drawn with a verdict in
-	 * it.
+	 * Read-only, because a measurement is not a preference: a field offering to edit
+	 * one would be offering to edit the network. The panel holds the verdicts and
+	 * everything said about them, one per family, and this page does no more than
+	 * pass them on. That is what lets a test put an answer on screen - every settings
+	 * test builds this page with no bridge behind it, so nothing here would otherwise
+	 * ever be drawn with a verdict in it.
 	 */
-	QLineEdit* m_dropServer;
 	ReachabilityPanel* m_reachability;
+
+	/**
+	 * The name of the server measured against, carried but never shown.
+	 *
+	 * Every mode measures against the same one and the page offers no way to change
+	 * it, so there is no field for it. It is still read and written, because a name
+	 * somebody put in the file by hand - a server of their own - must survive a save
+	 * of this page rather than being replaced by the default the derivation would
+	 * otherwise supply.
+	 */
+	QString m_storedServer;
+
+	/**
+	 * The mode as last loaded or saved.
+	 *
+	 * A save acts on a change of mode - it tells the hubs again and measures again -
+	 * and does neither when the mode is the one already in force. Without this, every
+	 * save of an unrelated field would announce this client on every hub it is logged
+	 * in to and spend a session with a third party's server.
+	 */
+	NetworkMode m_savedMode = NetworkMode::Advanced;
 
 	/*
 	 * Announce active mode whatever was measured, which the core reads before it looks

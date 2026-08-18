@@ -145,7 +145,6 @@ const QString DEFAULT_DOWNLOAD_DIR = QStringLiteral("~/.quickdc/downloads");
  * empty until somebody puts a name in it.
  */
 const QString REACHABILITY_SERVER = QStringLiteral("Reachability server");
-const QString REACHABILITY_SERVER_EXAMPLE = QStringLiteral("drop.quickdc.org");
 
 /**
  * The key that says how much of getting connected the client works out itself.
@@ -204,7 +203,6 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge
 	, m_port(new QSpinBox(this))
 	, m_bind(new QLineEdit(this))
 	, m_address(new QLineEdit(this))
-	, m_dropServer(new QLineEdit(this))
 	, m_reachability(new ReachabilityPanel(this))
 	, m_slots(new QSpinBox(this))
 	, m_maxDownloads(new QSpinBox(this))
@@ -371,50 +369,116 @@ QWidget* Qdc::SettingsView::buildConnection()
 	                networkModeToken(NetworkMode::Passive));
 
 	m_port->setRange(1, 65535);
+	m_port->setObjectName(QStringLiteral("connectionPort"));
 	m_bind->setPlaceholderText(DEFAULT_BIND);
 	m_address->setPlaceholderText(tr("Detected automatically"));
 
-	m_dropServer->setMaxLength(255);
-	m_dropServer->setPlaceholderText(REACHABILITY_SERVER_EXAMPLE);
+	/*
+	 * One container per mode, rather than a page of fields shown and hidden one at a
+	 * time. A form layout keeps the label and the field it belongs to as two separate
+	 * items, so hiding the field leaves its label standing over nothing - and the two
+	 * modes that decide the plumbing themselves would each show a column of names with
+	 * no values beside them. A container with its own form is one thing to hide, and
+	 * the labels go with it.
+	 *
+	 * Advanced has two of them because its claim belongs below the measurement it
+	 * defeats and its plumbing above it, and a container can only be in one place.
+	 */
+	m_automaticFields = new QWidget(page);
+	m_advancedFields = new QWidget(page);
+	m_advancedClaim = new QWidget(page);
+	m_passiveFields = new QWidget(page);
 
 	m_useUpnp = new QCheckBox(
-		tr("Ask the router to forward this port (UPnP-IGD)"), page);
+		tr("Ask the router to forward this port (UPnP-IGD)"), m_advancedFields);
+	m_useUpnp->setObjectName(QStringLiteral("connectionUpnp"));
 	m_useUpnp->setToolTip(tr("Search the local network for an internet gateway and ask "
 	                         "it to forward the port above to this machine"));
 	connect(m_useUpnp, &QCheckBox::toggled, this, &SettingsView::markModified);
 
 	m_forceActive = new QCheckBox(
-		tr("Tell hubs a peer can connect here, whatever was measured"), page);
+		tr("Tell hubs a peer can connect here, whatever was measured"), m_advancedClaim);
+	m_forceActive->setObjectName(QStringLiteral("connectionForceActive"));
 	m_forceActive->setToolTip(tr("Announce active mode on every hub without waiting for "
 	                             "a measurement or a peer to establish it"));
 	connect(m_forceActive, &QCheckBox::toggled, this, &SettingsView::markModified);
 
-	QFormLayout* form = new QFormLayout(page);
-	form->addRow(tr("Connection"), m_mode);
-	form->addRow(tr("Port"), m_port);
-	form->addRow(tr("Bind to"), m_bind);
-	form->addRow(tr("External address"), m_address);
+	/*
+	 * What automatic does on the user's behalf, said because it does it without asking
+	 * again: a server outside is contacted and has a connection made back here, which
+	 * is a disclosure the mode makes on every start rather than a field somebody filled
+	 * in. The name is the core's own default and not a copy of it, so that a page saying
+	 * who is asked cannot come to name somebody else.
+	 */
+	QFormLayout* automatic = new QFormLayout(m_automaticFields);
+	automatic->setContentsMargins(0, 0, 0, 0);
 
-	form->addRow(QString(), m_useUpnp);
+	automatic->addRow(makeNote(tr(
+		"Automatic chooses the port, asks the router to forward it, and checks the "
+		"result against %1. That check tells %1 the address this machine connects from "
+		"and the port it listens on, and has it connect back to prove the answer; "
+		"Advanced is where a different server, or none at all, is named.")
+		.arg(defaultReachabilityServer())));
 
-	form->addRow(makeNote(tr(
+	QFormLayout* advanced = new QFormLayout(m_advancedFields);
+	advanced->setContentsMargins(0, 0, 0, 0);
+	advanced->addRow(tr("Port"), m_port);
+	advanced->addRow(tr("Bind to"), m_bind);
+	advanced->addRow(tr("External address"), m_address);
+
+	advanced->addRow(QString(), m_useUpnp);
+
+	advanced->addRow(makeNote(tr(
 		"Forwarding is asked for by searching the local network for a gateway, which "
 		"tells every host on it that this machine is here and what it runs. A router "
 		"that grants a mapping does not know whether anything above it honours one, so "
 		"the check below is what settles whether it helped - and where it did not, the "
 		"mapping is given up again rather than left open.")));
 
+	/*
+	 * The one group on this page that a save does not put into force. The port and the
+	 * addresses to bind are read where the listening socket is opened, which happens
+	 * once when the client starts - see the DCServer constructor in
+	 * quickdc/core/api/server.cpp - so a page that said nothing would have somebody
+	 * change the port, save, and read a verdict about the port they had before.
+	 */
+	advanced->addRow(makeNote(tr(
+		"A changed port or bind address takes effect the next time QuickDC starts, "
+		"because the socket that listens for peers is opened once and saving does not "
+		"open it again. Everything else here applies as soon as it is saved.")));
+
+	advanced->addRow(makeNote(tr(
+		"The check below runs against the same server automatic uses, so that a port "
+		"and a forwarding somebody chose are answered for rather than taken on trust. "
+		"It tells that server the address this machine connects from and the port it "
+		"listens on, and has it connect back to prove the answer. A server of your own "
+		"can be named in the configuration file.")));
+
+	/*
+	 * What passive costs, in the words the measuring library uses for the same
+	 * conclusion - see combine() in libdrop-cpp/src/decide.cpp - and what it does not
+	 * cost, because a mode somebody may quite reasonably want is a trade and not a
+	 * warning.
+	 */
+	QFormLayout* passive = new QFormLayout(m_passiveFields);
+	passive->setContentsMargins(0, 0, 0, 0);
+
+	passive->addRow(makeNote(tr(
+		"No port is forwarded and nothing is told to connect here. Other clients will "
+		"not be able to connect to you directly, and transfers with other passive users "
+		"will not work at all, because neither side can dial the other. Searching, "
+		"chatting and downloading from active users work as they do in the other "
+		"modes.")));
+
+	QFormLayout* form = new QFormLayout(page);
+	form->addRow(tr("Connection"), m_mode);
+	form->addRow(m_automaticFields);
+	form->addRow(m_passiveFields);
+	form->addRow(m_advancedFields);
+
 	form->addRow(makeNote(tr(
 		"The client tag hubs see is built from the version and whether this is "
 		"active or passive, and cannot be changed.")));
-
-	form->addRow(tr("Reachability server"), m_dropServer);
-
-	form->addRow(makeNote(tr(
-		"Asking a server whether this client can be reached tells that server the "
-		"address it is connecting from and the port it listens on, and has it connect "
-		"back to prove the answer. That is why the field above is empty until somebody "
-		"puts a name in it: while it is empty, nobody is asked anything.")));
 
 	form->addRow(m_reachability);
 
@@ -423,9 +487,11 @@ QWidget* Qdc::SettingsView::buildConnection()
 		"to another one - a different WiFi, a cable, a VPN coming up - and the address "
 		"and the verdict may both be wrong until it is checked again.")));
 
-	form->addRow(QString(), m_forceActive);
+	QFormLayout* claim = new QFormLayout(m_advancedClaim);
+	claim->setContentsMargins(0, 0, 0, 0);
+	claim->addRow(QString(), m_forceActive);
 
-	form->addRow(makeNote(tr(
+	claim->addRow(makeNote(tr(
 		"Turning this on tells every hub that a peer can connect here, whatever the "
 		"check above concluded and whatever peers have reported. The rows above and this "
 		"setting can disagree on screen, and this setting is the one the hubs are told "
@@ -436,13 +502,39 @@ QWidget* Qdc::SettingsView::buildConnection()
 		"the transfer fails at their end, so what you see is a download that never "
 		"starts rather than a setting to turn off.")));
 
+	form->addRow(m_advancedClaim);
+
 	connect(m_bind, &QLineEdit::textEdited, this, &SettingsView::markModified);
 	connect(m_address, &QLineEdit::textEdited, this, &SettingsView::markModified);
-	connect(m_dropServer, &QLineEdit::textEdited, this, &SettingsView::markModified);
 	connect(m_mode, &QComboBox::currentIndexChanged, this, &SettingsView::markModified);
+	connect(m_mode, &QComboBox::currentIndexChanged,
+	        this, &SettingsView::applyConnectionMode);
 	connect(m_port, &QSpinBox::valueChanged, this, &SettingsView::markModified);
 
+	applyConnectionMode();
+
 	return page;
+}
+
+void Qdc::SettingsView::applyConnectionMode()
+{
+	const NetworkMode mode = networkModeFromToken(m_mode->currentData().toString(),
+	                                              NetworkMode::Advanced);
+
+	const bool advanced = mode == NetworkMode::Advanced;
+	const bool passive = mode == NetworkMode::Passive;
+
+	m_automaticFields->setVisible(mode == NetworkMode::Automatic);
+	m_advancedFields->setVisible(advanced);
+	m_advancedClaim->setVisible(advanced);
+	m_passiveFields->setVisible(passive);
+
+	/*
+	 * Passive keeps the addresses and loses the ports. An address is worth showing
+	 * whatever the mode - it is how somebody tells one network from another - while an
+	 * inbound port in a mode that offers none is an answer to a question nobody asked.
+	 */
+	m_reachability->setShowPorts(!passive);
 }
 
 QWidget* Qdc::SettingsView::buildLocalHub()
@@ -917,11 +1009,20 @@ void Qdc::SettingsView::load()
 			? NetworkMode::Advanced : NetworkMode::Passive);
 
 	m_mode->setCurrentIndex(qMax(0, m_mode->findData(networkModeToken(mode))));
+
+	/* What a save compares against to decide whether the mode actually moved. */
+	m_savedMode = mode;
 	m_port->setValue(network.value(QStringLiteral("Port")).toInt());
 	m_bind->setText(network.value(QStringLiteral("Bind")).toString());
 	m_address->setText(network.value(QStringLiteral("Address")).toString());
 
-	m_dropServer->setText(network.value(REACHABILITY_SERVER).toString());
+	/*
+	 * Carried rather than shown. Every mode measures against the same server and the
+	 * page offers no way to change it, but a name somebody put in the file by hand -
+	 * a server of their own - has to survive a save, so what was read is what is
+	 * handed back to the derivation.
+	 */
+	m_storedServer = network.value(REACHABILITY_SERVER).toString().trimmed();
 
 	m_forceActive->setChecked(network.value(FORCE_ACTIVE).toBool());
 
@@ -1019,6 +1120,9 @@ void Qdc::SettingsView::load()
 	m_save->setEnabled(false);
 	m_revert->setEnabled(false);
 	m_status->clear();
+
+	/* From the value read, not from the signal that setting it may not have sent. */
+	applyConnectionMode();
 }
 
 bool Qdc::SettingsView::save()
@@ -1047,7 +1151,7 @@ bool Qdc::SettingsView::save()
 	const NetworkModeKeys keys = networkModeKeys(mode,
 		m_useUpnp->isChecked(),
 		m_forceActive->isChecked(),
-		m_dropServer->text().trimmed());
+		m_storedServer);
 
 	m_config->setString(ConfigStore::Application, NETWORK, NETWORK_MODE,
 	                    networkModeToken(mode));
@@ -1145,12 +1249,54 @@ bool Qdc::SettingsView::save()
 	m_config->notifyChanged();
 
 	/*
-	 * The gateway mapping, brought into line with the switch that was just written.
-	 * After the writes above rather than before them, because the core reads the
-	 * setting rather than being handed it, and the jobs carrying both run in the
-	 * order they were posted.
+	 * What the saved mode now asks for, in the order it has to happen. After the
+	 * writes above rather than before them, because the core reads the settings
+	 * rather than being handed them, and the jobs carrying both run in the order
+	 * they were posted.
 	 */
-	if (m_drop) m_drop->applyForwarding();
+	if (m_drop)
+	{
+		const bool changed = (mode != m_savedMode);
+
+		/* The gateway mapping, brought into line with what the mode asks for. */
+		m_drop->applyForwarding();
+
+		if (changed)
+		{
+			/*
+			 * The hubs told again. Whether a peer may connect here, and on what
+			 * port, is part of what a hub was told at login, so a hub joined before
+			 * this changed is still handing the old answer to everybody on it. Only
+			 * on a change of mode: nothing else on this page alters what a hub was
+			 * told, and a saved nickname is not a reason to announce anything.
+			 */
+			m_drop->republishClientInfo();
+
+			/*
+			 * And measured again, because what is on screen answers for the settings
+			 * that were in force before this save.
+			 *
+			 * Which run depends on the mode, for the reason the core draws the same
+			 * distinction: a passive client is shown the address the world sees it
+			 * at, and must not have a stranger dial the peer port in order to find
+			 * that out. Saving always leaves a server named, so there is always
+			 * somebody to ask by the time this runs.
+			 *
+			 * Deliberately not done for a changed port or bind address, though they
+			 * are the settings a user is most likely to want answered for. The socket
+			 * is opened once at start-up, so a measurement taken now would be about
+			 * the port still being listened on rather than the one just saved - and a
+			 * verdict about the wrong port is worse than none, because it reads as an
+			 * answer. The note beside those fields says they wait for a restart.
+			 */
+			if (mode == NetworkMode::Passive)
+				m_drop->lookupPublicAddress();
+			else
+				m_drop->recheck();
+		}
+	}
+
+	m_savedMode = mode;
 
 	/*
 	 * Here rather than as the combo changes: a theme applied while somebody is moving

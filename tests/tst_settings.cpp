@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QImage>
 #include <QLabel>
@@ -21,6 +22,7 @@
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -66,6 +68,12 @@ private slots:
 	void automaticDecidesTheSettingsUnderIt();
 	void passiveTurnsOffWhatItCannotUse();
 	void aModeThatHidesThePortDoesNotRewriteIt();
+	void aModeShowsOnlyThePlumbingItIsAbout();
+	void switchingTheModeRearrangesThePageWithoutASave();
+	void eachModeSaysInWordsWhatItDoesInstead();
+	void advancedSaysThePortWaitsForARestart();
+	void noModeOffersAFieldForTheReachabilityServer();
+	void aServerNamedByHandSurvivesTheForm();
 
 	void thePanelDrawsItsThreeAnswersApart();
 	void aFamilyNobodyMeasuredIsNotDrawnAsAFailure();
@@ -1152,6 +1160,352 @@ void TestSettings::aModeThatHidesThePortDoesNotRewriteIt()
 
 	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
 	                             QStringLiteral("Port")), 1409);
+}
+
+/**
+ * Bring the Connection tab to the front, so that hidden means hidden by the mode.
+ *
+ * A tab widget hides every page but the current one, and the current one here is
+ * Identity: without this, everything on the Connection page answers "not shown"
+ * whatever the mode chose, and a test asking about the mode would be reading the tab
+ * strip instead.
+ */
+void openConnectionTab(Qdc::SettingsView& view)
+{
+	QTabWidget* tabs = view.findChild<QTabWidget*>();
+	QVERIFY(tabs);
+
+	for (int i = 0; i < tabs->count(); i++)
+	{
+		if (tabs->tabText(i) == QStringLiteral("Connection"))
+			tabs->setCurrentIndex(i);
+	}
+
+	QCOMPARE(tabs->tabText(tabs->currentIndex()), QStringLiteral("Connection"));
+}
+
+/**
+ * Whether a widget would be on screen if the window were.
+ *
+ * isVisible() answers no for every widget in these tests, since a view built on the
+ * stack is never shown, so the question has to be asked of the page rather than of the
+ * screen: isVisibleTo() walks the parents and answers false where anything between the
+ * widget and the view has been hidden, which is what hiding a mode's fields does.
+ */
+bool shown(Qdc::SettingsView& view, const QWidget* widget)
+{
+	return widget && widget->isVisibleTo(&view);
+}
+
+/** What the page would say, leaving out what it is not showing. */
+QString visibleText(Qdc::SettingsView& view)
+{
+	QStringList said;
+
+	for (const QLabel* label : view.findChildren<QLabel*>())
+	{
+		if (label->isVisibleTo(&view)) said.append(label->text());
+	}
+
+	return said.join(QLatin1Char('\n'));
+}
+
+/**
+ * A mode shows the plumbing it is about and nothing else.
+ *
+ * The point of having modes at all: a user who picked automatic said they did not want
+ * to answer these questions, and a page that asked them anyway would be showing
+ * controls that save() then ignores - so whatever was left in them would look like the
+ * setting in force. Read from the stored mode as well as from the list, because the
+ * page has to arrive in the right shape rather than only get there when somebody
+ * touches the combo, and after a save the combo has not changed.
+ */
+void TestSettings::aModeShowsOnlyThePlumbingItIsAbout()
+{
+	using Qdc::ConfigStore;
+
+	m_config->setString(ConfigStore::Application, QStringLiteral("Network"),
+	                    QStringLiteral("Mode"), QStringLiteral("automatic"));
+	m_config->save(ConfigStore::Application);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	openConnectionTab(view);
+
+	const QSpinBox* port =
+		view.findChild<QSpinBox*>(QStringLiteral("connectionPort"));
+	const QCheckBox* upnp =
+		view.findChild<QCheckBox*>(QStringLiteral("connectionUpnp"));
+	const QCheckBox* forced =
+		view.findChild<QCheckBox*>(QStringLiteral("connectionForceActive"));
+
+	QVERIFY(port);
+	QVERIFY(upnp);
+	QVERIFY(forced);
+
+	QVERIFY2(!shown(view, port), "automatic showed the port it chooses itself");
+	QVERIFY2(!shown(view, upnp), "automatic showed the forwarding switch it decides");
+	QVERIFY2(!shown(view, forced), "automatic showed a claim it never forces");
+
+	/*
+	 * And the label beside the field went with it, which is the whole reason for the
+	 * containers: hiding a field in a form layout does not hide its label.
+	 */
+	QVERIFY2(!visibleText(view).contains(QStringLiteral("Bind to")),
+	         "a hidden field left its label standing on the page");
+
+	chooseMode(view, QStringLiteral("advanced"));
+
+	QVERIFY2(shown(view, port), "advanced did not show the port");
+	QVERIFY2(shown(view, upnp), "advanced did not show the forwarding switch");
+	QVERIFY2(shown(view, forced), "advanced did not show the forced claim");
+
+	chooseMode(view, QStringLiteral("passive"));
+
+	QVERIFY2(!shown(view, port), "passive showed a port nothing connects to");
+	QVERIFY2(!shown(view, upnp), "passive showed a switch that forwards nothing");
+	QVERIFY2(!shown(view, forced), "passive showed a claim it cannot honour");
+
+	/*
+	 * Passive keeps the addresses and drops the port rows, which is the panel's own
+	 * distinction: an address still says which network this is.
+	 */
+	const QLabel* tcp = view.findChild<QLabel*>(QStringLiteral("reachabilityTcp4"));
+	const QLabel* address = view.findChild<QLabel*>(QStringLiteral("reachabilityAddress4"));
+
+	QVERIFY(tcp);
+	QVERIFY(address);
+
+	QVERIFY2(!shown(view, tcp), "passive asked whether an unoffered port was reached");
+	QVERIFY2(shown(view, address), "passive hid the address as well as the ports");
+
+	m_config->remove(ConfigStore::Application, QStringLiteral("Network"),
+	                 QStringLiteral("Mode"));
+	m_config->save(ConfigStore::Application);
+}
+
+/**
+ * The list changes the page as it is used, without a save.
+ *
+ * Somebody choosing a mode is asking what that mode means, and the answer is the shape
+ * of the page: a form that only rearranged itself on the next load would have them
+ * saving a mode to find out what it does. The way back matters as much - a field hidden
+ * once and never shown again is a setting that has been taken away.
+ */
+void TestSettings::switchingTheModeRearrangesThePageWithoutASave()
+{
+	using Qdc::ConfigStore;
+
+	m_config->setString(ConfigStore::Application, QStringLiteral("Network"),
+	                    QStringLiteral("Mode"), QStringLiteral("advanced"));
+	m_config->save(ConfigStore::Application);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	openConnectionTab(view);
+
+	const QSpinBox* port =
+		view.findChild<QSpinBox*>(QStringLiteral("connectionPort"));
+	const QCheckBox* upnp =
+		view.findChild<QCheckBox*>(QStringLiteral("connectionUpnp"));
+
+	QVERIFY(port);
+	QVERIFY(upnp);
+	QVERIFY(shown(view, port));
+
+	chooseMode(view, QStringLiteral("automatic"));
+
+	QVERIFY2(!shown(view, port), "the port stayed on the page after automatic was picked");
+	QVERIFY2(!shown(view, upnp), "the forwarding switch stayed after automatic was picked");
+
+	chooseMode(view, QStringLiteral("advanced"));
+
+	QVERIFY2(shown(view, port), "the port did not come back with advanced");
+	QVERIFY2(shown(view, upnp), "the forwarding switch did not come back with advanced");
+
+	m_config->remove(ConfigStore::Application, QStringLiteral("Network"),
+	                 QStringLiteral("Mode"));
+	m_config->save(ConfigStore::Application);
+}
+
+/**
+ * Each mode says in words what it does instead of showing the switches.
+ *
+ * The two modes that hide the plumbing owe the user a sentence in its place, and each
+ * sentence is a disclosure: automatic contacts a server outside on every start and has
+ * it connect back, which nobody typed a name in to ask for, and passive gives up being
+ * dialled at all - a cost paid at the other end of a transfer that never begins. Each
+ * belongs to its own mode, so a page carrying both would be telling the user two
+ * things, one of which is not happening.
+ */
+void TestSettings::eachModeSaysInWordsWhatItDoesInstead()
+{
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	openConnectionTab(view);
+
+	chooseMode(view, QStringLiteral("automatic"));
+
+	const QString automatic = visibleText(view);
+
+	QVERIFY2(automatic.contains(QStringLiteral("chooses the port, asks the router to "
+	                                           "forward it")),
+	         "automatic does not say what it does on the user's behalf");
+
+	QVERIFY2(automatic.contains(QStringLiteral("against drop.quickdc.org")),
+	         "automatic does not say who is asked");
+
+	/*
+	 * Named where the disclosure is made as well as where the checking is, since the
+	 * two sentences are about the same stranger.
+	 */
+	QVERIFY2(automatic.contains(QStringLiteral("tells drop.quickdc.org the address")),
+	         "automatic does not name who the check discloses this machine to");
+
+	QVERIFY2(automatic.contains(QStringLiteral("has it connect back to prove the "
+	                                           "answer")),
+	         "automatic does not say that the server it asks connects back");
+
+	QVERIFY2(!automatic.contains(QStringLiteral("will not work at all")),
+	         "automatic showed what passive costs");
+
+	chooseMode(view, QStringLiteral("passive"));
+
+	const QString passive = visibleText(view);
+
+	QVERIFY2(passive.contains(QStringLiteral("No port is forwarded")),
+	         "passive does not say that nothing is forwarded");
+
+	QVERIFY2(passive.contains(QStringLiteral("not be able to connect to you directly")),
+	         "passive does not say that other clients cannot connect");
+
+	QVERIFY2(passive.contains(QStringLiteral("transfers with other passive users will "
+	                                         "not work at all")),
+	         "passive does not say that two passive users cannot transfer");
+
+	QVERIFY2(passive.contains(QStringLiteral("chatting and downloading from active "
+	                                         "users")),
+	         "passive says what it costs without saying what still works");
+
+	QVERIFY2(!passive.contains(QStringLiteral("chooses the port")),
+	         "passive showed what automatic does");
+}
+
+/**
+ * Advanced says that a changed port waits for a restart.
+ *
+ * The one group on this page a save does not put into force: the listening socket is
+ * opened once when the client starts, so somebody who changes the port, saves, and
+ * presses the check would be reading a verdict about the port they had before - and
+ * would go looking at their router for it.
+ */
+void TestSettings::advancedSaysThePortWaitsForARestart()
+{
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	openConnectionTab(view);
+
+	chooseMode(view, QStringLiteral("advanced"));
+
+	const QString page = visibleText(view);
+
+	QVERIFY2(page.contains(QStringLiteral("takes effect the next time QuickDC starts")),
+	         "the page does not say that a changed port waits for a restart");
+
+	QVERIFY2(page.contains(QStringLiteral("Everything else here applies as soon as it "
+	                                      "is saved")),
+	         "the page does not say that the rest of the group applies at once");
+}
+
+/**
+ * No mode offers a field for the reachability server.
+ *
+ * Naming a server is not part of getting connected: every mode measures against the
+ * same one, and a field for it on the page would be one more question in a place
+ * built to stop asking them. Somebody running a server of their own names it in the
+ * configuration file, which is why the key is still read and written.
+ */
+void TestSettings::noModeOffersAFieldForTheReachabilityServer()
+{
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	openConnectionTab(view);
+
+	for (const QString& token : {QStringLiteral("automatic"),
+	                             QStringLiteral("advanced"),
+	                             QStringLiteral("passive")})
+	{
+		chooseMode(view, token);
+
+		QStringList said;
+
+		for (const QLabel* label : view.findChildren<QLabel*>())
+		{
+			if (label->isVisibleTo(&view)) said.append(label->text());
+		}
+
+		QVERIFY2(!said.join(QLatin1Char('\n'))
+			.contains(QStringLiteral("Reachability server")),
+			qPrintable(QStringLiteral("a server field is offered in ") + token));
+	}
+}
+
+/**
+ * A server named by hand is not replaced by the one the mode would supply.
+ *
+ * The only way to point this client at a DROP server of somebody's own, now that the
+ * page offers no field for it. A save that overwrote it with the default would take
+ * that away with no way to put it back, and would silently move the measuring to a
+ * third party the user had deliberately avoided.
+ */
+void TestSettings::aServerNamedByHandSurvivesTheForm()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Network");
+	const QString key = QStringLiteral("Reachability server");
+
+	m_config->setString(ConfigStore::Application, group, key,
+	                    QStringLiteral("drop.example.org"));
+	m_config->save(ConfigStore::Application);
+
+	for (const QString& token : {QStringLiteral("automatic"),
+	                             QStringLiteral("advanced"),
+	                             QStringLiteral("passive")})
+	{
+		Qdc::Shares shares(m_config);
+		Qdc::SettingsView view(m_config, &shares);
+
+		chooseMode(view, token);
+		QVERIFY(view.save());
+
+		QCOMPARE(m_config->getString(ConfigStore::Application, group, key),
+		         QStringLiteral("drop.example.org"));
+	}
+
+	/*
+	 * And where the file names nobody, choosing a mode names the default - which is
+	 * the one moment a user asks to be measured, so it is the one place that may
+	 * decide it for them.
+	 */
+	m_config->setString(ConfigStore::Application, group, key, QString());
+	m_config->save(ConfigStore::Application);
+
+	{
+		Qdc::Shares shares(m_config);
+		Qdc::SettingsView view(m_config, &shares);
+
+		chooseMode(view, QStringLiteral("automatic"));
+		QVERIFY(view.save());
+	}
+
+	QCOMPARE(m_config->getString(ConfigStore::Application, group, key),
+	         QStringLiteral("drop.quickdc.org"));
 }
 
 void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()
