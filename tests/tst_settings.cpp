@@ -4,6 +4,7 @@
 
 #include <core/configbridge.h>
 #include <core/corethread.h>
+#include <core/dropbridge.h>
 #include <core/shares.h>
 #include <gui/reachabilitypanel.h>
 #include <gui/settingsview.h>
@@ -65,6 +66,8 @@ private slots:
 	void aVerdictForOneFamilyLeavesTheOtherAlone();
 	void aServersOwnWordsCannotBecomeMarkupInATooltip();
 	void hidingThePortsLeavesTheAddress();
+	void everyRunThatStartsAlsoEndsTheCheckingLine();
+	void anUnconfiguredServerSaysSoRatherThanNothing();
 
 	void boardsFetchNothingAheadUntilTheyAreTold();
 	void theBoardsPageSaysThatReadingAPostMayBeSeen();
@@ -878,6 +881,86 @@ void TestSettings::hidingThePortsLeavesTheAddress()
 
 	panel.setShowPorts(true);
 	QVERIFY2(!tcp->isHidden(), "the port rows did not come back");
+}
+
+/**
+ * Whatever ends a run also takes the checking line down.
+ *
+ * The line is the one piece of this page that a user waits on, so a state it can
+ * enter and not leave is a page that looks busy for the life of the window. Both
+ * ways out are checked because they are different code paths: a verdict replaces
+ * what is shown, and a failure leaves every row alone and only says nobody asked.
+ */
+void TestSettings::everyRunThatStartsAlsoEndsTheCheckingLine()
+{
+	const auto checkingIsShown = [](const Qdc::ReachabilityPanel& panel) {
+		for (const QLabel* label : panel.findChildren<QLabel*>())
+		{
+			if (label->text().contains(QStringLiteral("Checking"))) return true;
+		}
+		return false;
+	};
+
+	{
+		Qdc::ReachabilityPanel panel;
+
+		panel.setChecking(true);
+		QVERIFY(checkingIsShown(panel));
+
+		panel.setVerdict(measured(false, Qdc::ReachabilityReach::Reached,
+		                          Qdc::ReachabilityReach::Reached));
+
+		QVERIFY2(!checkingIsShown(panel), "a verdict left the page saying it was checking");
+	}
+
+	{
+		Qdc::ReachabilityPanel panel;
+
+		panel.setChecking(true);
+		QVERIFY(checkingIsShown(panel));
+
+		panel.setFailure(QStringLiteral("the server could not be reached"));
+
+		QVERIFY2(!checkingIsShown(panel), "a failure left the page saying it was checking");
+	}
+}
+
+/**
+ * With no server named, asking for a check says why rather than going quiet.
+ *
+ * The core's own call answers a bare false for this, which is indistinguishable
+ * from a run already being in flight - so the bridge has to recognise the
+ * unconfigured case itself and say so. Silence here is what would leave somebody
+ * looking at a page that never answers, and no measurement is attempted, so this
+ * costs no network: the refusal happens before anything is dialled.
+ *
+ * The other half - a run that does start, and says so - cannot be reached from
+ * here. A core built with named preference files, which is every core a test has,
+ * deliberately has no reachability check at all: it has no listening socket, so
+ * there is nothing to measure. That half is pinned in the core's own suite, where
+ * a check can be constructed directly; see dropcheck_a_run_says_that_it_started.
+ */
+void TestSettings::anUnconfiguredServerSaysSoRatherThanNothing()
+{
+	using Qdc::ConfigStore;
+
+	m_config->setString(ConfigStore::Application, QStringLiteral("Network"),
+	                    QStringLiteral("Reachability server"), QString());
+	m_config->save(ConfigStore::Application);
+
+	Qdc::DropBridge bridge(m_thread);
+
+	QSignalSpy failed(&bridge, &Qdc::DropBridge::checkFailed);
+	QSignalSpy started(&bridge, &Qdc::DropBridge::checkStarted);
+
+	bridge.recheck();
+
+	QVERIFY2(failed.wait(5000), "asking with no server named reported nothing at all");
+
+	const QString reason = failed.takeFirst().at(0).toString();
+	QVERIFY2(!reason.isEmpty(), "the refusal carried no sentence to show");
+
+	QCOMPARE(started.count(), 0);
 }
 
 void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()

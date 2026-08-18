@@ -142,9 +142,9 @@ public:
 	 * call reads the server and the port again on its own, which is the same pair
 	 * read here; they are read here only to refuse the unconfigured case with a
 	 * sentence worth showing, since a bare false says nothing about why. A refusal
-	 * for any other reason means a run is already going, and that one reports
-	 * through this same listener when it finishes, so there is nothing to say and
-	 * nothing to correct.
+	 * for any other reason means a run is already going, and that one announced
+	 * itself when it started and reports through this same listener when it
+	 * finishes, so there is nothing to say and nothing to correct.
 	 */
 	void restart(QuickDC::Core* core)
 	{
@@ -183,6 +183,13 @@ public:
 	}
 
 protected:
+	void EventDropCheckStarted(bool ipv6) override
+	{
+		report([ipv6](DropBridge* bridge) {
+			emit bridge->checkStarted(ipv6);
+		});
+	}
+
 	void EventDropCheckFinished(const QuickDC::DropVerdict& verdict) override
 	{
 		const ReachabilityVerdict copied = convert(verdict);

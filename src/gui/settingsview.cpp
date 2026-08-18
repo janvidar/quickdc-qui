@@ -238,13 +238,23 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge
 		connect(m_drop, &DropBridge::verdictChanged, this, &SettingsView::showVerdict);
 		connect(m_drop, &DropBridge::checkFailed, this, &SettingsView::showCheckFailed);
 
+		/*
+		 * Said only for a run that actually began, and never on the way out of the
+		 * button. A request the bridge decides not to make - one already in flight,
+		 * or no server named - reports nothing back, so a page that announced the
+		 * asking would be left saying it was checking for the life of the window.
+		 * Every run that starts ends in a verdict or a failure, and both of those
+		 * clear the line.
+		 */
+		connect(m_drop, &DropBridge::checkStarted, this, [this](bool) {
+			m_reachability->setChecking(true);
+		});
+
 		showVerdict(m_drop->verdict(false));
 		showVerdict(m_drop->verdict(true));
 
-		connect(m_reachability, &ReachabilityPanel::checkRequested, this, [this] {
-			m_reachability->setChecking(true);
-			m_drop->recheck();
-		});
+		connect(m_reachability, &ReachabilityPanel::checkRequested,
+		        m_drop, &DropBridge::recheck);
 	}
 	else
 	{

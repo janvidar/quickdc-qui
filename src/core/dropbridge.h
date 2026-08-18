@@ -227,6 +227,17 @@ public:
 	void applyForwarding();
 
 signals:
+	/**
+	 * A run has begun; one of the two below will follow it.
+	 *
+	 * Emitted for every run, not only for one this bridge asked for. The core
+	 * measures on its own - at start-up, when a measurement has aged out, and again
+	 * whenever a gateway grants a mapping - and a page that only knew about the
+	 * runs it started itself would sit still through all of those and then change
+	 * its mind with no warning.
+	 */
+	void checkStarted(bool ipv6);
+
 	/** A run completed, whatever it concluded. */
 	void verdictChanged(const Qdc::ReachabilityVerdict& verdict);
 
