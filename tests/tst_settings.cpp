@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QComboBox>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
@@ -60,6 +61,11 @@ private slots:
 	void theGatewayIsNotAskedForAMappingUntilItIsAskedFor();
 	void askingTheGatewayToForwardSurvivesTheForm();
 	void theConnectionPageSaysWhatSearchingForAGatewayDiscloses();
+
+	void eachConnectionModeRoundTripsThroughTheForm();
+	void automaticDecidesTheSettingsUnderIt();
+	void passiveTurnsOffWhatItCannotUse();
+	void aModeThatHidesThePortDoesNotRewriteIt();
 
 	void thePanelDrawsItsThreeAnswersApart();
 	void aFamilyNobodyMeasuredIsNotDrawnAsAFailure();
@@ -539,6 +545,10 @@ void TestSettings::activeModeIsNotForcedUntilItIsAskedFor()
  * would pass against a page that read the key and never wrote it again. A page that
  * offered the switch but dropped it on the way back would turn the setting off every
  * time anything else on the form was saved.
+ *
+ * Pinned to advanced, which is the only mode where the switch means anything. The
+ * other two derive it, and derive it off - so this asks whether the form carries a
+ * value it was given, which is a question only advanced poses.
  */
 void TestSettings::forcedActiveModeSurvivesTheForm()
 {
@@ -547,6 +557,8 @@ void TestSettings::forcedActiveModeSurvivesTheForm()
 	const QString group = QStringLiteral("Network");
 	const QString key = QStringLiteral("Force active mode");
 
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Mode"),
+	                    QStringLiteral("advanced"));
 	m_config->setBool(ConfigStore::Application, group, key, true);
 
 	Qdc::Shares shares(m_config);
@@ -631,6 +643,9 @@ void TestSettings::theGatewayIsNotAskedForAMappingUntilItIsAskedFor()
  * reason the forced-active test gives: left in place, this would pass against a page
  * that read the switch and never wrote it back, and such a page would turn forwarding
  * off every time anything else was saved - leaving a user passive with no sign of why.
+ *
+ * Advanced, for the reason the forced-active case above gives: it is the one mode
+ * that answers with the switch rather than deciding for it.
  */
 void TestSettings::askingTheGatewayToForwardSurvivesTheForm()
 {
@@ -639,6 +654,8 @@ void TestSettings::askingTheGatewayToForwardSurvivesTheForm()
 	const QString group = QStringLiteral("Network");
 	const QString key = QStringLiteral("UseUPnP");
 
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Mode"),
+	                    QStringLiteral("advanced"));
 	m_config->setBool(ConfigStore::Application, group, key, true);
 
 	Qdc::Shares shares(m_config);
@@ -961,6 +978,180 @@ void TestSettings::anUnconfiguredServerSaysSoRatherThanNothing()
 	QVERIFY2(!reason.isEmpty(), "the refusal carried no sentence to show");
 
 	QCOMPARE(started.count(), 0);
+}
+
+/** The stored mode, as the core would read it. */
+QString storedMode(Qdc::ConfigBridge* config)
+{
+	return config->getString(Qdc::ConfigStore::Application,
+	                         QStringLiteral("Network"), QStringLiteral("Mode"));
+}
+
+/** Put the form into 'mode' as though somebody had picked it from the list. */
+void chooseMode(Qdc::SettingsView& view, const QString& token)
+{
+	QComboBox* combo = nullptr;
+
+	for (QComboBox* candidate : view.findChildren<QComboBox*>())
+	{
+		if (candidate->findData(token) >= 0) { combo = candidate; break; }
+	}
+
+	QVERIFY(combo);
+	combo->setCurrentIndex(combo->findData(token));
+}
+
+/**
+ * Every mode survives being chosen, saved and read back.
+ *
+ * The one setting on the page that everything else is derived from, so a mode that
+ * did not survive the round trip would take the whole group with it.
+ */
+void TestSettings::eachConnectionModeRoundTripsThroughTheForm()
+{
+	for (const QString& token : {QStringLiteral("automatic"),
+	                             QStringLiteral("advanced"),
+	                             QStringLiteral("passive")})
+	{
+		Qdc::Shares shares(m_config);
+		Qdc::SettingsView view(m_config, &shares);
+
+		chooseMode(view, token);
+		QVERIFY(view.save());
+
+		QCOMPARE(storedMode(m_config), token);
+
+		/* And read back into the form it came from, not merely into the file. */
+		Qdc::SettingsView reopened(m_config, &shares);
+		QVERIFY(reopened.save());
+		QCOMPARE(storedMode(m_config), token);
+	}
+}
+
+/**
+ * Automatic settles the plumbing itself, whatever the switches under it held.
+ *
+ * The whole of the mode: a user who picks it is saying they do not want to answer
+ * these questions, so the answers must not depend on what the hidden switches
+ * happened to be left at. Forwarding on, the claim never forced - because automatic
+ * establishes reachability rather than asserting it - and a server to ask, since
+ * without one there is no verdict to show.
+ */
+void TestSettings::automaticDecidesTheSettingsUnderIt()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Network");
+
+	/* The opposite of every value automatic implies. */
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), false);
+	m_config->setBool(ConfigStore::Application, group,
+	                  QStringLiteral("Force active mode"), true);
+	m_config->setString(ConfigStore::Application, group,
+	                    QStringLiteral("Reachability server"), QString());
+	m_config->save(ConfigStore::Application);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	chooseMode(view, QStringLiteral("automatic"));
+	QVERIFY(view.save());
+
+	QVERIFY2(m_config->getBool(ConfigStore::Application, group,
+	                           QStringLiteral("UseUPnP"), false),
+	         "automatic did not ask the gateway to forward the port");
+
+	QVERIFY2(m_config->getBool(ConfigStore::Application, group,
+	                           QStringLiteral("Active mode"), false),
+	         "automatic did not intend to be reachable");
+
+	QVERIFY2(!m_config->getBool(ConfigStore::Application, group,
+	                            QStringLiteral("Force active mode"), true),
+	         "automatic forced a claim it is supposed to establish");
+
+	QVERIFY2(!m_config->getString(ConfigStore::Application, group,
+	                              QStringLiteral("Reachability server")).isEmpty(),
+	         "automatic left nobody to ask");
+}
+
+/**
+ * Passive turns off the two things it has no use for.
+ *
+ * Nothing is told to connect here, so a forwarded port is a hole in somebody's
+ * network that nothing is using, and a forced claim would have peers dial a port
+ * this client is not offering - which fails at their end, where nobody can see why.
+ */
+void TestSettings::passiveTurnsOffWhatItCannotUse()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Network");
+
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), true);
+	m_config->setBool(ConfigStore::Application, group,
+	                  QStringLiteral("Force active mode"), true);
+	m_config->save(ConfigStore::Application);
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+
+	chooseMode(view, QStringLiteral("passive"));
+	QVERIFY(view.save());
+
+	QVERIFY(!m_config->getBool(ConfigStore::Application, group,
+	                           QStringLiteral("Active mode"), true));
+	QVERIFY(!m_config->getBool(ConfigStore::Application, group,
+	                           QStringLiteral("UseUPnP"), true));
+	QVERIFY(!m_config->getBool(ConfigStore::Application, group,
+	                           QStringLiteral("Force active mode"), true));
+}
+
+/**
+ * A mode that does not show the port leaves the stored one alone.
+ *
+ * The port is not only bound from this key - it is also the number handed to every
+ * peer on every hub. So a save that wrote it from a field nobody could see would
+ * have the client advertise whatever the form last loaded, and a peer that dials a
+ * port nothing is listening on fails at their end rather than at ours. Leaving it
+ * also means the answer to "what did I set the port to" survives a trip through
+ * automatic and back.
+ */
+void TestSettings::aModeThatHidesThePortDoesNotRewriteIt()
+{
+	using Qdc::ConfigStore;
+
+	const QString group = QStringLiteral("Network");
+
+	m_config->setNumber(ConfigStore::Application, group, QStringLiteral("Port"), 1409);
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Bind"),
+	                    QStringLiteral("10.0.0.5"));
+	m_config->save(ConfigStore::Application);
+
+	{
+		Qdc::Shares shares(m_config);
+		Qdc::SettingsView view(m_config, &shares);
+
+		chooseMode(view, QStringLiteral("automatic"));
+		QVERIFY(view.save());
+	}
+
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
+	                             QStringLiteral("Port")), 1409);
+	QCOMPARE(m_config->getString(ConfigStore::Application, group,
+	                             QStringLiteral("Bind")),
+	         QStringLiteral("10.0.0.5"));
+
+	/* And back in advanced it is the form's again. */
+	{
+		Qdc::Shares shares(m_config);
+		Qdc::SettingsView view(m_config, &shares);
+
+		chooseMode(view, QStringLiteral("advanced"));
+		QVERIFY(view.save());
+	}
+
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
+	                             QStringLiteral("Port")), 1409);
 }
 
 void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()

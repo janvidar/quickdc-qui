@@ -11,6 +11,7 @@
 
 #include <core/configbridge.h>
 #include <core/dropbridge.h>
+#include <core/networkmode.h>
 #include <core/shares.h>
 
 #include <QCheckBox>
@@ -145,6 +146,20 @@ const QString DEFAULT_DOWNLOAD_DIR = QStringLiteral("~/.quickdc/downloads");
  */
 const QString REACHABILITY_SERVER = QStringLiteral("Reachability server");
 const QString REACHABILITY_SERVER_EXAMPLE = QStringLiteral("drop.quickdc.org");
+
+/**
+ * The key that says how much of getting connected the client works out itself.
+ *
+ * The one setting on the page that is not plumbing. Everything under it - the port,
+ * the address to bind, whether to ask the gateway, whether to claim active mode
+ * regardless - is derived from it, and in two of the three modes those are not shown
+ * at all. See Qdc::networkModeKeys() for the derivation, which is the core's own so
+ * that the page and the client cannot come to different conclusions.
+ *
+ * Absent from a file the core has not settled yet, which reads as advanced: it is
+ * the mode that imposes nothing, answering with whatever values are already there.
+ */
+const QString NETWORK_MODE = QStringLiteral("Mode");
 
 /**
  * The key that makes the core claim active mode before consulting anything.
@@ -344,11 +359,16 @@ QWidget* Qdc::SettingsView::buildConnection()
 	QWidget* page = new QWidget(this);
 
 	/*
-	 * Active or passive. The core reads this as a boolean; the words are the ones
-	 * the protocol uses, because "Active mode: off" says less than "Passive".
+	 * How much to work out without asking. Three answers rather than the two the
+	 * protocol has, because "active" is a thing to be rather than a thing to set:
+	 * the first two both intend it, and differ only in who chooses the plumbing.
 	 */
-	m_mode->addItem(tr("Active — others connect to me"), true);
-	m_mode->addItem(tr("Passive — I connect out only"), false);
+	m_mode->addItem(tr("Automatic — set this up and check it for me"),
+	                networkModeToken(NetworkMode::Automatic));
+	m_mode->addItem(tr("Advanced — I will choose the port and forwarding"),
+	                networkModeToken(NetworkMode::Advanced));
+	m_mode->addItem(tr("Passive — I only connect out"),
+	                networkModeToken(NetworkMode::Passive));
 
 	m_port->setRange(1, 65535);
 	m_bind->setPlaceholderText(DEFAULT_BIND);
@@ -878,6 +898,7 @@ void Qdc::SettingsView::load()
 		{QStringLiteral("Bind"), QString()},
 		{QStringLiteral("Address"), QString()},
 		{REACHABILITY_SERVER, QString()},
+		{NETWORK_MODE, QString()},
 		{FORCE_ACTIVE, FORCE_ACTIVE_DEFAULT},
 		{USE_UPNP, USE_UPNP_DEFAULT},
 		{QStringLiteral("Slots"), DEFAULT_SLOTS},
@@ -885,7 +906,17 @@ void Qdc::SettingsView::load()
 		{QStringLiteral("Chunk size"), DEFAULT_CHUNK_KIB * KIB}
 	});
 
-	m_mode->setCurrentIndex(network.value(QStringLiteral("Active mode")).toBool() ? 0 : 1);
+	/*
+	 * The stored mode, or the reading that imposes nothing where the file has none.
+	 * A store the core has already opened always has one; this answers for the case
+	 * where it has not, which is a page built against a configuration of its own.
+	 */
+	const NetworkMode mode = networkModeFromToken(
+		network.value(NETWORK_MODE).toString(),
+		network.value(QStringLiteral("Active mode")).toBool()
+			? NetworkMode::Advanced : NetworkMode::Passive);
+
+	m_mode->setCurrentIndex(qMax(0, m_mode->findData(networkModeToken(mode))));
 	m_port->setValue(network.value(QStringLiteral("Port")).toInt());
 	m_bind->setText(network.value(QStringLiteral("Bind")).toString());
 	m_address->setText(network.value(QStringLiteral("Address")).toString());
@@ -1001,21 +1032,50 @@ bool Qdc::SettingsView::save()
 	m_config->setString(ConfigStore::Application, USER,
 	                    QStringLiteral("E-mail"), m_email->text().trimmed());
 
+	/*
+	 * The mode, and then everything it decides.
+	 *
+	 * Derived rather than read off the switches, because in two of the three modes
+	 * those switches are not on screen: saving whatever they happen to hold would
+	 * write a state nobody chose. Advanced is the mode that answers with them, so it
+	 * is the only one where they are read - which is also what makes the answer to
+	 * "what did I set the port to" survive a trip through automatic.
+	 */
+	const NetworkMode mode = networkModeFromToken(
+		m_mode->currentData().toString(), NetworkMode::Advanced);
+
+	const NetworkModeKeys keys = networkModeKeys(mode,
+		m_useUpnp->isChecked(),
+		m_forceActive->isChecked(),
+		m_dropServer->text().trimmed());
+
+	m_config->setString(ConfigStore::Application, NETWORK, NETWORK_MODE,
+	                    networkModeToken(mode));
+
 	m_config->setBool(ConfigStore::Application, NETWORK,
-	                  QStringLiteral("Active mode"),
-	                  m_mode->currentData().toBool());
-	m_config->setNumber(ConfigStore::Application, NETWORK,
-	                    QStringLiteral("Port"), m_port->value());
+	                  QStringLiteral("Active mode"), keys.activeMode);
 	m_config->setString(ConfigStore::Application, NETWORK,
-	                    QStringLiteral("Bind"), m_bind->text().trimmed());
-	m_config->setString(ConfigStore::Application, NETWORK,
-	                    QStringLiteral("Address"), m_address->text().trimmed());
-	m_config->setString(ConfigStore::Application, NETWORK,
-	                    REACHABILITY_SERVER, m_dropServer->text().trimmed());
+	                    REACHABILITY_SERVER, keys.reachabilityServer);
 	m_config->setBool(ConfigStore::Application, NETWORK,
-	                  FORCE_ACTIVE, m_forceActive->isChecked());
-	m_config->setBool(ConfigStore::Application, NETWORK,
-	                  USE_UPNP, m_useUpnp->isChecked());
+	                  FORCE_ACTIVE, keys.forceActive);
+	m_config->setBool(ConfigStore::Application, NETWORK, USE_UPNP, keys.useUpnp);
+
+	/*
+	 * The plumbing only where somebody is choosing it. The port is not merely bound
+	 * from this key - it is also the number handed to every peer - so writing it from
+	 * a field the user cannot see would have the client advertise whatever the form
+	 * last loaded, and a peer dialling a port nothing listens on fails at their end
+	 * rather than at ours.
+	 */
+	if (mode == NetworkMode::Advanced)
+	{
+		m_config->setNumber(ConfigStore::Application, NETWORK,
+		                    QStringLiteral("Port"), m_port->value());
+		m_config->setString(ConfigStore::Application, NETWORK,
+		                    QStringLiteral("Bind"), m_bind->text().trimmed());
+		m_config->setString(ConfigStore::Application, NETWORK,
+		                    QStringLiteral("Address"), m_address->text().trimmed());
+	}
 
 	m_config->setNumber(ConfigStore::Application, NETWORK,
 	                    QStringLiteral("Slots"), m_slots->value());
