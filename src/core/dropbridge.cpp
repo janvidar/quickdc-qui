@@ -9,6 +9,8 @@
 #include <api/config.h>
 #include <api/core.h>
 #include <api/dropverdict.h>
+#include <api/networkmode.h>
+#include <network/hubmanager.h>
 #include <network/portforward.h>
 
 #include <QMetaObject>
@@ -68,6 +70,7 @@ Qdc::ReachabilityVerdict convert(const QuickDC::DropVerdict& verdict)
 	copied.port            = static_cast<int>(verdict.port);
 	copied.reason          = QString::fromStdString(verdict.reason);
 	copied.note            = QString::fromStdString(verdict.note);
+	copied.addressOnly     = verdict.addressOnly;
 
 	copied.remedies.reserve(static_cast<qsizetype>(verdict.remedies.size()));
 	for (const std::string& remedy : verdict.remedies)
@@ -139,9 +142,9 @@ public:
 	 * The run itself goes through the core's own call rather than by touching the
 	 * check, which is declared in a header naming Drop's types - a private
 	 * dependency of the core precisely so that nothing above it needs them. That
-	 * call reads the server and the port again on its own, which is the same pair
-	 * read here; they are read here only to refuse the unconfigured case with a
-	 * sentence worth showing, since a bare false says nothing about why. A refusal
+	 * call reads the server and the port again on its own; the server is read here
+	 * only to refuse the unconfigured case with a sentence worth showing, since a
+	 * bare false says nothing about which of its reasons applied. A refusal
 	 * for any other reason means a run is already going, and that one announced
 	 * itself when it started and reports through this same listener when it
 	 * finishes, so there is nothing to say and nothing to correct.
@@ -152,15 +155,19 @@ public:
 
 		if (!config)
 		{
-			fail(QStringLiteral("There is no configuration to read a port from."));
+			fail(QStringLiteral("There is no configuration to read a server from."));
 			return;
 		}
 
-		config->setGroup("Network");
-
-		const std::string server = config->getString("Reachability server", "");
-		const uint16_t port =
-			static_cast<uint16_t>(config->getNumber("Port", DEFAULT_PORT));
+		/*
+		 * Peeked, and the group named on the call. The ordinary accessors store
+		 * their default when a key is absent, so a plain read of the server here
+		 * would write one into a file that had never named it - and then the run
+		 * below would go and contact it. Naming the group also removes any reliance
+		 * on one somebody else selected.
+		 */
+		const std::string server =
+			config->peekString("Network", "Reachability server", "");
 
 		if (server.empty())
 		{
@@ -169,9 +176,6 @@ public:
 			return;
 		}
 
-		(void) server;
-		(void) port;
-
 		/*
 		 * IPv4 only from here, which starts the sequence rather than being all
 		 * of it: the core runs the other family once this one has finished, one
@@ -179,6 +183,52 @@ public:
 		 * through this same listener as they are established.
 		 */
 		if (!QuickDC::startDropCheck(false))
+			return;
+	}
+
+	/**
+	 * Ask only what address the world sees this client at.
+	 *
+	 * For a client that has declared itself passive, where there is an address
+	 * worth showing and nothing that may dial the peer port: having a stranger
+	 * connect back in order to be told our own address is the one thing such a
+	 * client must not arrange. The core's call opens no session and probes no port,
+	 * and marks the verdict it leaves addressOnly so that nothing downstream takes
+	 * it for evidence about reachability.
+	 *
+	 * The server is read here for the reason restart() reads it - to refuse an
+	 * unconfigured one with a sentence worth showing, since the call itself answers
+	 * false without saying which of its two reasons applied - and read through the
+	 * peeking accessor, which names the group on the call and so cannot read from
+	 * one somebody else selected. A plain read would store its default, which for
+	 * this key would write a server nobody chose into the file and then contact it.
+	 */
+	void lookupAddress(QuickDC::Core* core, bool ipv6)
+	{
+		QuickDC::Preferences* config = core ? core->config : nullptr;
+
+		if (!config)
+		{
+			fail(QStringLiteral("There is no configuration to read a server from."));
+			return;
+		}
+
+		const std::string server =
+			config->peekString("Network", "Reachability server", "");
+
+		if (server.empty())
+		{
+			fail(QStringLiteral("No reachability server has been configured, so "
+			                    "there is nobody to ask."));
+			return;
+		}
+
+		/*
+		 * A refusal for any other reason means something is already talking to that
+		 * server, and whatever it is reports through this same listener when it is
+		 * done - so there is nothing to say here and nothing to correct.
+		 */
+		if (!QuickDC::startAddressLookup(ipv6))
 			return;
 	}
 
@@ -306,17 +356,33 @@ void Qdc::DropBridge::applyForwarding()
 		QuickDC::Core* core = thread->core();
 		if (!core || !core->portforward || !core->config) return;
 
-		core->config->setGroup("Network");
+		QuickDC::Preferences& config = *core->config;
 
-		const bool wanted = core->config->getBool("UseUPnP", false);
+		/*
+		 * Derived rather than read off the key, because in automatic mode the stored
+		 * UseUPnP is not what governs: the mode is, and it asks for the gateway to be
+		 * tried whatever that key holds. Every read here peeks, since this runs on
+		 * every save and the ordinary accessors store their default when a key is
+		 * absent - a plain read would write UseUPnP into a file that had never
+		 * mentioned it, which is the client opting somebody into a setting rather
+		 * than answering a question about one.
+		 */
+		const QuickDC::NetworkMode mode = QuickDC::storedNetworkMode(config);
+
+		const QuickDC::NetworkModeKeys keys = QuickDC::networkModeKeys(mode,
+			config.peekBool("Network", "UseUPnP", false),
+			config.peekBool("Network", "Force active mode", false),
+			config.peekString("Network", "Reachability server", ""));
+
+		const bool wanted = keys.useUpnp;
 		const bool have = core->portforward->isForwarded() || core->portforward->isBusy();
 
 		if (wanted == have) return;
 
 		if (wanted)
 		{
-			core->portforward->start(
-				static_cast<uint16_t>(core->config->getNumber("Port", DEFAULT_PORT)));
+			core->portforward->start(static_cast<uint16_t>(
+				config.peekNumber("Network", "Port", DEFAULT_PORT)));
 			return;
 		}
 
@@ -338,6 +404,49 @@ void Qdc::DropBridge::recheck()
 		if (holder->watcher)
 		{
 			holder->watcher->restart(core->core());
+			return;
+		}
+
+		Relay* target = relay.get();
+
+		QMetaObject::invokeMethod(target, [relay, bridge] {
+			if (relay->detached()) return;
+
+			emit bridge->checkFailed(
+				tr("The QuickDC core is not running, so nothing could be "
+				   "measured."));
+		}, Qt::QueuedConnection);
+	});
+}
+
+void Qdc::DropBridge::republishClientInfo()
+{
+	if (!m_thread) return;
+
+	CoreThread* thread = m_thread.data();
+
+	m_thread->post([thread] {
+		QuickDC::Core* core = thread->core();
+		if (!core || !core->hubs) return;
+
+		core->hubs->requestClientInfoUpdate();
+	});
+}
+
+void Qdc::DropBridge::lookupPublicAddress(bool ipv6)
+{
+	if (!m_thread)
+	{
+		emit checkFailed(tr("The QuickDC core is not running."));
+		return;
+	}
+
+	CoreThread* core = m_thread.data();
+
+	m_thread->post([holder = m_watch, relay = m_relay, core, bridge = this, ipv6] {
+		if (holder->watcher)
+		{
+			holder->watcher->lookupAddress(core->core(), ipv6);
 			return;
 		}
 

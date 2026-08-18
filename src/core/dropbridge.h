@@ -106,6 +106,19 @@ struct ReachabilityVerdict {
 	 * that never happened.
 	 */
 	QDateTime observedAt;
+
+	/**
+	 * True where nothing connected back, so this carries an address and no more.
+	 *
+	 * What a lookup leaves. The core asked a DROP server what address it sees this
+	 * client at and stopped there, which is what a client that has declared itself
+	 * passive can still be shown without arranging for a stranger to dial its peer
+	 * port. Nothing about reachability was established in such a verdict, so a view
+	 * must draw no port outcome from one: mode is Unknown and both reach values are
+	 * Unknown because nobody tried, and that is not the same as having tried and
+	 * been blocked.
+	 */
+	bool addressOnly = false;
 };
 
 /**
@@ -212,8 +225,14 @@ public:
 	void recheck();
 
 	/**
-	 * Bring the gateway mapping into line with [Network] UseUPnP as it now
-	 * stands, starting a search or releasing what was granted.
+	 * Bring the gateway mapping into line with what [Network] Mode now asks for,
+	 * starting a search or releasing what was granted.
+	 *
+	 * The wanted state is derived from the mode rather than read off UseUPnP,
+	 * because in automatic mode the stored key is not the answer: the mode is, and
+	 * it says to ask the gateway whatever that key happens to hold. See
+	 * QuickDC::networkModeKeys(), which is where that mapping lives so that the
+	 * core and a settings page cannot disagree about it.
 	 *
 	 * Called after the setting is written, so that turning it on forwards the
 	 * port now rather than at the next start: a user who turned it on because a
@@ -225,6 +244,52 @@ public:
 	 * honours the mapping.
 	 */
 	void applyForwarding();
+
+	/**
+	 * Have every hub this client is logged in to told again what it advertises.
+	 *
+	 * Whether a peer may connect here, and on which port, is part of what a hub is
+	 * told at login - so a hub joined before that answer changed is still handing
+	 * the old one to every other peer, and will go on doing so until something
+	 * happens to make this client announce itself again. Nothing else on the
+	 * settings path arranges that: saving writes the store and announces that the
+	 * configuration changed, and no client hub session listens for that.
+	 *
+	 * Kept apart from applyForwarding() because forwarding a port and republishing
+	 * an announcement are two different acts on two different things, and a caller
+	 * routinely wants one without the other: releasing a mapping changes nothing
+	 * any hub was told, and going passive changes what every hub was told while
+	 * having no mapping to release.
+	 *
+	 * Returns at once and reports nothing. The core throttles the update - this
+	 * schedules one rather than sending anything - so a save that touches several
+	 * settings may call it for each of them and still produce a single
+	 * announcement.
+	 */
+	void republishClientInfo();
+
+	/**
+	 * Ask a DROP server what address it sees this client at, and nothing further.
+	 *
+	 * For passive mode, where the address the world sees is worth showing but
+	 * nothing may dial the peer port: a client that has announced it cannot be
+	 * connected to must not have a stranger connect to it in order to fill in a
+	 * field. No session is opened and no port is probed.
+	 *
+	 * The answer arrives as verdictChanged() like any other, carrying
+	 * ReachabilityVerdict::addressOnly - so what a view may draw from it is the
+	 * address, and nothing about whether anything can get in.
+	 *
+	 * Takes the family where recheck() does not, because a check starts a sequence
+	 * the core carries on with the other family by itself and a lookup promises no
+	 * such thing: a page that wants both addresses asks for both.
+	 *
+	 * Returns at once, and refuses through checkFailed() where there is no core to
+	 * ask or no server configured to ask - the sentences a check is refused with,
+	 * for the same reason it is refused out loud: somebody is waiting in front of a
+	 * settings page, and silence there reads as a request still running.
+	 */
+	void lookupPublicAddress(bool ipv6 = false);
 
 signals:
 	/**
