@@ -41,6 +41,20 @@ enum class ReachabilityMode {
 };
 
 /**
+ * Whether the measurement got through to one port; QuickDC::DropReach.
+ *
+ * Mirrored beside the words rather than derived from them, for the reason the
+ * core's own header gives: the strings are what a person is shown, and this is
+ * what a drawing decision is made on. Reducing one to the other would mean
+ * matching on display text, which changes when the wording does - and the words
+ * are a third party's, so they can change without this client being rebuilt.
+ *
+ * 'Unknown' is not a soft 'Blocked'. A probe the server could not perform, or one
+ * it does not offer, says nothing whatever about this client.
+ */
+enum class ReachabilityReach { Unknown, Reached, Blocked };
+
+/**
  * What a reachability measurement concluded, in types a view can draw.
  *
  * A copy of QuickDC::DropVerdict with every string already converted, made on
@@ -72,6 +86,10 @@ struct ReachabilityVerdict {
 	/** The per-port outcomes, named. Empty where the test was not run. */
 	QString tcp;
 	QString udp;
+
+	/* And the same two as something to draw from; see ReachabilityReach. */
+	ReachabilityReach tcpReached = ReachabilityReach::Unknown;
+	ReachabilityReach udpReached = ReachabilityReach::Unknown;
 
 	/** The port that was tested, which is the one this client advertises. */
 	int port = 0;

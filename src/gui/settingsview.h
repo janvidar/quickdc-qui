@@ -27,6 +27,7 @@ class QTabWidget;
 namespace Qdc {
 
 class ConfigBridge;
+class ReachabilityPanel;
 class Shares;
 
 /**
@@ -145,42 +146,14 @@ private:
 	void chooseDownloadDirectory();
 
 	/**
-	 * Show what a measurement concluded, whatever it concluded.
+	 * Pass a verdict to the panel that draws it.
 	 *
-	 * A run that established nothing is not an answer, whatever else it carries, and is
-	 * shown as nothing having been measured.
-	 *
-	 * Which family was measured is part of the answer rather than a detail of how it was
-	 * arrived at: one connection has one source address, so a run answers for IPv4 or
-	 * for IPv6 and never for both, and a dual-stack host reachable over one of them
-	 * would otherwise read as reachable full stop. The classification beside the address
-	 * is the server's own word for what it saw, and that address need not be one this
-	 * machine has - behind a carrier-grade NAT it is the provider's - which is exactly
-	 * what the classification is there to say.
-	 *
-	 * The per-port outcomes are shown in the words they arrived in and only for the
-	 * ports that were tested: an empty one is a test the server does not offer rather
-	 * than a port that failed, and reporting it as a failure would argue somebody into
-	 * turning off a feature that works. The reason and the remedies go up as they were
-	 * written, one remedy to a line, bulleted and not a word otherwise - whoever
-	 * measured wrote them for a user to read, and a client that reworded them would hand
-	 * somebody comparing two clients two accounts of one network and no way to tell
-	 * which to believe.
-	 *
-	 * A time that is not valid is a measurement the core recorded no time for, and is
-	 * shown as never rather than as the epoch: dating an answer to 1970 reads as a bug
-	 * in the clock instead of as a gap in what was recorded.
+	 * A slot rather than a direct connection to the panel, because this page is what
+	 * holds the bridge and the panel deliberately knows nothing about one.
 	 */
 	void showVerdict(const ReachabilityVerdict& verdict);
 
-	/**
-	 * Show why nobody measured, which says nothing about being reachable.
-	 *
-	 * Only that one line changes and every row above it is left exactly as it was. A
-	 * check that could not be run says nothing about whether this client is reachable -
-	 * only that nobody found out this time - so an earlier measurement is still the best
-	 * thing known, and the time it was taken is already beside it.
-	 */
+	/** Pass on why nobody measured, which says nothing about being reachable. */
 	void showCheckFailed(const QString& reason);
 
 	/**
@@ -191,16 +164,6 @@ private:
 	 * loading.
 	 */
 	void clearVerdict();
-
-	/**
-	 * The last verdict seen for each family, since one run answers for one.
-	 *
-	 * Kept here rather than drawn as they arrive, because the page shows both at
-	 * once and they arrive one after the other: rendering each on its own would
-	 * have the second wipe the first off a page claiming to describe the client.
-	 */
-	ReachabilityVerdict m_verdictV4;
-	ReachabilityVerdict m_verdictV6;
 
 	/** A note under a group, in the muted colour. */
 	QLabel* makeNote(const QString& text);
@@ -224,35 +187,18 @@ private:
 	/*
 	 * Whether anything outside can reach the port above, and who was asked.
 	 *
-	 * The server's name is the only setting of the group; everything under it is
+	 * The server's name is the only setting of the group; the panel beside it is
 	 * read-only, because a measurement is not a preference and a field offering to
-	 * edit one would be offering to edit the network. The three sentences the
-	 * measuring library writes - 'm_dropReason' carries its reason and its remedies,
-	 * 'm_dropNote' its note - are shown as they arrive rather than reworded: a user
-	 * who is given two different explanations of the same network by two clients
-	 * concludes that one of them is broken. Every one of these labels is on
-	 * Qt::PlainText for the same reason, none of them left to guess: a label asked to
-	 * guess reads a sentence with an angle bracket in it as markup, and showing the
-	 * words unaltered is the whole point.
+	 * edit one would be offering to edit the network.
 	 *
-	 * 'm_dropAttempt' is how the last attempt went, which is a different thing from
-	 * what was measured and so has a label of its own. A check that could not be run
-	 * says nothing about whether this client is reachable, so it must not overwrite an
-	 * answer that was measured earlier and still stands. It is also where a check that
-	 * has been asked for says so, rather than 'm_dropCheck' being disabled on the way
-	 * out: a button disabled there has to be re-enabled by something coming back, and a
-	 * request the bridge decides not to make - no server named yet, or one already in
-	 * flight - reports nothing at all, which would leave the button dead for the life
-	 * of the window.
+	 * The panel holds the verdicts and everything said about them, one per family,
+	 * and this page does no more than pass them on. That is what lets a test put an
+	 * answer on screen: every settings test builds this page with no bridge behind
+	 * it, so before the panel existed nothing here was ever drawn with a verdict in
+	 * it.
 	 */
 	QLineEdit* m_dropServer;
-	QLabel* m_dropAddress;
-	QLabel* m_dropReachable;
-	QLabel* m_dropChecked;
-	QPushButton* m_dropCheck;
-	QLabel* m_dropReason;
-	QLabel* m_dropNote;
-	QLabel* m_dropAttempt;
+	ReachabilityPanel* m_reachability;
 
 	/*
 	 * Announce active mode whatever was measured, which the core reads before it looks

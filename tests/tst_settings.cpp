@@ -5,11 +5,14 @@
 #include <core/configbridge.h>
 #include <core/corethread.h>
 #include <core/shares.h>
+#include <gui/reachabilitypanel.h>
 #include <gui/settingsview.h>
 
+#include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -56,6 +59,12 @@ private slots:
 	void theGatewayIsNotAskedForAMappingUntilItIsAskedFor();
 	void askingTheGatewayToForwardSurvivesTheForm();
 	void theConnectionPageSaysWhatSearchingForAGatewayDiscloses();
+
+	void thePanelDrawsItsThreeAnswersApart();
+	void aFamilyNobodyMeasuredIsNotDrawnAsAFailure();
+	void aVerdictForOneFamilyLeavesTheOtherAlone();
+	void aServersOwnWordsCannotBecomeMarkupInATooltip();
+	void hidingThePortsLeavesTheAddress();
 
 	void boardsFetchNothingAheadUntilTheyAreTold();
 	void theBoardsPageSaysThatReadingAPostMayBeSeen();
@@ -673,6 +682,202 @@ void TestSettings::theConnectionPageSaysWhatSearchingForAGatewayDiscloses()
 	QVERIFY2(page.contains(QStringLiteral("does not know whether anything above it "
 	                                      "honours one")),
 	         "the page does not say that a granted mapping settles nothing on its own");
+}
+
+/**
+ * A verdict, as one would arrive from a DROP server.
+ *
+ * Built here rather than measured, which is the only way the drawing gets covered
+ * at all: a real one takes a server outside willing to connect back.
+ */
+Qdc::ReachabilityVerdict measured(bool ipv6, Qdc::ReachabilityReach tcp,
+                                  Qdc::ReachabilityReach udp)
+{
+	Qdc::ReachabilityVerdict verdict;
+
+	verdict.ran = true;
+	verdict.ipv6 = ipv6;
+	verdict.publicAddress = ipv6 ? QStringLiteral("2001:db8::1")
+	                             : QStringLiteral("198.51.100.7");
+	verdict.classification = QStringLiteral("global");
+	verdict.port = 1411;
+
+	verdict.tcpReached = tcp;
+	verdict.udpReached = udp;
+
+	/* The server's own word for each outcome; empty means it did not test. */
+	verdict.tcp = tcp == Qdc::ReachabilityReach::Reached ? QStringLiteral("open")
+	                                                     : QStringLiteral("filtered");
+	verdict.udp = udp == Qdc::ReachabilityReach::Reached ? QStringLiteral("open")
+	                                                     : QStringLiteral("no_response");
+
+	verdict.observedAt = QDateTime::fromSecsSinceEpoch(1700000000);
+
+	return verdict;
+}
+
+/** What a cell is showing, as an image, so two states can be told apart. */
+QImage cellShape(const Qdc::ReachabilityPanel& panel, const QString& name)
+{
+	const QLabel* icon = panel.findChild<QLabel*>(name + QStringLiteral("Icon"));
+	if (!icon) return QImage();
+
+	return icon->pixmap().toImage();
+}
+
+/**
+ * Reached, blocked and unmeasured are three different pictures.
+ *
+ * The whole reason the panel draws a shape at all is that colour is not enough:
+ * somebody who cannot tell the green from the red has to be able to read the answer
+ * off the form of it. So it is not enough that the three states differ - they must
+ * differ in the pixels, and a change that gave two of them the same glyph in
+ * different inks would pass every other test here.
+ */
+void TestSettings::thePanelDrawsItsThreeAnswersApart()
+{
+	Qdc::ReachabilityPanel panel;
+
+	const QImage unmeasured = cellShape(panel, QStringLiteral("reachabilityTcp4"));
+	QVERIFY(!unmeasured.isNull());
+
+	panel.setVerdict(measured(false, Qdc::ReachabilityReach::Reached,
+	                          Qdc::ReachabilityReach::Blocked));
+
+	const QImage reached = cellShape(panel, QStringLiteral("reachabilityTcp4"));
+	const QImage blocked = cellShape(panel, QStringLiteral("reachabilityUdp4"));
+
+	QVERIFY2(reached != blocked, "reached and blocked are drawn the same");
+	QVERIFY2(reached != unmeasured, "reached and unmeasured are drawn the same");
+	QVERIFY2(blocked != unmeasured, "blocked and unmeasured are drawn the same");
+}
+
+/**
+ * A family nobody measured is drawn as nothing known, not as a port that failed.
+ *
+ * This is the distinction the whole panel turns on. A host with no IPv6 route
+ * reports nothing for IPv6, and drawing that as a failure would send somebody off
+ * to fix a network that is working perfectly - so the unmeasured family has to
+ * carry the same picture it had before either family was measured, and not the one
+ * the measured-and-blocked family carries.
+ */
+void TestSettings::aFamilyNobodyMeasuredIsNotDrawnAsAFailure()
+{
+	Qdc::ReachabilityPanel panel;
+
+	const QImage nothing = cellShape(panel, QStringLiteral("reachabilityTcp6"));
+
+	/* IPv4 measured and blocked; IPv6 not measured at all. */
+	panel.setVerdict(measured(false, Qdc::ReachabilityReach::Blocked,
+	                          Qdc::ReachabilityReach::Blocked));
+
+	QCOMPARE(panel.addressText(true), QStringLiteral("not measured"));
+	QCOMPARE(panel.portText(true, false), QStringLiteral("not measured"));
+	QCOMPARE(panel.portText(true, true), QStringLiteral("not measured"));
+
+	QCOMPARE(cellShape(panel, QStringLiteral("reachabilityTcp6")), nothing);
+
+	QVERIFY2(cellShape(panel, QStringLiteral("reachabilityTcp4")) != nothing,
+	         "a measured failure is drawn the same as never having asked");
+
+	/*
+	 * And a probe the server ran but could not classify is the same picture again.
+	 * It carries a word, so the run did happen, but 'Unknown' is not a soft
+	 * 'Blocked': the server having failed at its end says nothing whatever about
+	 * this client, and withdrawing an active claim over somebody else's outage is
+	 * the one mistake here that cannot be seen from the outside.
+	 */
+	Qdc::ReachabilityVerdict unclassified = measured(true,
+		Qdc::ReachabilityReach::Unknown, Qdc::ReachabilityReach::Unknown);
+
+	unclassified.tcp = QStringLiteral("error");
+	unclassified.udp = QStringLiteral("error");
+
+	panel.setVerdict(unclassified);
+
+	QCOMPARE(panel.portText(true, false), QStringLiteral("error"));
+	QCOMPARE(cellShape(panel, QStringLiteral("reachabilityTcp6")), nothing);
+}
+
+/**
+ * The second family to arrive does not wipe the first.
+ *
+ * One run answers for one family and they finish one after the other, so a panel
+ * that drew each as it came would spend most of its life describing half the
+ * client while claiming to describe all of it.
+ */
+void TestSettings::aVerdictForOneFamilyLeavesTheOtherAlone()
+{
+	Qdc::ReachabilityPanel panel;
+
+	panel.setVerdict(measured(false, Qdc::ReachabilityReach::Reached,
+	                          Qdc::ReachabilityReach::Reached));
+	panel.setVerdict(measured(true, Qdc::ReachabilityReach::Blocked,
+	                          Qdc::ReachabilityReach::Blocked));
+
+	QVERIFY(panel.addressText(false).contains(QStringLiteral("198.51.100.7")));
+	QVERIFY(panel.addressText(true).contains(QStringLiteral("2001:db8::1")));
+
+	QCOMPARE(panel.portText(false, false), QStringLiteral("open"));
+	QCOMPARE(panel.portText(true, false), QStringLiteral("filtered"));
+}
+
+/**
+ * A reason from the server reaches a tooltip as text, never as markup.
+ *
+ * Every word of it was written by a third party, and a tooltip cannot be put on
+ * plain text the way the labels can: Qt hands the string to a label on
+ * Qt::AutoText, which would read markup in it as markup. So a server that returned
+ * a bold tag would be setting the type in this client's own chrome, and one that
+ * returned an image tag would have it fetch a resource.
+ */
+void TestSettings::aServersOwnWordsCannotBecomeMarkupInATooltip()
+{
+	Qdc::ReachabilityPanel panel;
+
+	Qdc::ReachabilityVerdict verdict = measured(false,
+		Qdc::ReachabilityReach::Blocked, Qdc::ReachabilityReach::Blocked);
+
+	verdict.reason = QStringLiteral("<b>bold</b> & <img src=x>");
+
+	panel.setVerdict(verdict);
+
+	const QLabel* cell =
+		panel.findChild<QLabel*>(QStringLiteral("reachabilityTcp4"));
+	QVERIFY(cell);
+
+	const QString tip = cell->toolTip();
+
+	QVERIFY2(tip.contains(QStringLiteral("&lt;b&gt;")), "the tag was not escaped");
+	QVERIFY2(!tip.contains(QStringLiteral("<b>")), "the tag survived as markup");
+	QVERIFY2(!tip.contains(QStringLiteral("<img")), "an image tag survived");
+}
+
+/**
+ * With the ports hidden the address stays, and the port rows go entirely.
+ *
+ * For a client that is not trying to be reached: the address is still worth
+ * showing, and an inbound answer is a question nobody asked. Hidden rather than
+ * drawn as dashes, because a dash invites somebody to go and find out and there is
+ * nothing to find out.
+ */
+void TestSettings::hidingThePortsLeavesTheAddress()
+{
+	Qdc::ReachabilityPanel panel;
+
+	panel.setVerdict(measured(false, Qdc::ReachabilityReach::Reached,
+	                          Qdc::ReachabilityReach::Reached));
+	panel.setShowPorts(false);
+
+	QVERIFY(panel.addressText(false).contains(QStringLiteral("198.51.100.7")));
+
+	const QLabel* tcp =
+		panel.findChild<QLabel*>(QStringLiteral("reachabilityTcp4"));
+	QVERIFY(tcp);
+	QVERIFY2(tcp->isHidden(), "a port row is still shown");
+
+	panel.setShowPorts(true);
+	QVERIFY2(!tcp->isHidden(), "the port rows did not come back");
 }
 
 void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()

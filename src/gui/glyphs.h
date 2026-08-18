@@ -66,7 +66,26 @@ enum class Glyph {
 	 * apart.
 	 */
 	Person,
-	PersonOutline
+	PersonOutline,
+
+	/**
+	 * Something measured and found to work, in a grid of such answers.
+	 *
+	 * Paired with Close for the opposite answer and Dash for one nobody
+	 * established, which is three shapes for three states rather than three inks:
+	 * whether a port can be reached is not a thing to leave resting on telling
+	 * green from red.
+	 */
+	Check,
+
+	/**
+	 * Nothing measured, in that same grid.
+	 *
+	 * Not a weaker cross. A test the server does not offer, or a family with no
+	 * route to run one over, is a question nobody asked - and drawing it as a
+	 * failure would have somebody set about fixing a network that is fine.
+	 */
+	Dash
 };
 
 /**

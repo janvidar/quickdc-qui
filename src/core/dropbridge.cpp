@@ -32,6 +32,18 @@ Qdc::ReachabilityMode convert(QuickDC::DropMode mode)
 	return Qdc::ReachabilityMode::Unknown;
 }
 
+Qdc::ReachabilityReach convert(QuickDC::DropReach reach)
+{
+	switch (reach)
+	{
+		case QuickDC::DropReach::Unknown: return Qdc::ReachabilityReach::Unknown;
+		case QuickDC::DropReach::Reached: return Qdc::ReachabilityReach::Reached;
+		case QuickDC::DropReach::Blocked: return Qdc::ReachabilityReach::Blocked;
+	}
+
+	return Qdc::ReachabilityReach::Unknown;
+}
+
 /**
  * A verdict, copied out of what the core lent us.
  *
@@ -51,6 +63,8 @@ Qdc::ReachabilityVerdict convert(const QuickDC::DropVerdict& verdict)
 	copied.mode            = convert(verdict.mode);
 	copied.tcp             = QString::fromStdString(verdict.tcp);
 	copied.udp             = QString::fromStdString(verdict.udp);
+	copied.tcpReached      = convert(verdict.tcpReached);
+	copied.udpReached      = convert(verdict.udpReached);
 	copied.port            = static_cast<int>(verdict.port);
 	copied.reason          = QString::fromStdString(verdict.reason);
 	copied.note            = QString::fromStdString(verdict.note);

@@ -4,6 +4,7 @@
 
 #include "settingsview.h"
 
+#include "reachabilitypanel.h"
 #include "richtext.h"
 #include "theme.h"
 #include "widgets.h"
@@ -189,10 +190,7 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge
 	, m_bind(new QLineEdit(this))
 	, m_address(new QLineEdit(this))
 	, m_dropServer(new QLineEdit(this))
-	, m_dropAddress(new QLabel(this))
-	, m_dropReachable(new QLabel(this))
-	, m_dropChecked(new QLabel(this))
-	, m_dropCheck(new QPushButton(tr("Check now"), this))
+	, m_reachability(new ReachabilityPanel(this))
 	, m_slots(new QSpinBox(this))
 	, m_maxDownloads(new QSpinBox(this))
 	, m_chunkSize(new QSpinBox(this))
@@ -243,16 +241,14 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge
 		showVerdict(m_drop->verdict(false));
 		showVerdict(m_drop->verdict(true));
 
-		connect(m_dropCheck, &QPushButton::clicked, this, [this] {
-			m_dropAttempt->setText(tr("Checking…"));
-			m_dropAttempt->setVisible(true);
-
+		connect(m_reachability, &ReachabilityPanel::checkRequested, this, [this] {
+			m_reachability->setChecking(true);
 			m_drop->recheck();
 		});
 	}
 	else
 	{
-		m_dropCheck->setEnabled(false);
+		m_reachability->checkButton()->setEnabled(false);
 	}
 
 	if (!m_config)
@@ -351,24 +347,6 @@ QWidget* Qdc::SettingsView::buildConnection()
 	m_dropServer->setMaxLength(255);
 	m_dropServer->setPlaceholderText(REACHABILITY_SERVER_EXAMPLE);
 
-	for (QLabel* field : {m_dropAddress, m_dropReachable, m_dropChecked})
-	{
-		field->setTextFormat(Qt::PlainText);
-		field->setTextInteractionFlags(Qt::TextSelectableByMouse);
-	}
-
-	m_dropReason = makeNote(QString());
-	m_dropReason->setTextFormat(Qt::PlainText);
-
-	m_dropNote = makeNote(QString());
-	m_dropNote->setTextFormat(Qt::PlainText);
-
-	m_dropAttempt = makeNote(QString());
-	m_dropAttempt->setTextFormat(Qt::PlainText);
-
-	m_dropCheck->setToolTip(tr("Ask the server above what it sees, now, rather than "
-	                           "waiting for the next time QuickDC starts"));
-
 	m_useUpnp = new QCheckBox(
 		tr("Ask the router to forward this port (UPnP-IGD)"), page);
 	m_useUpnp->setToolTip(tr("Search the local network for an internet gateway and ask "
@@ -380,11 +358,6 @@ QWidget* Qdc::SettingsView::buildConnection()
 	m_forceActive->setToolTip(tr("Announce active mode on every hub without waiting for "
 	                             "a measurement or a peer to establish it"));
 	connect(m_forceActive, &QCheckBox::toggled, this, &SettingsView::markModified);
-
-	QHBoxLayout* checkRow = new QHBoxLayout;
-	checkRow->setContentsMargins(0, 0, 0, 0);
-	checkRow->addWidget(m_dropCheck);
-	checkRow->addStretch(1);
 
 	QFormLayout* form = new QFormLayout(page);
 	form->addRow(tr("Connection"), m_mode);
@@ -413,14 +386,7 @@ QWidget* Qdc::SettingsView::buildConnection()
 		"back to prove the answer. That is why the field above is empty until somebody "
 		"puts a name in it: while it is empty, nobody is asked anything.")));
 
-	form->addRow(tr("Public address"), m_dropAddress);
-	form->addRow(tr("Reachable"), m_dropReachable);
-	form->addRow(tr("Last checked"), m_dropChecked);
-	form->addRow(QString(), checkRow);
-
-	form->addRow(m_dropAttempt);
-	form->addRow(m_dropReason);
-	form->addRow(m_dropNote);
+	form->addRow(m_reachability);
 
 	form->addRow(makeNote(tr(
 		"An answer describes the network as it was at the moment it was measured. Move "
@@ -1136,129 +1102,17 @@ bool Qdc::SettingsView::save()
 
 void Qdc::SettingsView::clearVerdict()
 {
-	m_dropAddress->setText(tr("not measured yet"));
-	m_dropReachable->setText(tr("not measured yet"));
-	m_dropChecked->setText(tr("never"));
-
-	for (QLabel* paragraph : {m_dropAttempt, m_dropReason, m_dropNote})
-	{
-		paragraph->clear();
-		paragraph->setVisible(false);
-	}
+	m_reachability->clear();
 }
 
 void Qdc::SettingsView::showVerdict(const ReachabilityVerdict& verdict)
 {
-	if (verdict.ran)
-		(verdict.ipv6 ? m_verdictV6 : m_verdictV4) = verdict;
-
-	if (!m_verdictV4.ran && !m_verdictV6.ran)
-	{
-		clearVerdict();
-		return;
-	}
-
-	m_dropAttempt->clear();
-	m_dropAttempt->setVisible(false);
-
-	QStringList addresses;
-	QStringList reachable;
-	QStringList explanation;
-	QStringList notes;
-	QDateTime oldest;
-
-	for (const ReachabilityVerdict* one : {&m_verdictV4, &m_verdictV6})
-	{
-		const QString family = one->ipv6 ? tr("IPv6") : tr("IPv4");
-
-		/*
-		 * A family nobody has measured says so, rather than being left out. Absent
-		 * from a page listing the other family reads as a family that failed, and
-		 * the two are not the same thing to somebody deciding what to change.
-		 */
-		if (!one->ran)
-		{
-			addresses += tr("%1: not measured").arg(family);
-			continue;
-		}
-
-		if (one->publicAddress.isEmpty())
-			addresses += tr("%1: not measured").arg(family);
-		else if (one->classification.isEmpty())
-			addresses += tr("%1: %2").arg(family, one->publicAddress);
-		else
-			addresses += tr("%1: %2 — %3")
-				.arg(family, one->publicAddress, one->classification);
-
-		QString said;
-
-		switch (one->mode)
-		{
-			case ReachabilityMode::Active:
-				said = tr("yes, a connection from outside got in");
-				break;
-
-			case ReachabilityMode::Passive:
-				said = tr("no, nothing from outside got in");
-				break;
-
-			case ReachabilityMode::Unknown:
-				said = tr("nothing was established");
-				break;
-		}
-
-		QStringList ports;
-
-		if (!one->tcp.isEmpty())
-			ports += tr("TCP %1: %2").arg(one->port).arg(one->tcp);
-
-		if (!one->udp.isEmpty())
-			ports += tr("UDP %1: %2").arg(one->port).arg(one->udp);
-
-		if (!ports.isEmpty())
-			said += QStringLiteral(" — ") + ports.join(tr(", "));
-
-		reachable += tr("%1: %2").arg(family, said);
-
-		/*
-		 * The older of the two, because it is the one that says how much of this
-		 * page can still be relied on: a reader told the time of the newer would
-		 * be told the whole of it was that fresh.
-		 */
-		if (one->observedAt.isValid() && (!oldest.isValid() || one->observedAt < oldest))
-			oldest = one->observedAt;
-
-		if (!one->reason.isEmpty()) explanation += tr("%1: %2").arg(family, one->reason);
-
-		for (const QString& remedy : one->remedies)
-			explanation += QStringLiteral("• ") + remedy;
-
-		if (!one->note.isEmpty()) notes += one->note;
-	}
-
-	m_dropAddress->setText(addresses.join(QLatin1Char('\n')));
-	m_dropReachable->setText(reachable.isEmpty() ? tr("not measured yet")
-	                                             : reachable.join(QLatin1Char('\n')));
-
-	m_dropChecked->setText(oldest.isValid()
-		? QLocale().toString(oldest, QLocale::ShortFormat)
-		: tr("never"));
-
-	m_dropReason->setText(explanation.join(QLatin1Char('\n')));
-	m_dropReason->setVisible(!explanation.isEmpty());
-
-	notes.removeDuplicates();
-	m_dropNote->setText(notes.join(QLatin1Char('\n')));
-	m_dropNote->setVisible(!notes.isEmpty());
+	m_reachability->setVerdict(verdict);
 }
 
 void Qdc::SettingsView::showCheckFailed(const QString& reason)
 {
-	m_dropAttempt->setText(reason.isEmpty()
-		? tr("The check could not be run.")
-		: tr("The check could not be run: %1").arg(reason));
-
-	m_dropAttempt->setVisible(true);
+	m_reachability->setFailure(reason);
 }
 
 void Qdc::SettingsView::refreshShareList()

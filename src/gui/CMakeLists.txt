@@ -56,6 +56,8 @@ add_library(qdcgui STATIC
     glyphs.h
     progressdelegate.cpp
     progressdelegate.h
+    reachabilitypanel.cpp
+    reachabilitypanel.h
     richtext.cpp
     richtext.h
     searchmodel.cpp

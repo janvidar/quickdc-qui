@@ -422,6 +422,42 @@ QPainterPath close_path()
 	return stroker.createStroke(strokes);
 }
 
+/** A tick, drawn on the same weight as the cross it is answered against. */
+QPainterPath check_path()
+{
+	QPainterPath strokes;
+	strokes.moveTo(5.5, 12.5);
+	strokes.lineTo(10.0, 17.0);
+	strokes.lineTo(18.5, 7.5);
+
+	QPainterPathStroker stroker;
+	stroker.setWidth(2.4);
+	stroker.setCapStyle(Qt::RoundCap);
+	stroker.setJoinStyle(Qt::RoundJoin);
+
+	return stroker.createStroke(strokes);
+}
+
+/**
+ * A dash, for an answer nobody has.
+ *
+ * Shorter than the width of the tick and the cross so that it reads as less
+ * rather than as a third thing of equal weight, and centred on the same line
+ * they cross at so a column of the three does not look ragged.
+ */
+QPainterPath dash_path()
+{
+	QPainterPath strokes;
+	strokes.moveTo(7.0, 12.0);
+	strokes.lineTo(17.0, 12.0);
+
+	QPainterPathStroker stroker;
+	stroker.setWidth(2.4);
+	stroker.setCapStyle(Qt::RoundCap);
+
+	return stroker.createStroke(strokes);
+}
+
 QPainterPath glyph_path(Qdc::Glyph glyph)
 {
 	switch (glyph)
@@ -441,6 +477,8 @@ QPainterPath glyph_path(Qdc::Glyph glyph)
 		case Qdc::Glyph::LocalHub:    return local_hub_path();
 		case Qdc::Glyph::Person:      return person_path();
 		case Qdc::Glyph::PersonOutline: return person_outline_path();
+		case Qdc::Glyph::Check:       return check_path();
+		case Qdc::Glyph::Dash:        return dash_path();
 	}
 
 	return QPainterPath();
