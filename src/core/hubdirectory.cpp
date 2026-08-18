@@ -65,7 +65,50 @@ constexpr int MERGED_LIMIT = 65536;
 QString merge_key(const QString& address)
 {
 	const QString normalised = Qdc::HubBridge::normalisedUrl(address);
-	return normalised.isEmpty() ? address.trimmed().toLower() : normalised;
+	if (normalised.isEmpty()) return address.trimmed().toLower();
+
+	/*
+	 * Down to where the hub is and no further. What follows the authority is how
+	 * to check it rather than which one it is - a keyprint above all, which one
+	 * list carries and another leaves off, and which kept in the key would file
+	 * one hub under two rows and a hub whose certificate has been replaced under
+	 * three.
+	 *
+	 * Lowered because a host name is not case sensitive and the lists disagree
+	 * about it. Safe to apply to the whole of what is left: a scheme is not case
+	 * sensitive either, and a port is digits.
+	 */
+	const qsizetype scheme = normalised.indexOf(QStringLiteral("://"));
+	const qsizetype start = scheme < 0 ? 0 : scheme + 3;
+
+	qsizetype end = normalised.size();
+
+	for (qsizetype n = start; n < normalised.size(); ++n)
+	{
+		const QChar at = normalised.at(n);
+
+		if (at == QLatin1Char('/') || at == QLatin1Char('?') || at == QLatin1Char('#'))
+		{
+			end = n;
+			break;
+		}
+	}
+
+	return normalised.left(end).toLower();
+}
+
+/**
+ * Whether this address carries the fingerprint of the certificate to expect.
+ *
+ * Looked for after the authority, so that a host with 'kp' in its name is not
+ * mistaken for one - the keyprint is a parameter and lives past the separator.
+ */
+bool has_keyprint(const QString& address)
+{
+	const qsizetype query = address.indexOf(QLatin1Char('?'));
+	if (query < 0) return false;
+
+	return address.mid(query).contains(QStringLiteral("kp="), Qt::CaseInsensitive);
 }
 
 QJsonObject encode(const Qdc::HubListEntry& hub)
@@ -408,6 +451,22 @@ void Qdc::HubDirectory::merge()
 			if (kept.country.isEmpty()) kept.country = hub.country;
 
 			kept.users = qMax(kept.users, hub.users);
+
+			/*
+			 * And the address that says which certificate to expect wins over one
+			 * that does not, whichever list named the hub first.
+			 *
+			 * The exception to precedence, because this is not a matter of which
+			 * list describes a hub better: without the keyprint there is nothing
+			 * to check the certificate against but a trust store the hub's own
+			 * self-signed certificate is not in, and the two addresses reach the
+			 * same hub either way. Between two keyprints the first list still
+			 * wins - a hub that has replaced its certificate is listed under both
+			 * for a while, and there is nothing here that can tell which is
+			 * current.
+			 */
+			if (!has_keyprint(kept.address) && has_keyprint(hub.address))
+				kept.address = hub.address;
 		}
 	}
 

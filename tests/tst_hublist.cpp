@@ -73,6 +73,8 @@ private slots:
 	void aWithdrawnListIsTakenOutOfAStoredConfiguration();
 	void noWithdrawnListIsStillShipped();
 	void severalListsMergeIntoOne();
+	void aHubKeepsTheAddressThatSaysWhichCertificateToExpect();
+	void aHubIsOneRowHoweverItsListsSpellIt();
 	void aCacheWrittenForAnotherSourceIsIgnored();
 
 	void aBadAddressIsRefusedWithoutTheCore();
@@ -1326,6 +1328,103 @@ void TestHubList::noWithdrawnListIsStillShipped()
 	for (const QString& gone : Qdc::HubDirectory::retiredSources())
 		QVERIFY2(!Qdc::HubDirectory::defaultSources().contains(gone),
 		         "a list is both shipped and withdrawn");
+}
+
+/*
+ * Where one list names a hub with the fingerprint of its certificate and another
+ * leaves it off, the one that can be checked is the one kept.
+ *
+ * The exception to the rule that the first list wins. That rule is about which
+ * list describes a hub better, and this is not a description: without the
+ * keyprint there is nothing to check a self-signed certificate against, and both
+ * addresses reach the same hub either way.
+ */
+void TestHubList::aHubKeepsTheAddressThatSaysWhichCertificateToExpect()
+{
+	const QString first = QStringLiteral("http://a.example.org/hublist.xml");
+	const QString second = QStringLiteral("http://b.example.org/hublist.xml");
+
+	configureSources({first, second});
+
+	const QString bare = QStringLiteral("adcs://secure.example.org:412");
+	const QString pinned = bare + QStringLiteral("/?kp=SHA256/AAAABBBBCCCCDDDD");
+
+	Qdc::HubListEntry without;
+	without.name = QStringLiteral("Secure");
+	without.address = bare;
+
+	Qdc::HubListEntry with;
+	with.address = pinned;
+
+	{
+		Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
+		cache(seed, first, {without});
+		cache(seed, second, {with});
+	}
+
+	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+
+	/* One row: the keyprint says how to check the hub, not which hub it is. */
+	QCOMPARE(directory.hubCount(), 1);
+
+	const Qdc::HubListEntry kept = directory.hubs().at(0);
+
+	QCOMPARE(kept.address, pinned);
+
+	/* And the first list's description of it survives being given the address. */
+	QCOMPARE(kept.name, QStringLiteral("Secure"));
+}
+
+/*
+ * The same hub under two spellings is one row, whichever part differs.
+ *
+ * A host name is not case sensitive and the lists disagree about it; a keyprint
+ * and a trailing slash are not part of which hub this is at all. Left in the key
+ * they file one hub under several rows, and a hub whose certificate has been
+ * replaced under one row per certificate.
+ */
+void TestHubList::aHubIsOneRowHoweverItsListsSpellIt()
+{
+	const QString first = QStringLiteral("http://a.example.org/hublist.xml");
+	const QString second = QStringLiteral("http://b.example.org/hublist.xml");
+
+	configureSources({first, second});
+
+	Qdc::HubListEntry plain;
+	plain.name = QStringLiteral("Mixed"); 
+	plain.address = QStringLiteral("dchub://MixedCase.Example.Org:411");
+
+	Qdc::HubListEntry lowered;
+	lowered.address = QStringLiteral("dchub://mixedcase.example.org:411");
+
+	Qdc::HubListEntry slashed;
+	slashed.address = QStringLiteral("dchub://mixedcase.example.org:411/");
+
+	/* Two certificates for one hub, which is what a replaced one looks like. */
+	Qdc::HubListEntry rotated;
+	rotated.address = QStringLiteral("adcs://rotate.example.org:412/?kp=SHA256/OLDOLDOLD");
+
+	Qdc::HubListEntry rotatedAgain;
+	rotatedAgain.address = QStringLiteral("adcs://rotate.example.org:412/?kp=SHA256/NEWNEWNEW");
+
+	{
+		Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
+		cache(seed, first, {plain, rotated});
+		cache(seed, second, {lowered, slashed, rotatedAgain});
+	}
+
+	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+
+	/* Five entries naming two hubs. */
+	QCOMPARE(directory.hubCount(), 2);
+
+	/* Between two keyprints the first list still wins: nothing here knows which
+	   certificate is the current one. */
+	bool sawOld = false;
+	for (const Qdc::HubListEntry& hub : directory.hubs())
+		if (hub.address.contains(QStringLiteral("OLDOLDOLD"))) sawOld = true;
+
+	QVERIFY2(sawOld, "the first list's keyprint should have been kept");
 }
 
 QTEST_MAIN(TestHubList)
