@@ -6,8 +6,11 @@
 
 #include "corethread.h"
 
+#include <api/attachments.h>
 #include <api/core.h>
 #include <api/filelist.h>
+#include <api/hub.h>
+#include <network/hubmanager.h>
 #include <samurai/io/file.h>
 
 #include <QTimer>
@@ -71,6 +74,48 @@ struct Outcome {
 	Qdc::RemoteDirInfo root;
 };
 
+/** What making a request came to; see FilelistBridge::request(). */
+struct Started {
+	/** Where a browse over the network will land, or empty if none was made. */
+	QString localFile;
+
+	/** This names our own share, so nothing was asked of anybody. */
+	bool ours = false;
+
+	bool decoded = false;
+	Qdc::RemoteDirInfo root;
+};
+
+/**
+ * Our own file list, read off this disk.
+ *
+ * The share manager writes it as the share is hashed, so it is normally current; it
+ * is built here only when there is none at all, which is a share still being read at
+ * start-up.
+ */
+Qdc::RemoteDirInfo own_filelist(QuickDC::Share::Manager* shares, bool* decoded)
+{
+	Qdc::RemoteDirInfo root;
+	*decoded = false;
+
+	if (!shares) return root;
+
+	const std::string path = shares->getFilelistDirectory() + "/files.xml";
+
+	if (!Samurai::IO::File(path).exists()) shares->createFileLists(true);
+
+	/* A fresh handle, because the one above was asked its question before the
+	   list existed. */
+	Samurai::IO::File file(path);
+	if (!file.exists()) return root;
+
+	Share::RemoteFileList list(&file);
+	if (!list.decode()) return root;
+
+	*decoded = true;
+	return convert(list.root);
+}
+
 }
 
 Qdc::FilelistBridge::FilelistBridge(CoreThread* thread, QObject* parent)
@@ -106,18 +151,31 @@ void Qdc::FilelistBridge::request(const QString& hubUrl, const QString& sourceId
 	m_pending.append(Pending{hubUrl, sourceId, QString()});
 
 	m_thread->call(m_relay, [thread = m_thread, hub, cid] {
-		QString localFile;
+		Started started;
 
 		QuickDC::Core* core = thread->core();
-		if (!core || !core->queue) return localFile;
+		if (!core) return started;
+
+		/* Ourselves, which is read off this disk rather than asked for. */
+		QuickDC::Hub* here = (core->hubs) ? core->hubs->getHubByUrl(hub.constData())
+		                                  : 0;
+
+		if (here && here->isLocalUser(cid.constData()))
+		{
+			started.ours = true;
+			started.root = own_filelist(core->shares, &started.decoded);
+			return started;
+		}
+
+		if (!core->queue) return started;
 
 		QuickDC::FilelistRequest* request =
 			core->queue->requestFilelist(hub.constData(), cid.constData());
 
-		if (!request) return localFile;
+		if (!request) return started;
 
 		if (const char* path = request->getLocalFilename())
-			localFile = QString::fromUtf8(path);
+			started.localFile = QString::fromUtf8(path);
 
 		/*
 		 * Run the queue now rather than waiting for the next turn, so the request
@@ -125,14 +183,29 @@ void Qdc::FilelistBridge::request(const QString& hubUrl, const QString& sourceId
 		 */
 		core->queue->process();
 
-		return localFile;
-	}, [this, hubUrl, sourceId](const QString& localFile) {
+		return started;
+	}, [this, hubUrl, sourceId](const Started& started) {
 		for (int n = 0; n < m_pending.size(); ++n)
 		{
 			if (m_pending.at(n).hubUrl != hubUrl) continue;
 			if (m_pending.at(n).sourceId != sourceId) continue;
 
-			if (localFile.isEmpty())
+			if (started.ours)
+			{
+				/* Answered already, so there is nothing for the poll to wait for. */
+				m_pending.removeAt(n);
+
+				if (started.decoded)
+					emit filelistReady(hubUrl, sourceId, started.root);
+				else
+					emit filelistFailed(hubUrl, sourceId,
+						tr("This client's own file list could not be read."));
+
+				if (m_pending.isEmpty()) m_timer->stop();
+				return;
+			}
+
+			if (started.localFile.isEmpty())
 			{
 				m_pending.removeAt(n);
 
@@ -143,7 +216,7 @@ void Qdc::FilelistBridge::request(const QString& hubUrl, const QString& sourceId
 				return;
 			}
 
-			m_pending[n].localFile = localFile;
+			m_pending[n].localFile = started.localFile;
 
 			if (!m_timer->isActive()) m_timer->start();
 			return;

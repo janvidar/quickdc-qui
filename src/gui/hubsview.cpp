@@ -485,6 +485,13 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 
 	connect(m_connect, &QPushButton::clicked, this, &HubsView::promptForHub);
 
+	/*
+	 * Built here rather than when something is first attached: it reads back what
+	 * this client already offers, and that is what tells a picture in an arriving
+	 * message that the file is already on this disk.
+	 */
+	m_media = new MediaBridge(m_thread, m_config, this);
+
 	reloadMediaPolicy();
 	reloadBoardPolicy();
 	sweepPastedMedia();
@@ -2031,8 +2038,6 @@ void Qdc::HubsView::submitPost(Entry& entry, BoardPane* pane, const QString& par
 
 	document.close();
 
-	if (!m_media) m_media = new MediaBridge(m_thread, m_config, this);
-
 	const QString board = pane->board();
 	const QPointer<HubBridge> hub(entry.bridge);
 
@@ -2198,8 +2203,6 @@ void Qdc::HubsView::attachFile(QWidget* pane)
 {
 	if (!pane) return;
 
-	if (!m_media) m_media = new MediaBridge(m_thread, m_config, this);
-
 	const QPointer<QWidget> waiting(pane);
 
 	/* Which control asked decides both what may be chosen and what the message says. */
@@ -2241,8 +2244,6 @@ void Qdc::HubsView::attachFile(QWidget* pane)
 void Qdc::HubsView::offerDroppedFiles(QWidget* pane, const QStringList& paths)
 {
 	if (!pane || paths.isEmpty()) return;
-
-	if (!m_media) m_media = new MediaBridge(m_thread, m_config, this);
 
 	for (const QString& path : paths)
 	{
@@ -2288,8 +2289,6 @@ void Qdc::HubsView::offerPastedImage(QWidget* pane, const QByteArray& data,
                                     const QString& suffix)
 {
 	if (!pane || data.isEmpty()) return;
-
-	if (!m_media) m_media = new MediaBridge(m_thread, m_config, this);
 
 	const QString folder = pasted_media_folder();
 

@@ -695,7 +695,9 @@ private:
 	bool m_restoring = false;
 
 	/** Hashes and offers a file somebody attached to a message. Made here, because
-	    attaching is not a per hub thing even though it is asked for in a conversation. */
+	    attaching is not a per hub thing even though it is asked for in a
+	    conversation - and at construction, because it also answers "is this picture
+	    already ours", which is asked long before anything is attached. */
 	MediaBridge* m_media = nullptr;
 
 	/* The settings an arriving message needs, kept in hand; see reloadMediaPolicy(). */

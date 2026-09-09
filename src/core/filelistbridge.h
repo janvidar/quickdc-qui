@@ -52,6 +52,12 @@ public:
 	 * Returns at once; the answer arrives as filelistReady() or filelistFailed(),
 	 * which may be minutes later if the peer has to be retried. Asking again for
 	 * a browse already outstanding does nothing.
+	 *
+	 * A browse of our own share is answered from the file list on this disk, with
+	 * nothing asked of the hub and no connection made: it is the same list this
+	 * client hands to anybody who browses it, through the same decoder, so what
+	 * the user sees of their own files is what everybody else sees. The answer
+	 * still arrives as filelistReady(), on a later turn like any other.
 	 */
 	void request(const QString& hubUrl, const QString& sourceId);
 
