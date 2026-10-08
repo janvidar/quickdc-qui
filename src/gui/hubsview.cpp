@@ -542,6 +542,14 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	connect(m_tree, &QTreeWidget::customContextMenuRequested,
 	        this, &HubsView::showHubMenu);
 
+	if (m_transfers)
+	{
+		connect(m_transfers, &TransferBridge::downloadCompleted, this,
+		        [this](const QString& filename, quint64, const QString& tth) {
+			reseed(filename, tth);
+		});
+	}
+
 	/*
 	 * A download finishing can change what a message looks like: a picture nobody had
 	 * was a chip, and now it is the picture. Every conversation is told, because a
@@ -2418,6 +2426,8 @@ void Qdc::HubsView::followLink(const QUrl& url)
 		 * same way it does for a file chosen from a file list.
 		 */
 		const QString target = downloadDirectory() + QLatin1Char('/') + file.name;
+
+		m_byHash.insert(file.tth);
 		m_transfers->enqueue(target, file.tth, file.size);
 		return;
 	}
@@ -3066,8 +3076,28 @@ void Qdc::HubsView::fetchMediaIn(const ChatMessage& message)
 		if (file.size == 0 || (limit > 0 && file.size > limit)) continue;
 
 		const QString target = downloadDirectory() + QLatin1Char('/') + file.name;
+
+		m_byHash.insert(file.tth);
 		m_transfers->enqueue(target, file.tth, file.size);
 	}
+}
+
+void Qdc::HubsView::reseed(const QString& filename, const QString& tth)
+{
+	if (!m_media || tth.isEmpty() || filename.isEmpty()) return;
+
+	/* Only what a message or a post named: everything else here was asked for by
+	   name, and is shared or not according to what the user shares. */
+	if (!m_byHash.remove(tth)) return;
+
+	/*
+	 * attach() hashes the file again rather than being told the hash the queue just
+	 * verified, which is not waste - see the note in PostStore::serve().
+	 *
+	 * Nothing listens for the outcome. A file that cannot be offered is still a file
+	 * that arrived, and the reader has what they asked for either way.
+	 */
+	m_media->attach(filename);
 }
 
 QString Qdc::HubsView::localFileFor(const QString& tth) const

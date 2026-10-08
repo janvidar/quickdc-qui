@@ -529,6 +529,17 @@ private:
 	 */
 	void fetchMediaIn(const ChatMessage& message);
 
+	/**
+	 * Offer a file that arrived by hash, so the next reader has somewhere to ask.
+	 *
+	 * A magnet in a message or a post names a file nobody can search for by name, so
+	 * its only sources are the people who have fetched it - and until one of them
+	 * offers it again, its author is the single point of failure for every reader
+	 * after the first. Offered by hash alone: it joins no file list and no search by
+	 * name matches it, exactly as a file the user attached here does.
+	 */
+	void reseed(const QString& filename, const QString& tth);
+
 	/** Whether pictures are fetched without asking on the hub at 'hubUrl'. */
 	bool fetchesMediaOn(const QString& hubUrl) const;
 
@@ -693,6 +704,10 @@ private:
 	 * restore would write a list shorter than the one still being read from.
 	 */
 	bool m_restoring = false;
+
+	/** Hashes queued because a message or a post named one, waiting to finish; see
+	    reseed(). */
+	QSet<QString> m_byHash;
 
 	/** Hashes and offers a file somebody attached to a message. Made here, because
 	    attaching is not a per hub thing even though it is asked for in a

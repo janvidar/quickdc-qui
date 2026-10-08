@@ -150,6 +150,7 @@ private slots:
 	void formattingIsOnlyOfferedWhereItCanBeSent();
 	void aClickedHubLinkOpensTheHubItself();
 	void picturesAreFetchedOnlyWhereThatWasAskedFor();
+	void aFileFetchedByHashIsOfferedAgain();
 	void anArrivingMessageDoesNotWaitForTheCore();
 	void theAttachButtonAsksForAFile();
 	void everyControlLooksDisabledWhenItIs();
@@ -4950,6 +4951,105 @@ void TestHubs::picturesAreFetchedOnlyWhereThatWasAskedFor()
 
 	emit hubs.currentPane()->hub()->chatReceived(offered);
 	QCOMPARE(queued(), before + 1);
+}
+
+void TestHubs::aFileFetchedByHashIsOfferedAgain()
+{
+	/* Held for the whole case: the share writes under "~/.quickdc", and it writes
+	   when the hash arrives rather than when the file is handed over. */
+	HomeRedirect home(m_dir.path());
+
+	Qdc::ConfigBridge config(m_thread);
+	Qdc::TransferBridge transfers(m_thread, this);
+
+	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, &transfers, &config);
+	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
+
+	config.setBool(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
+	               QStringLiteral("Fetch automatically"), true);
+	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
+	                 QStringLiteral("Maximum size"), 4096);
+	config.save(Qdc::ConfigStore::Application);
+
+	/*
+	 * Read through a bridge built for the question. A share writes [Attachments] on
+	 * the core's own configuration when the hash arrives, and a ConfigBridge mirrors
+	 * the configuration when it is constructed - so the one above cannot see it.
+	 */
+	const auto offers = [this] {
+		Qdc::ConfigBridge seen(m_thread);
+
+		return seen.getNumber(Qdc::ConfigStore::Application,
+		                      QStringLiteral("Attachments"),
+		                      QStringLiteral("Total"));
+	};
+
+	const auto queued = [&transfers] {
+		QSignalSpy fresh(&transfers, &Qdc::TransferBridge::snapshotChanged);
+		transfers.refresh();
+		fresh.wait(5000);
+
+		return transfers.queueSnapshot().size();
+	};
+
+	/* Whatever earlier cases in this process left behind. */
+	const int before = offers();
+	const int waiting = queued();
+
+	const QString asked = QStringLiteral("D5WM7SYF6ED42THAKQCOCNHJOUCMOEOX4GOCT25");
+
+	Qdc::RichText::Attachment picture;
+	picture.tth = asked;
+	picture.name = QStringLiteral("seeded.png");
+	picture.size = 1024;
+
+	Qdc::ChatMessage message;
+	message.hubUrl = hubs.currentPane()->hub()->url();
+	message.from = user(QStringLiteral("alice"));
+	message.received = QDateTime::currentDateTime();
+	message.richText = true;
+	message.text = QStringLiteral("![a photo](%1)")
+		.arg(Qdc::RichText::writeMagnet(picture));
+
+	emit hubs.currentPane()->hub()->chatReceived(message);
+
+	/* Asked for, which is the precondition the rest of this rests on. */
+	QCOMPARE(queued(), waiting + 1);
+
+	/* A real file, because offering one hashes it. */
+	const QString arrived = m_dir.path() + QStringLiteral("/seeded.png");
+
+	QImage made(8, 8, QImage::Format_RGB32);
+	made.fill(Qt::cyan);
+	QVERIFY(made.save(arrived));
+
+	emit transfers.downloadCompleted(arrived, 1024, asked);
+
+	QTRY_COMPARE_WITH_TIMEOUT(offers(), before + 1, 10000);
+
+	Qdc::ConfigBridge seen(m_thread);
+
+	const QString entry = seen.getString(Qdc::ConfigStore::Application,
+	                                     QStringLiteral("Attachments"),
+	                                     QStringLiteral("File %1").arg(before));
+
+	/* "<tth> <path>": the hash is the file's own, which is the point - the queue
+	   checked the bytes against the magnet's before any of this. */
+	QVERIFY(entry.endsWith(arrived));
+
+	/*
+	 * And nothing else. A film chosen from a file list or a search hit is shared or
+	 * not according to what the user shares, and is not offered behind their back
+	 * for having passed through the download queue.
+	 */
+	const QString unasked = m_dir.path() + QStringLiteral("/unasked.png");
+	QVERIFY(made.save(unasked));
+
+	emit transfers.downloadCompleted(unasked, 1024,
+		QStringLiteral("GOCT25D5WM7SYF6ED42THAKQCOCNHJOUCMOEOX4"));
+
+	QTest::qWait(300);
+	QCOMPARE(offers(), before + 1);
 }
 
 void TestHubs::anArrivingMessageDoesNotWaitForTheCore()
