@@ -85,3 +85,8 @@ set_tests_properties(bridge shell hubs hublist transfers settings search richtex
 # display. Offscreen gives it one that does not, so the suite runs over ssh and
 # on a build machine.
 set_tests_properties(shell hubs hublist transfers settings search richtext markdown theme boards PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+if(QUICKDC_SANITIZE)
+    set_property(TEST bridge shell hubs hublist transfers settings search richtext markdown theme boards
+        APPEND PROPERTY ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
+endif()

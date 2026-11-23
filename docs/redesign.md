@@ -32,9 +32,9 @@ Superproject `7ae37d1`, quickdc `875bf4f`, samurai `6798e91`, libdrop-cpp
 - ASan/UBSan core build (`build-asan`, `-DQUICKDC_SANITIZE=ON`): 78 core tests
   fail at baseline, every one a LeakSanitizer report (adchub, bbs_hub,
   dcclientsession, users, zupload - leaks in hub command handling and in test
-  helpers); no other sanitizer errors. The GUI suites do not link with the
-  sanitizer on, because the superproject does not add the flags to its own
-  targets.
+  helpers); no other sanitizer errors. The GUI suites did not link with the
+  sanitizer on, because qdcbridge links the core PRIVATE and so passed none
+  of samurai's flags on - fixed on this branch (see Log).
 
 "Green" below means: everything that passed at baseline still passes.
 
@@ -262,3 +262,7 @@ earlier ones.
 - 2026-11-23: board bridge migrated. Every bridge but config is on the boundary. Green (1260).
 - 2026-11-23: config bridge migrated (B5 complete), B6 done, C1a done. Green (1264).
 - 2026-11-23: C2, C3, C4 landed. Green (1269, 5 new network plan cases).
+- 2026-11-23: sanitizers reach the GUI (qdcbridge re-exports samurai's
+  sanitizer flags PUBLIC; tests/lsan.supp for Qt's D-Bus meta-objects and
+  fontconfig's cache). Whole suite under ASan/UBSan: only the 78 baseline
+  leak cases fail; every GUI suite passes; no non-leak report anywhere.

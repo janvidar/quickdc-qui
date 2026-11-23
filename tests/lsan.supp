@@ -1,0 +1,9 @@
+# Held until exit by Qt and the libraries it loads, and freed by nobody on purpose.
+# Only these: a leak in this project's own code must still fail its suite.
+
+# D-Bus meta-objects Qt caches for the NetworkManager backend of QNetworkInformation.
+leak:libQt6DBus.so
+leak:libqnetworkmanager.so
+
+# fontconfig's font-fallback cache, filled by QFontEngineMultiFontConfig.
+leak:libfontconfig.so

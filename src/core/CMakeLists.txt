@@ -70,6 +70,15 @@ target_link_libraries(qdcbridge
         Qt6::Network
         quickdc::quickdc)
 
+# Samurai's sanitizer flags reach this library through quickdc::quickdc, but
+# not past it: a PRIVATE dependency carries no usage requirements upward, so
+# everything linking this would be uninstrumented and fail to link against it.
+# Re-exported from samurai rather than restated, so the two cannot disagree.
+target_compile_options(qdcbridge PUBLIC
+    $<TARGET_PROPERTY:samurai::samurai_static,INTERFACE_COMPILE_OPTIONS>)
+target_link_options(qdcbridge PUBLIC
+    $<TARGET_PROPERTY:samurai::samurai_static,INTERFACE_LINK_OPTIONS>)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(qdcbridge PRIVATE -Wall -Wextra)
 endif()
