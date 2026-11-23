@@ -116,7 +116,14 @@ earlier ones.
       events. GUI suite green after each.
       - [x] hublist: `FetchHubList` / `HubListFetched` / `HubListFailed`;
             no Relay, no core object, no listener in the bridge.
-      - [ ] drop  - [ ] media  - [ ] config  - [ ] filelist  - [ ] search
+      - [x] drop: `MeasureReachability`, `LookupPublicAddress`,
+            `ReplayReachability`, and the transitional `ApplyPortForwarding`
+            and `RepublishClientInfo` (to go in C2/C4); events
+            `ReachabilityCheckStarted/Measured/CheckFailed` - failures carry
+            a reason code, the GUI words them.
+      - [x] media: `AttachFile` / `AttachmentReady` / `AttachmentFailed`;
+            the service is the share manager's attachment listener.
+      - [ ] config  - [ ] filelist  - [ ] search
       - [ ] transfer  - [ ] hub  - [ ] board
 - [ ] B6. Remove `CoreThread::core()`, `runOnCoreBlocking`, `Relay` (R2, R4).
 
@@ -185,3 +192,5 @@ earlier ones.
 - 2026-11-23: B1 landed. Full suite green (1254, 7 new inbox cases).
 - 2026-11-23: B3/B4 mechanism + hublist bridge migrated (B5). 1258 + 2 new
   GUI cases, green.
+
+- 2026-11-23: drop and media bridges migrated. Green.

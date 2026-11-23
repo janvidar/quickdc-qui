@@ -5,19 +5,19 @@
 #ifndef HAVE_QUICKDC_QUI_MEDIABRIDGE_H
 #define HAVE_QUICKDC_QUI_MEDIABRIDGE_H
 
-#include "relay.h"
 
 #include <QHash>
+#include <QSet>
 #include <QObject>
 #include <QString>
 
-#include <memory>
+
+namespace QuickDC { namespace Api { struct Event; } }
 
 namespace Qdc {
 
 class ConfigBridge;
 class CoreThread;
-class Attacher;
 
 /**
  * Offering a local file to a conversation, as a view sees it.
@@ -114,25 +114,12 @@ private:
 	/** Read what the core remembers offering, once, at construction. */
 	void loadOffered(ConfigBridge* config);
 
-	friend class Attacher;
+	void onCoreEvent(const QuickDC::Api::Event& event);
 
 	CoreThread* m_thread = nullptr;
 
-	/** The core side half, built and destroyed inside jobs on the core thread. */
-	/**
-	 * The listener, in a box that outlives this object.
-	 *
-	 * Owned by the core thread, including the job that deletes it - which runs after
-	 * this bridge is gone, so it cannot be reached through it.
-	 */
-	struct AttacherBox {
-		Attacher* attacher = nullptr;
-	};
-
-	std::shared_ptr<AttacherBox> m_attachers;
-
-	/** Where an event from the core lands; see Qdc::Relay. */
-	std::shared_ptr<Relay> m_relay;
+	/** Paths attach() asked for and has not yet heard about. */
+	QSet<QString> m_asked;
 
 	/** What this client offered, by hash, so a click on one's own file finds it. */
 	QHash<QString, QString> m_offered;

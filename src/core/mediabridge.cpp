@@ -5,12 +5,10 @@
 #include "mediabridge.h"
 
 #include "configbridge.h"
+#include "corechannel.h"
 #include "corethread.h"
 
-#include <api/attachments.h>
-#include <api/core.h>
 
-#include <QMetaObject>
 
 namespace {
 
@@ -19,114 +17,17 @@ constexpr int TTH_LENGTH = 39;
 
 }
 
-namespace Qdc {
-
-/**
- * The core side half of a MediaBridge.
- *
- * Built and destroyed inside jobs on the core thread, and only ever called from there.
- * Every event copies what the core lent it before handing the copy across, for the same
- * reason the hub events do: the strings point into the core's own buffers.
- */
-class Attacher final : public QuickDC::Share::AttachmentListener {
-
-public:
-	Attacher(MediaBridge* bridge, std::shared_ptr<Relay> relay)
-		: m_bridge(bridge)
-		, m_relay(std::move(relay))
-	{
-	}
-
-	void EventAttachmentReady(const char* path, const char* tth, uint64_t size) override
-	{
-		const QString file = QString::fromUtf8(path ? path : "");
-		const QString hash = QString::fromUtf8(tth ? tth : "");
-		const quint64 bytes = size;
-
-		report([file, hash, bytes](MediaBridge* bridge) {
-			emit bridge->attached(file, hash, bytes);
-		});
-	}
-
-	void EventAttachmentFailed(const char* path, const char* reason) override
-	{
-		const QString file = QString::fromUtf8(path ? path : "");
-		const QString why = QString::fromUtf8(reason ? reason : "");
-
-		report([file, why](MediaBridge* bridge) {
-			emit bridge->attachFailed(file, why);
-		});
-	}
-
-private:
-	using Work = std::function<void(MediaBridge*)>;
-
-	void report(Work work)
-	{
-		MediaBridge* bridge = m_bridge;
-
-		std::shared_ptr<Relay> relay = m_relay;
-		Relay* target = relay.get();
-
-		QMetaObject::invokeMethod(target, [relay = std::move(relay), bridge, work] {
-			if (!relay->detached()) work(bridge);
-		}, Qt::QueuedConnection);
-	}
-
-	MediaBridge* m_bridge;
-	std::shared_ptr<Relay> m_relay;
-};
-
-}
-
 Qdc::MediaBridge::MediaBridge(CoreThread* thread, ConfigBridge* config, QObject* parent)
 	: QObject(parent)
 	, m_thread(thread)
-	, m_attachers(std::make_shared<AttacherBox>())
-	, m_relay(Relay::create())
 {
 	loadOffered(config);
 
-	if (!m_thread) return;
-
-	/* Posted rather than waited on; nothing is offered before the window is up. */
-	m_thread->post([holder = m_attachers, relay = m_relay, bridge = this] {
-		holder->attacher = new Attacher(bridge, relay);
-	});
-
-	/* Remembered as they are offered, which is the only place both halves are known. */
-	connect(this, &MediaBridge::attached, this,
-	        [this](const QString& path, const QString& tth, quint64) {
-		m_offered.insert(tth, path);
-	});
+	if (m_thread)
+		connect(m_thread->channel(), &CoreChannel::event, this, &MediaBridge::onCoreEvent);
 }
 
-Qdc::MediaBridge::~MediaBridge()
-{
-	/* Nothing in flight has anywhere to report to from here on. */
-	m_relay->detach();
-
-	if (!m_thread) return;
-
-	/*
-	 * Torn down on the core thread, and taken out of the share's books first: a file
-	 * handed to attach() is hashed on the worker thread, the share holds this pointer
-	 * until that finishes, and hashing takes as long as reading the file takes. A
-	 * window closed while a large picture is still being hashed would otherwise leave
-	 * the hash completing into a listener that has been deleted.
-	 *
-	 * Posted rather than waited on, because an event arriving in the meantime is
-	 * addressed to the relay and the relay is detached above.
-	 */
-	m_thread->post([thread = m_thread, holder = m_attachers] {
-		QuickDC::Core* core = thread->core();
-
-		if (core && core->shares) core->shares->forgetListener(holder->attacher);
-
-		delete holder->attacher;
-		holder->attacher = nullptr;
-	});
-}
+Qdc::MediaBridge::~MediaBridge() = default;
 
 void Qdc::MediaBridge::loadOffered(ConfigBridge* config)
 {
@@ -165,38 +66,54 @@ void Qdc::MediaBridge::attach(const QString& path, Offer offer)
 {
 	if (path.isEmpty()) return;
 
-	if (!m_thread)
+	const bool post = offer == Offer::Post;
+	QuickDC::Api::Commands::AttachFile command;
+	command.path = path.toStdString();
+	command.remembered = !post;
+	command.freeSlot = post;
+
+	if (!m_thread || !m_thread->submit(command))
 	{
 		emit attachFailed(path, tr("The core is not running."));
 		return;
 	}
 
-	const QByteArray local = path.toUtf8();
-	const bool post = offer == Offer::Post;
+	m_asked.insert(path);
+}
 
-	/*
-	 * Whether there is a listener yet is decided on the core thread rather than
-	 * here: it is built by a job of its own, and one posted before that job has run
-	 * simply queues behind it.
-	 */
-	m_thread->call(m_relay, [thread = m_thread, holder = m_attachers, local, path, post] {
-		QuickDC::Core* core = thread->core();
+void Qdc::MediaBridge::onCoreEvent(const QuickDC::Api::Event& event)
+{
+	using namespace QuickDC::Api::Events;
 
-		if (!core || !core->shares || !holder->attacher)
-			return MediaBridge::tr("There is nothing to offer files from.");
+	if (const auto* ready = event.as<AttachmentReady>())
+	{
+		const QString path = QString::fromStdString(ready->path);
+		const QString tth = QString::fromStdString(ready->tth);
 
-		using Shares = QuickDC::Share::Manager;
+		/* Whoever asked, the file is offered now, and this can name it by hash. */
+		m_offered.insert(tth, path);
 
-		if (core->shares->attach(local.constData(), holder->attacher,
-		                         post ? Shares::Persistence::Session
-		                              : Shares::Persistence::Remembered,
-		                         post ? Shares::SlotCost::Free
-		                              : Shares::SlotCost::Counted))
-			return QString();
+		if (m_asked.remove(path)) emit attached(path, tth, ready->size);
+	}
+	else if (const auto* failed = event.as<AttachmentFailed>())
+	{
+		const QString path = QString::fromStdString(failed->path);
+		if (!m_asked.remove(path)) return;
 
-		return MediaBridge::tr("'%1' cannot be offered: it is not a file that can "
-		                       "be read.").arg(path);
-	}, [this, path](const QString& message) {
-		if (!message.isEmpty()) emit attachFailed(path, message);
-	});
+		switch (failed->why)
+		{
+			case AttachmentFailed::Why::NoShares:
+				emit attachFailed(path, tr("There is nothing to offer files from."));
+				break;
+
+			case AttachmentFailed::Why::Unreadable:
+				emit attachFailed(path, tr("'%1' cannot be offered: it is not a file "
+				                           "that can be read.").arg(path));
+				break;
+
+			case AttachmentFailed::Why::Failed:
+				emit attachFailed(path, QString::fromStdString(failed->reason));
+				break;
+		}
+	}
 }
