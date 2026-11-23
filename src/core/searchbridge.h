@@ -6,12 +6,13 @@
 #define HAVE_QUICKDC_QUI_SEARCHBRIDGE_H
 
 #include "coretypes.h"
-#include "relay.h"
 
 #include <QObject>
 #include <QString>
 
-#include <memory>
+#include <QSet>
+
+namespace QuickDC { namespace Api { struct Event; } }
 
 namespace Qdc {
 
@@ -82,10 +83,12 @@ signals:
 	void searchSent(const QString& token, int hubsAsked);
 
 private:
+	void onCoreEvent(const QuickDC::Api::Event& event);
+
 	CoreThread* m_thread;
 
-	/** Where the core's answer lands; see Qdc::Relay. */
-	std::shared_ptr<Relay> m_relay;
+	/** Tokens of searches handed to the core and not yet said to have gone. */
+	QSet<QString> m_sent;
 
 	/**
 	 * Numbers the searches this object has started.

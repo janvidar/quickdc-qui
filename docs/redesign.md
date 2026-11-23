@@ -131,7 +131,8 @@ earlier ones.
             `Api::RemoteDirectory`) / `FilelistFailed`. The queue now announces
             a file list request ending (`QueueListener::EventFilelistFinished`),
             so the bridge's one-second poll of the pending set is gone.
-      - [ ] search
+      - [x] search: `Search` / `SearchSent`. Results still arrive through
+            the hub bridge's listener and move with it.
       - [ ] transfer  - [ ] hub  - [ ] board
 - [ ] B6. Remove `CoreThread::core()`, `runOnCoreBlocking`, `Relay` (R2, R4).
 
@@ -186,6 +187,10 @@ earlier ones.
   makes this explicit.
 - `Preferences::setGroup()` is a cursor shared by every reader - C1.
 - The 78 baseline LeakSanitizer reports (see Baseline).
+- Search tokens are numbered per SearchBridge from 1, so two bridges would
+  hand out the same token and take each other's SearchSent (and results).
+  Pre-existing; the app builds one. Move numbering into the core when the
+  hub bridge's results move.
 
 - libdrop-cpp `droptest` bounds assertion (baseline).
 - samurai `autotest` load sensitivity under `-j32` (baseline).
@@ -202,3 +207,4 @@ earlier ones.
   GUI cases, green.
 - 2026-11-23: drop and media bridges migrated. Green.
 - 2026-11-23: filelist bridge migrated, polling replaced by an event. Green.
+- 2026-11-23: search bridge migrated. Green (1260).

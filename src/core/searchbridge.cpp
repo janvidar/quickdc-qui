@@ -4,14 +4,11 @@
 
 #include "searchbridge.h"
 
+#include "corechannel.h"
 #include "corethread.h"
 
-#include <api/core.h>
-#include <network/hubmanager.h>
-#include <share/searchrequest.h>
 
 #include <QFileInfo>
-#include <QMetaObject>
 #include <QRegularExpression>
 #include <QStringList>
 
@@ -47,16 +44,18 @@ const Category CATEGORIES[] = {
 	  "zip rar 7z gz bz2 xz zst tar tgz iso lz4 cab arj lzh" }
 };
 
-QuickDC::Share::SearchRequest::SizePolicy convert(Qdc::SearchSize size)
+QuickDC::Api::Commands::Search::Size convert(Qdc::SearchSize size)
 {
+	using Size = QuickDC::Api::Commands::Search::Size;
+
 	switch (size)
 	{
-		case Qdc::SearchSize::AtLeast: return QuickDC::Share::SearchRequest::SizeMin;
-		case Qdc::SearchSize::AtMost:  return QuickDC::Share::SearchRequest::SizeMax;
+		case Qdc::SearchSize::AtLeast: return Size::AtLeast;
+		case Qdc::SearchSize::AtMost:  return Size::AtMost;
 		case Qdc::SearchSize::Any:     break;
 	}
 
-	return QuickDC::Share::SearchRequest::SizeAny;
+	return Size::Any;
 }
 
 }
@@ -64,15 +63,12 @@ QuickDC::Share::SearchRequest::SizePolicy convert(Qdc::SearchSize size)
 Qdc::SearchBridge::SearchBridge(CoreThread* thread, QObject* parent)
 	: QObject(parent)
 	, m_thread(thread)
-	, m_relay(Relay::create())
 {
+	if (m_thread)
+		connect(m_thread->channel(), &CoreChannel::event, this, &SearchBridge::onCoreEvent);
 }
 
-Qdc::SearchBridge::~SearchBridge()
-{
-	/* A request still out with the core has nowhere to report to now. */
-	m_relay->detach();
-}
+Qdc::SearchBridge::~SearchBridge() = default;
 
 QStringList Qdc::SearchBridge::extensionsFor(SearchCategory category)
 {
@@ -112,65 +108,35 @@ QString Qdc::SearchBridge::start(const SearchQuery& query)
 
 	const QString token = QString::number(m_nextToken++);
 
-	/*
-	 * Split here rather than on the core thread, because this is where the terms
-	 * are a QString. Everything crossing over is a QByteArray, since a std::string
-	 * built from a QString on this thread is as safe to carry as the bytes are and
-	 * a QString is not: it shares its buffer with the copy this closure captured.
-	 */
-	QList<QByteArray> include;
-	QList<QByteArray> exclude;
+	QuickDC::Api::Commands::Search command;
+	command.token = token.toStdString();
+	command.sizePolicy = convert(query.sizePolicy);
+	command.size = query.size;
 
 	const QStringList words = query.terms.split(QRegularExpression(QStringLiteral("\\s+")),
 	                                            Qt::SkipEmptyParts);
-
 	for (const QString& word : words)
 	{
 		if (word.startsWith(QLatin1Char('-')) && word.size() > 1)
-			exclude.append(word.mid(1).toUtf8());
+			command.exclude.push_back(word.mid(1).toStdString());
 		else
-			include.append(word.toUtf8());
+			command.include.push_back(word.toStdString());
 	}
 
-	QList<QByteArray> extensions;
 	for (const QString& ext : extensionsFor(query.category))
-		extensions.append(ext.toUtf8());
+		command.extensions.push_back(ext.toStdString());
 
-	const QByteArray tokenBytes = token.toUtf8();
-	const auto policy = convert(query.sizePolicy);
-	const quint64 size = query.size;
+	if (!m_thread->submit(command)) return QString();
 
-	m_thread->call(m_relay, [thread = m_thread, include, exclude, extensions,
-	                         tokenBytes, policy, size] {
-		QuickDC::Core* core = thread->core();
-		if (!core || !core->hubs) return -1;
-
-		/*
-		 * No reply handler: that argument is for answering somebody else's search
-		 * out of our own share, which the share manager does. This request is
-		 * only ever going outwards.
-		 */
-		QuickDC::Share::SearchRequest request(policy, size, nullptr,
-		                                      tokenBytes.constData(), nullptr);
-
-		for (const QByteArray& term : include)
-			request.addInclusion(term.constData());
-
-		for (const QByteArray& term : exclude)
-			request.addExclusion(term.constData());
-
-		for (const QByteArray& ext : extensions)
-			request.addExtension(ext.constData());
-
-		/*
-		 * On the stack, because nothing keeps it: each session reads the request,
-		 * builds a command from it and sends that, and neither the hub manager nor
-		 * the hubs hold a reference afterwards.
-		 */
-		return static_cast<int>(core->hubs->searchAllHubs(&request));
-	}, [this, token](int asked) {
-		if (asked >= 0) emit searchSent(token, asked);
-	});
-
+	m_sent.insert(token);
 	return token;
+}
+
+void Qdc::SearchBridge::onCoreEvent(const QuickDC::Api::Event& event)
+{
+	const auto* sent = event.as<QuickDC::Api::Events::SearchSent>();
+	if (!sent) return;
+
+	const QString token = QString::fromStdString(sent->token);
+	if (m_sent.remove(token)) emit searchSent(token, sent->hubsAsked);
 }
