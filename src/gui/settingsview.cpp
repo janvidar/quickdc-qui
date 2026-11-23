@@ -979,7 +979,7 @@ void Qdc::SettingsView::load()
 	const QVariantHash network = m_config->readGroup(ConfigStore::Application, NETWORK, {
 		{QStringLiteral("Active mode"), true},
 		{QStringLiteral("Port"), DEFAULT_PORT},
-		{QStringLiteral("Bind"), QString()},
+		{QStringLiteral("Bind"), QStringLiteral("0.0.0.0")},
 		{QStringLiteral("Address"), QString()},
 		{REACHABILITY_SERVER, QString()},
 		{NETWORK_MODE, QString()},
