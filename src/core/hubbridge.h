@@ -6,7 +6,6 @@
 #define HAVE_QUICKDC_QUI_HUBBRIDGE_H
 
 #include "coretypes.h"
-#include "relay.h"
 
 #include <QObject>
 #include <QSet>
@@ -15,25 +14,25 @@
 #include <QTimer>
 #include <QVector>
 
-#include <atomic>
-#include <memory>
+#include <cstdint>
+
+namespace QuickDC { namespace Api { struct Event; } }
 
 namespace Qdc {
 
 class CoreThread;
-class HubSession;
 
 /**
  * One hub connection, as a view sees it.
  *
  * Lives on the thread that constructed it, normally the user interface thread.
- * The core side half is a HubSession, built and torn down inside jobs on the
- * core thread, and every command below is a job too - so a caller never touches
- * a core object, and the session never touches a widget.
+ * The session itself is the core's: this opens one with an OpenHub command under
+ * a handle of its own, drives it with commands, and hears it through the core's
+ * events for that handle - so a caller never touches a core object, and the
+ * session never touches a widget. Destroying this closes the session.
  *
- * Events arrive as signals on this object's thread, carrying value types. That
- * is not politeness: the core frees the User* it hands a listener as soon as the
- * call returns, so the session copies eagerly and the copy is what is emitted.
+ * Events arrive as signals on this object's thread, carrying value types copied
+ * by the core while what they describe still existed.
  *
  * Constructing one connects nothing. Call connectToHub().
  */
@@ -135,8 +134,8 @@ public:
 	/**
 	 * Whether the connection is carrying TLS.
 	 *
-	 * Asked of the core on the core thread whenever the network status moves, and
-	 * remembered here. A record of what was last reported rather than a live check
+	 * Reported by the core with every change of network status, and remembered
+	 * here. A record of what was last reported rather than a live check
 	 * of the socket - but not a guess: the status alone cannot answer, because an
 	 * ADC session reports being connected again after its TLS handshake.
 	 */
@@ -188,10 +187,9 @@ public:
 	/**
 	 * Whether to follow a redirect the hub asks for.
 	 *
-	 * The core wants an answer inside the callback, on the core thread, and
-	 * there is no way to ask a user without blocking the reactor for as long as
-	 * they take to decide - so this is a policy set in advance rather than a
-	 * prompt. redirectRequested() is emitted either way, and reports which way
+	 * The core answers inside its own callback, and there is no way to ask a
+	 * user without blocking the reactor for as long as they take to decide - so
+	 * this is a policy handed to the core in advance rather than a prompt. redirectRequested() is emitted either way, and reports which way
 	 * it went.
 	 *
 	 * Off by default: a hub that sends an unattended client somewhere else
@@ -440,22 +438,14 @@ signals:
 	void redirectRequested(const QString& address, quint16 port, bool followed);
 
 private:
-	friend class HubSession;
+	void onCoreEvent(const QuickDC::Api::Event& event);
 
-	/**
-	 * Holds the session so that a job can reach it once the bridge has gone.
-	 *
-	 * The two policy flags live here rather than on the bridge for the same reason.
-	 * The core asks after them from inside a callback, on its own thread, wanting an
-	 * answer on the spot - and it can ask in the moment between this object being
-	 * destroyed and the job that takes the session down being reached.
-	 */
-	struct SessionBox {
-		HubSession* session = nullptr;
+	/** One of the core's events about this session; specialised per event. */
+	template<typename Event>
+	void handle(const Event& event);
 
-		std::atomic<bool> followRedirects{false};
-		std::atomic<bool> allowPeerConnections{true};
-	};
+	/** Tell the core what this session agrees to when a hub asks. */
+	void sendPolicy();
 
 	/** Build the login watchdog and the signals that call it off. */
 	void startLoginWatch();
@@ -482,18 +472,14 @@ private:
 	CoreThread* m_thread;
 	QString m_url;
 
-	/**
-	 * The session, in a box that outlives this object.
-	 *
-	 * Owned by the core thread and only ever read or written from a job there,
-	 * including the job that takes it down - which runs after this bridge is gone,
-	 * so it cannot be reached through it. Every job holds a reference, so the box
-	 * lasts exactly as long as something still has use for what is in it.
-	 */
-	std::shared_ptr<SessionBox> m_holder;
+	/** What the core knows this session by; see QuickDC::Api::HubHandle. */
+	std::uint64_t m_handle = 0;
 
-	/** Where an event from the core lands; see Qdc::Relay. */
-	std::shared_ptr<Relay> m_relay;
+	/** Asked for, and not refused; nothing is sent for a session there is not. */
+	bool m_opened = false;
+
+	bool m_followRedirects = false;
+	bool m_allowPeerConnections = true;
 
 	/** What the hub answered about RTF0; see supportsRichText(). */
 	bool m_richText = false;

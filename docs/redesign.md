@@ -138,7 +138,13 @@ earlier ones.
             `SnapshotTransfers`; events `Transfer{Started,Finished,Stopped,
             Error}`, `QueueChanged`, `DownloadCompleted`, `TransfersSnapshot`.
             The service is the queue's and the transfer manager's listener.
-      - [ ] hub  - [ ] board
+      - [x] hub: the session is the core's (`Api::Service::HubSession`),
+            opened under a front-end-chosen `HubHandle` (two openings of one
+            address are two sessions). 14 commands, 21 events; history read
+            from the chat archive by command. Redirect/peer policy is handed
+            over in advance (`SetHubPolicy`) instead of being atomics the core
+            thread read out of a box the bridge shared.
+      - [ ] board
 - [ ] B6. Remove `CoreThread::core()`, `runOnCoreBlocking`, `Relay` (R2, R4).
 
 ### Phase C - reactive state
@@ -197,6 +203,11 @@ earlier ones.
   makes this explicit.
 - `Preferences::setGroup()` is a cursor shared by every reader - C1.
 - The 78 baseline LeakSanitizer reports (see Baseline).
+- Every sink is told every event, and Qt queues a copy per connected
+  bridge: a hub's user list at login is thousands of `UserUpdated` events,
+  each copied to ~10 receivers that mostly ignore it. Fine so far; if it
+  shows, route by handle in `CoreChannel` (one signal per hub) before
+  anything cleverer.
 - Search tokens are numbered per SearchBridge from 1, so two bridges would
   hand out the same token and take each other's SearchSent (and results).
   Pre-existing; the app builds one. Move numbering into the core when the
@@ -219,3 +230,4 @@ earlier ones.
 - 2026-11-23: filelist bridge migrated, polling replaced by an event. Green.
 - 2026-11-23: search bridge migrated. Green (1260).
 - 2026-11-23: transfer bridge migrated; snapshot requests correlated (D6). Green.
+- 2026-11-23: hub bridge migrated; GUI holds no core hub object. Green (1260).
