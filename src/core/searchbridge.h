@@ -90,15 +90,6 @@ private:
 	/** Tokens of searches handed to the core and not yet said to have gone. */
 	QSet<QString> m_sent;
 
-	/**
-	 * Numbers the searches this object has started.
-	 *
-	 * Only has to be unique among the searches in flight from this client, since
-	 * that is all a token is ever compared against. Nothing is gained by making it
-	 * unpredictable: a token is echoed back to us by anyone who answers, so it is
-	 * public the moment it is used.
-	 */
-	quint64 m_nextToken = 1;
 };
 
 }

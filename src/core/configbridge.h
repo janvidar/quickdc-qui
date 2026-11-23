@@ -149,7 +149,6 @@ private:
 
 	/** Saves asked for and not yet answered, by request number. */
 	QSet<std::uint64_t> m_saving;
-	std::uint64_t m_nextSave = 0;
 };
 
 }

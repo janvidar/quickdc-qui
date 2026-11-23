@@ -106,7 +106,9 @@ QString Qdc::SearchBridge::start(const SearchQuery& query)
 {
 	if (!m_thread || !m_thread->isCoreRunning()) return QString();
 
-	const QString token = QString::number(m_nextToken++);
+	/* Unique across bridges, since every bridge hears every SearchSent and result. */
+	static quint64 tokens = 0;
+	const QString token = QString::number(++tokens);
 
 	QuickDC::Api::Commands::Search command;
 	command.token = token.toStdString();

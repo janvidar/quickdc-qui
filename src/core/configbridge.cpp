@@ -208,7 +208,9 @@ void Qdc::ConfigBridge::flush()
 	if (!m_thread) return;
 
 	const auto put = [this](ConfigStore store) {
-		const std::uint64_t request = ++m_nextSave;
+		/* Every bridge hears every answer, so the numbers are unique across them. */
+		static std::uint64_t saves = 0;
+		const std::uint64_t request = ++saves;
 		if (m_thread->submit(QuickDC::Api::Commands::SaveSettings{converted(store), request}))
 			m_saving.insert(request);
 	};

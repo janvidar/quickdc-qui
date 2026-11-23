@@ -161,13 +161,19 @@ earlier ones.
 
 ### Phase C - reactive state
 
-- [~] C1. Settings schema (R5): one declaration table, typed accessors, defaults
+- [x] C1. Settings schema (R5): one declaration table, typed accessors, defaults
       in one place, reads that never write, change notification as an event.
       Versioned migrations replace one-off fix-ups (the withdrawn hublist, the
       connection-mode settlement).
       Done: every change to a `Preferences` is told to its subscribers with a
-      revision (C1a), which is what the config migration stands on. Left: the
-      declared, typed schema and reads that never write (C1b).
+      revision (C1a), which is what the config migration stands on. C1b:
+      `config/settings.h` declares every key the core reads (group, type,
+      default) and every core read of the configuration goes through it,
+      peeking - none writes a default back. A saved empty bind address means
+      the default. Not done: versioned migrations (the two one-off fix-ups
+      still stand where they were), and the GUI's own defaults are separate
+      constants (checked by hand: Port, Slots, Max downloads, Chunk size agree;
+      the page now shows the default bind address).
 - [x] C2. Network plan (R6): connection mode + port + bind address + forwarding
       + drop server -> one computed plan; one reconciler applies the difference
       (listen sockets, gateway mapping, measurement, INF re-announce to every
@@ -275,12 +281,24 @@ earlier ones.
   good; 79 call sites remain to convert (inventory: adchubsession 24,
   dc/hubsession 14, adc/server/hub 14, sharemanager 6, the rest small).
 
+## Review findings (adversarial review of the whole diff, 2026-11-23)
+
+- Port=0 at first login once nothing stored the port - fixed (C1b removes the
+  class: one default, reads that never write).
+- Address defaulted "" in the plan and "0.0.0.0" in the sessions, so the
+  first login looked like an advertised change - fixed by the one default.
+- A second fetch of a busy hublist failed the first for everyone - fixed.
+- Save request numbers and search tokens counted per bridge while answers
+  are broadcast - fixed, numbered across bridges.
+- SetPriority makes every TransferBridge refresh - accepted, harmless.
+- Checked and found correct: lifetimes (Core/Service/HubManager order,
+  CloseHub, ListenerList), Inbox/CoreThread threading, settings mirror
+  ordering and pending logic, line-for-line equivalence of every migrated
+  job.
+
 ## Next
 
-- C1b: `config/settings.h` - each key declared once (group, name, type,
-  default), `read()` that peeks, `write()`; convert the 79 sites; let the
-  bridge library use the same declarations for the GUI's defaults.
 - Fold the check-map-recheck state (`mapping_asked_for`, `measurement_owed`)
   into the network plan.
-- A read-only adversarial review of the whole redesign diff was started; act
-  on its findings.
+- Versioned settings migrations; share the schema's defaults with the GUI.
+- samurai's own singletons (D2).
