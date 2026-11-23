@@ -123,7 +123,15 @@ earlier ones.
             a reason code, the GUI words them.
       - [x] media: `AttachFile` / `AttachmentReady` / `AttachmentFailed`;
             the service is the share manager's attachment listener.
-      - [ ] config  - [ ] filelist  - [ ] search
+      - [ ] config - deferred to after C1: it mirrors the whole preference
+            store and seeds it with a blocking call; what replaces it is the
+            typed, change-announcing settings C1 builds, and today a value the
+            core writes itself never reaches that mirror.
+      - [x] filelist: `RequestFilelist` / `FilelistReady` (decoded tree as
+            `Api::RemoteDirectory`) / `FilelistFailed`. The queue now announces
+            a file list request ending (`QueueListener::EventFilelistFinished`),
+            so the bridge's one-second poll of the pending set is gone.
+      - [ ] search
       - [ ] transfer  - [ ] hub  - [ ] board
 - [ ] B6. Remove `CoreThread::core()`, `runOnCoreBlocking`, `Relay` (R2, R4).
 
@@ -192,5 +200,5 @@ earlier ones.
 - 2026-11-23: B1 landed. Full suite green (1254, 7 new inbox cases).
 - 2026-11-23: B3/B4 mechanism + hublist bridge migrated (B5). 1258 + 2 new
   GUI cases, green.
-
 - 2026-11-23: drop and media bridges migrated. Green.
+- 2026-11-23: filelist bridge migrated, polling replaced by an event. Green.

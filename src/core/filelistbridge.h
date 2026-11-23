@@ -6,15 +6,13 @@
 #define HAVE_QUICKDC_QUI_FILELISTBRIDGE_H
 
 #include "coretypes.h"
-#include "relay.h"
 
 #include <QList>
 #include <QObject>
 #include <QString>
 
-#include <memory>
 
-class QTimer;
+namespace QuickDC { namespace Api { struct Event; } }
 
 namespace Qdc {
 
@@ -23,13 +21,10 @@ class CoreThread;
 /**
  * Browsing what another user shares.
  *
- * Polled, not pushed, and that is the core's doing rather than a choice: the
- * queue unpacks an arriving file list, moves it into place and drops the request,
- * and tells nobody. QueueManager::onFilelistDownloaded() is internal and returns
- * only how many sources it found. So this watches the pending set instead, and a
- * request it was waiting for disappearing is what counts as an answer - the list
- * being on disk afterwards is what distinguishes success from the queue having
- * given up.
+ * Asked for with a RequestFilelist command and answered by the core's
+ * FilelistReady or FilelistFailed event, which the queue's own announcement of a
+ * request ending produces - so an answer arrives when the list does, rather than
+ * at the next look at whether it has.
  *
  * One request per user at a time, which is also the queue's own rule:
  * requestFilelist() returns the request already pending rather than making a
@@ -74,41 +69,18 @@ signals:
 	                    const QString& reason);
 
 private:
-	/**
-	 * One pass over the outstanding requests, on the core thread.
-	 *
-	 * Runs from a timer rather than continuously, because a browse takes as long
-	 * as the peer takes and there is nothing to be gained by asking often.
-	 */
-	void poll();
+	void onCoreEvent(const QuickDC::Api::Event& event);
+
+	/** Remove the request for {hubUrl, sourceId}; false where none was waiting. */
+	bool take(const QString& hubUrl, const QString& sourceId);
 
 	struct Pending {
 		QString hubUrl;
 		QString sourceId;
-
-		/**
-		 * Where the queue said the list would land. Captured when the request
-		 * was made, because by the time it completes the FilelistRequest that
-		 * knew is gone.
-		 */
-		QString localFile;
 	};
 
 	CoreThread* m_thread;
-
-	/** Where a reply from the core lands; see Qdc::Relay. */
-	std::shared_ptr<Relay> m_relay;
-
-	QTimer* m_timer;
 	QList<Pending> m_pending;
-
-	/**
-	 * A pass is out with the core and has not answered yet.
-	 *
-	 * Without it a core that is busy for longer than the interval collects a pass
-	 * per tick, all of them asking the same question.
-	 */
-	bool m_polling = false;
 };
 
 }
