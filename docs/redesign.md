@@ -266,3 +266,21 @@ earlier ones.
   sanitizer flags PUBLIC; tests/lsan.supp for Qt's D-Bus meta-objects and
   fontconfig's cache). Whole suite under ASan/UBSan: only the 78 baseline
   leak cases fail; every GUI suite passes; no non-leak report anywhere.
+- 2026-11-23: fixed a C3 regression before it shipped: the server no longer
+  writes Port=1411 at start-up (the plan peeks), and the hub sessions read Port
+  with a default of 0 that their read wrote back - so a fresh configuration
+  would have stored Port=0 and the reconciler rebound the peer port to it.
+  Every hub-session Port read now peeks with 1411. This is exactly what C1b
+  (one declared default per setting, reads that never write) removes for
+  good; 79 call sites remain to convert (inventory: adchubsession 24,
+  dc/hubsession 14, adc/server/hub 14, sharemanager 6, the rest small).
+
+## Next
+
+- C1b: `config/settings.h` - each key declared once (group, name, type,
+  default), `read()` that peeks, `write()`; convert the 79 sites; let the
+  bridge library use the same declarations for the GUI's defaults.
+- Fold the check-map-recheck state (`mapping_asked_for`, `measurement_owed`)
+  into the network plan.
+- A read-only adversarial review of the whole redesign diff was started; act
+  on its findings.
