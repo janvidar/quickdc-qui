@@ -302,3 +302,19 @@ earlier ones.
   into the network plan.
 - Versioned settings migrations; share the schema's defaults with the GUI.
 - samurai's own singletons (D2).
+- 2026-11-23: smoke test of the real app (driver in the session scratchpad):
+  port change without restart, local hub enabled live, hublists, a public
+  ADCS hub, mode switches, config file holding only what was saved - all
+  as intended. Found (pre-existing): a hub session read nickname, description
+  and e-mail once, so a rename never reached a joined hub; and closing a
+  session wrote the name it used back as that hub's own, outranking the
+  setting there for good. Fixed: `Hub::refreshIdentity()`, run from the
+  reconcile step on any [User] change or per-hub identity change in the
+  session store - description and e-mail go out with the next INF, a
+  nickname change reconnects; sessions no longer write the nickname back.
+  Verified against adcs://adcs.uhub.org:1511: joined as qdc-smoke-a,
+  renamed -> rejoined as qdc-smoke-b, description updated in place, no
+  per-hub nickname left in session.conf. 1273 tests green.
+  Still pinned the same way: the password (~HubSession writes it back,
+  so a global password is copied into every hub's group) - harmless today
+  but the same shape; worth the same treatment.
