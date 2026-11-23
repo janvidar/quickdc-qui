@@ -37,8 +37,6 @@ add_library(qdcbridge STATIC
     networkwatch.cpp
     recenthubs.cpp
     recenthubs.h
-    relay.cpp
-    relay.h
     searchbridge.cpp
     searchbridge.h
     transferbridge.cpp

@@ -330,7 +330,7 @@ void TestSettings::formDoesNotWaitForABusyCore()
 	 * rather than below - it is the one call left in this layer that waits, and it
 	 * happens once, at start-up, before there is a window to freeze.
 	 */
-	m_thread->post([] { QThread::msleep(1500); });
+	Qdc::Testing::post(m_thread, [] { QThread::msleep(1500); });
 
 	QElapsedTimer timer;
 	timer.start();

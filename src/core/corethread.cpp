@@ -366,3 +366,18 @@ void Qdc::CoreThread::run()
 
 	emit coreStopped();
 }
+
+bool Qdc::Testing::runOnCore(CoreThread* thread, std::function<void()> job, int timeout)
+{
+	return thread && thread->runOnCoreBlocking(std::move(job), timeout);
+}
+
+void Qdc::Testing::post(CoreThread* thread, std::function<void()> job)
+{
+	if (thread) thread->post(std::move(job));
+}
+
+QuickDC::Core* Qdc::Testing::core(CoreThread* thread)
+{
+	return thread ? thread->core() : nullptr;
+}

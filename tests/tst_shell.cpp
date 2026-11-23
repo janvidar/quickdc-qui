@@ -243,7 +243,7 @@ void TestShell::windowSurvivesRepeatedConstruction()
 		window.setCurrentIndex(n % 4);
 	}
 
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 	QVERIFY(m_thread->isCoreRunning());
 }
 

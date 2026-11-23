@@ -21,12 +21,12 @@ root="${1:-.}"
 
 allowed='src/core/corethread.h
 src/core/corethread.cpp
-src/core/configbridge.cpp
+src/core/testing.h
 tests/'
 
 status=0
 
-for file in $(cd "$root" && git grep -l 'runOnCoreBlocking(' -- src tests || true)
+for file in $(cd "$root" && git grep -lE 'runOnCoreBlocking\(|Testing::' -- src tests || true)
 do
 	ok=0
 
@@ -39,8 +39,8 @@ do
 
 	if [ "$ok" -eq 0 ]
 	then
-		echo "$file: waits for the core thread, which nothing that draws may do." >&2
-		echo "  Use CoreThread::call() and take the answer when it arrives." >&2
+		echo "$file: reaches past the core's boundary, which nothing in the program may do." >&2
+		echo "  Submit a command and take the answer from the core's events." >&2
 		status=1
 	fi
 done

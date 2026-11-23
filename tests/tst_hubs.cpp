@@ -2939,7 +2939,7 @@ void TestHubs::hubPasswordIsAskedForOnce()
 	QCOMPARE(declined.size(), 1);
 
 	/* And the view is still working afterwards. */
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 }
 
 void TestHubs::favouritesNormaliseWhatTheyAreGiven()
@@ -5083,7 +5083,7 @@ void TestHubs::anArrivingMessageDoesNotWaitForTheCore()
 	 * trip to that thread. Asked once per message, they stopped the interface for as
 	 * long as the core's turn took - on a busy hub, continuously.
 	 */
-	m_thread->post([] { QThread::msleep(1500); });
+	Qdc::Testing::post(m_thread, [] { QThread::msleep(1500); });
 
 	QElapsedTimer timer;
 	timer.start();

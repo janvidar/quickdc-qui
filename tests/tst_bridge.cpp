@@ -255,8 +255,8 @@ QuickDC::HubListener* TestBridge::listenerFor(const Qdc::HubBridge& hub)
 	QuickDC::HubListener* listener = nullptr;
 
 	/* Ordered behind the job that builds the session, so this finds one. */
-	if (!m_thread->runOnCoreBlocking([&] {
-		QuickDC::Core* core = m_thread->core();
+	if (!Qdc::Testing::runOnCore(m_thread, [&] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->hubs) return;
 
 		listener = dynamic_cast<QuickDC::HubListener*>(
@@ -295,13 +295,13 @@ void TestBridge::cleanupTestCase()
 void TestBridge::coreIsOnlyReachableFromItsOwnThread()
 {
 	/* The guard that stops a caller reaching the reactor from the wrong side. */
-	QVERIFY(m_thread->core() == nullptr);
+	QVERIFY(Qdc::Testing::core(m_thread) == nullptr);
 
 	bool visible = false;
 	QThread* ran_on = nullptr;
 
-	QVERIFY(m_thread->runOnCoreBlocking([&] {
-		visible = m_thread->core() != nullptr;
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [&] {
+		visible = Qdc::Testing::core(m_thread) != nullptr;
 		ran_on = QThread::currentThread();
 	}));
 
@@ -315,10 +315,10 @@ void TestBridge::jobsRunInOrderOnTheCoreThread()
 	QVector<int> order;
 
 	for (int n = 0; n < 8; ++n)
-		m_thread->post([&order, n] { order.append(n); });
+		Qdc::Testing::post(m_thread, [&order, n] { order.append(n); });
 
 	/* Ordered behind all eight, so its completion means they have all run. */
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 
 	QCOMPARE(order.size(), 8);
 	for (int n = 0; n < 8; ++n)
@@ -341,7 +341,7 @@ void TestBridge::aBlockingCallDoesNotWaitForThePollInterval()
 	for (int n = 0; n < rounds; ++n)
 	{
 		int answered = 0;
-		QVERIFY(m_thread->runOnCoreBlocking([&answered] { ++answered; }));
+		QVERIFY(Qdc::Testing::runOnCore(m_thread, [&answered] { ++answered; }));
 		QCOMPARE(answered, 1);
 	}
 
@@ -366,7 +366,7 @@ void TestBridge::snapshotsDoNotWaitForABusyCore()
 	 * has to answer anyway: a view that waited here stopped drawing for as long as the
 	 * core was busy, which is what made the window appear to hang.
 	 */
-	m_thread->post([] { QThread::msleep(1500); });
+	Qdc::Testing::post(m_thread, [] { QThread::msleep(1500); });
 
 	QElapsedTimer timer;
 	timer.start();
@@ -488,8 +488,8 @@ void TestBridge::aPostIsOfferedForTheSessionAndWithoutASlot()
 	bool pictureFree = false;
 	int remembered = -1;
 
-	QVERIFY(m_thread->runOnCoreBlocking([&] {
-		QuickDC::Core* core = m_thread->core();
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [&] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->shares || !core->config) return;
 
 		postFree = core->shares->isSlotFreeByTTH(postTth.constData());
@@ -617,7 +617,7 @@ void TestBridge::configWritesTheFileItWasGiven()
 	QVERIFY(!QFile::exists(path(QStringLiteral("session.conf"))));
 
 	config.notifyChanged();
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 }
 
 /**
@@ -633,8 +633,8 @@ void TestBridge::aSettingTheCoreWritesReachesTheViews()
 
 	const QString group = QStringLiteral("Written by the core");
 
-	QVERIFY(m_thread->runOnCoreBlocking([&] {
-		m_thread->core()->config->setString(group.toStdString(), "Value", "from the core");
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [&] {
+		Qdc::Testing::core(m_thread)->config->setString(group.toStdString(), "Value", "from the core");
 	}));
 
 	QTRY_COMPARE(config.getString(Qdc::ConfigStore::Application, group, QStringLiteral("Value")),
@@ -660,7 +660,7 @@ void TestBridge::aWriteThroughOneBridgeIsSeenThroughAnother()
 	/* And an older value the core reports on its way through does not undo it. */
 	writer.setString(Qdc::ConfigStore::Application, group, QStringLiteral("Key"),
 	                 QStringLiteral("later"));
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 	QTest::qWait(50);
 	QCOMPARE(reader.getString(Qdc::ConfigStore::Application, group, QStringLiteral("Key")),
 	         QStringLiteral("later"));
@@ -724,7 +724,7 @@ void TestBridge::bridgesSurviveBeingDestroyedWhileRunning()
 	}
 
 	/* Still answering, so nothing above left the reactor wedged. */
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 	QVERIFY(m_thread->isCoreRunning());
 }
 
@@ -751,7 +751,7 @@ void TestBridge::nothingAViewAsksForWaitsForABusyCore()
 	config.setString(Qdc::ConfigStore::Application, group,
 	                 QStringLiteral("Nickname"), QStringLiteral("somebody"));
 
-	m_thread->post([] { QThread::msleep(1500); });
+	Qdc::Testing::post(m_thread, [] { QThread::msleep(1500); });
 
 	QElapsedTimer timer;
 	timer.start();
@@ -846,7 +846,7 @@ void TestBridge::bridgesAreBuiltAndTornDownWithoutWaiting()
 	 */
 	Qdc::ConfigBridge config(m_thread);
 
-	m_thread->post([] { QThread::msleep(1500); });
+	Qdc::Testing::post(m_thread, [] { QThread::msleep(1500); });
 
 	QElapsedTimer timer;
 	timer.start();
@@ -866,7 +866,7 @@ void TestBridge::bridgesAreBuiltAndTornDownWithoutWaiting()
 	                                   "while the core was busy").arg(spent)));
 
 	/* The jobs they left behind still run, and leave the reactor answering. */
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 	QVERIFY(m_thread->isCoreRunning());
 }
 
@@ -912,7 +912,7 @@ void TestBridge::aHublistBridgeGoneBeforeTheAnswerHearsNothing()
 
 	QTest::qWait(500);
 	QCOMPARE(failed.count(), 0);
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 }
 
 /**
@@ -936,13 +936,13 @@ void TestBridge::theCoreKnowsAHubByTheNameTheViewsFileItUnder()
 	Qdc::HubBridge hub(m_thread, typed);
 
 	/* Ordered behind the job that builds the session, so this returns once it has. */
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 
 	const QByteArray asked = Qdc::HubBridge::settingsUrl(typed).toUtf8();
 	bool found = false;
 
-	QVERIFY(m_thread->runOnCoreBlocking([&] {
-		QuickDC::Core* core = m_thread->core();
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [&] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->hubs) return;
 
 		found = core->hubs->getHubByUrl(asked.constData()) != nullptr;
@@ -976,7 +976,7 @@ void TestBridge::bulletinsGoWithTheSessionAndTakeSubscriptionsWithThem()
 	QVERIFY(!hub.supportsBulletins());
 
 	/* Said twice, as a hub sending two SUPs would have it said. */
-	QVERIFY(m_thread->runOnCoreBlocking([listener] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
 		listener->EventBoardsAvailable(true);
 		listener->EventBoardsAvailable(true);
 	}));
@@ -992,7 +992,7 @@ void TestBridge::bulletinsGoWithTheSessionAndTakeSubscriptionsWithThem()
 	QCOMPARE(hub.subscribedBoards().size(), 2);
 
 	/* The hub withdraws the feature, which cancels both of them. */
-	QVERIFY(m_thread->runOnCoreBlocking([listener] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
 		listener->EventBoardsAvailable(false);
 	}));
 
@@ -1003,7 +1003,7 @@ void TestBridge::bulletinsGoWithTheSessionAndTakeSubscriptionsWithThem()
 	QVERIFY(!hub.isSubscribed(QStringLiteral("general")));
 
 	/* And again, with the connection ending rather than the hub saying anything. */
-	QVERIFY(m_thread->runOnCoreBlocking([listener] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
 		listener->EventBoardsAvailable(true);
 	}));
 
@@ -1011,7 +1011,7 @@ void TestBridge::bulletinsGoWithTheSessionAndTakeSubscriptionsWithThem()
 	hub.subscribeBoard(QStringLiteral("general"), 0);
 	QVERIFY(hub.isSubscribed(QStringLiteral("general")));
 
-	QVERIFY(m_thread->runOnCoreBlocking([listener] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
 		listener->EventNetStatus(QuickDC::HubListener::NetDisconnected);
 	}));
 
@@ -1034,7 +1034,7 @@ void TestBridge::entriesArriveInOneBatchRatherThanOneSignalEach()
 	QSignalSpy batches(&hub, &Qdc::HubBridge::boardEntriesReceived);
 	QVERIFY(batches.isValid());
 
-	QVERIFY(m_thread->runOnCoreBlocking([listener] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
 		for (int n = 0; n < 6; ++n)
 		{
 			QuickDC::BoardEntry entry = core_entry(ENTRY_TTH,
@@ -1085,7 +1085,7 @@ void TestBridge::anEntryIsKeptAndTheCursorIsTheHighestSeen()
 	QSignalSpy stored(&posts, &Qdc::BoardBridge::entriesStored);
 	QVERIFY(stored.isValid());
 
-	QVERIFY(m_thread->runOnCoreBlocking([listener] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
 		listener->EventBoardEntry(core_entry(ENTRY_TTH, QStringLiteral("general"),
 		                                     AUTHOR_CID, 1786439000));
 		listener->EventBoardEntry(core_entry(OTHER_TTH, QStringLiteral("general"),
@@ -1144,7 +1144,7 @@ void TestBridge::aBoardWithAHoleInItSaysSo()
 	QSignalSpy state(&posts, &Qdc::BoardBridge::boardStateReady);
 	QVERIFY(state.isValid());
 
-	QVERIFY(m_thread->runOnCoreBlocking([listener] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
 		listener->EventBoardEntry(core_entry(ENTRY_TTH, QStringLiteral("general"),
 		                                     AUTHOR_CID, 1786439000));
 	}));
@@ -1154,7 +1154,7 @@ void TestBridge::aBoardWithAHoleInItSaysSo()
 	 * held, which is a hub raising its oldest rather than a client falling behind -
 	 * and the entries between the two are not coming either way.
 	 */
-	QVERIFY(m_thread->runOnCoreBlocking([listener] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
 		QuickDC::Board board;
 		board.name = "general";
 		board.permissions = QuickDC::Subscribe;
@@ -1197,7 +1197,7 @@ void TestBridge::nothingIsFetchedMerelyBecauseAnEntryArrived()
 
 	QSignalSpy stored(&posts, &Qdc::BoardBridge::entriesStored);
 
-	QVERIFY(m_thread->runOnCoreBlocking([listener] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
 		listener->EventBoardEntry(core_entry(ENTRY_TTH, QStringLiteral("general"),
 		                                     AUTHOR_CID, 1786439662));
 	}));
@@ -1212,8 +1212,8 @@ void TestBridge::nothingIsFetchedMerelyBecauseAnEntryArrived()
 	const auto queuedNow = [this, hash] {
 		bool queued = false;
 
-		m_thread->runOnCoreBlocking([this, hash, &queued] {
-			QuickDC::Core* core = m_thread->core();
+		Qdc::Testing::runOnCore(m_thread, [this, hash, &queued] {
+			QuickDC::Core* core = Qdc::Testing::core(m_thread);
 			if (!core || !core->queue) return;
 
 			queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
@@ -1264,8 +1264,8 @@ void TestBridge::nothingIsFetchedMerelyBecauseAnEntryArrived()
 	 * every case in this binary: a file left in it under a hash the other cases use is
 	 * this one deciding what they find.
 	 */
-	QVERIFY(m_thread->runOnCoreBlocking([this, hash] {
-		QuickDC::Core* core = m_thread->core();
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->queue) return;
 
 		if (QuickDC::QueueFile* file = core->queue->getFileByTTH(hash.constData()))
@@ -1448,8 +1448,8 @@ void TestBridge::aTransferPastItsCapIsAbandoned()
 	const QByteArray hash = ENTRY_TTH.toUtf8();
 	bool queued = true;
 
-	QVERIFY(m_thread->runOnCoreBlocking([this, hash, &queued] {
-		QuickDC::Core* core = m_thread->core();
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash, &queued] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->queue) return;
 
 		queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
@@ -1524,8 +1524,8 @@ void TestBridge::aPostBeingReadIsNotInSomebodysTransferList()
 	const QByteArray hidden8 = body.toUtf8();
 	bool queued = false;
 
-	QVERIFY(m_thread->runOnCoreBlocking([this, hidden8, &queued] {
-		QuickDC::Core* core = m_thread->core();
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hidden8, &queued] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->queue) return;
 
 		queued = core->queue->getFileByName(hidden8.constData()) != nullptr;
@@ -1536,7 +1536,7 @@ void TestBridge::aPostBeingReadIsNotInSomebodysTransferList()
 	transfers.removeFromQueue(body);
 	transfers.removeFromQueue(film);
 
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 }
 
 /**
@@ -1604,7 +1604,7 @@ void TestBridge::aPostOpenedReadsAsReadAndTheBoardsCountFalls()
 	/* Nothing has been heard of this board, which is not the same as nothing unread. */
 	QCOMPARE(posts.unread(key, board), 0);
 
-	QVERIFY(m_thread->runOnCoreBlocking([listener, board] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, board] {
 		listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
 		                                     1786439000));
 		listener->EventBoardEntry(core_entry(OTHER_TTH, board, AUTHOR_CID,
@@ -1630,7 +1630,7 @@ void TestBridge::aPostOpenedReadsAsReadAndTheBoardsCountFalls()
 
 	posts.markRead(key, board, ENTRY_TTH);
 
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 	QCoreApplication::processEvents();
 
 	QCOMPARE(moved.count(), 0);
@@ -1670,7 +1670,7 @@ void TestBridge::readStateOutlivesTheBridgeThatWroteIt()
 		QuickDC::HubListener* listener = listenerFor(hub);
 		QVERIFY(listener != nullptr);
 
-		QVERIFY(m_thread->runOnCoreBlocking([listener, board] {
+		QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, board] {
 			listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
 			                                     1786439000));
 			listener->EventBoardEntry(core_entry(OTHER_TTH, board, AUTHOR_CID,
@@ -1684,7 +1684,7 @@ void TestBridge::readStateOutlivesTheBridgeThatWroteIt()
 	}
 
 	/* The store is deleted inside a job, so this is where that job has finished. */
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 
 	Qdc::BoardBridge again(m_thread, nullptr, directory, this);
 
@@ -1734,7 +1734,7 @@ void TestBridge::aMarkThatCouldNotBeWrittenLeavesThePostUnread()
 	QuickDC::HubListener* listener = listenerFor(hub);
 	QVERIFY(listener != nullptr);
 
-	QVERIFY(m_thread->runOnCoreBlocking([listener, board] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, board] {
 		listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
 		                                     1786439000));
 	}));
@@ -1757,7 +1757,7 @@ void TestBridge::aMarkThatCouldNotBeWrittenLeavesThePostUnread()
 	posts.markRead(key, board, ENTRY_TTH);
 
 	/* The mark's job is ordered before this one, and its answer before these lines. */
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 	QCoreApplication::processEvents();
 
 	QVERIFY2(!posts.isRead(key, board, ENTRY_TTH),
@@ -1821,7 +1821,7 @@ void TestBridge::aBoardReadBackKnowsWhichDocumentsItHolds()
 		QVERIFY(listener != nullptr);
 
 		/* Three entries: the two documents, and one whose body nobody ever fetched. */
-		QVERIFY(m_thread->runOnCoreBlocking([listener, board, readable, unreadable] {
+		QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, board, readable, unreadable] {
 			listener->EventBoardEntry(core_entry(readable, board, AUTHOR_CID,
 			                                     1786439000));
 			listener->EventBoardEntry(core_entry(unreadable, board, AUTHOR_CID,
@@ -1872,7 +1872,7 @@ void TestBridge::aBoardReadBackKnowsWhichDocumentsItHolds()
 	}
 
 	/* The store is deleted inside a job, so this is where that job has finished. */
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 
 	Qdc::BoardBridge again(m_thread, nullptr, directory, this);
 
@@ -1939,7 +1939,7 @@ void TestBridge::aBoardReadBackKnowsWhichDocumentsItHolds()
 
 	QSignalSpy arrived(&fresh, &Qdc::BoardBridge::entriesStored);
 
-	QVERIFY(m_thread->runOnCoreBlocking([other, board, readable, unreadable] {
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [other, board, readable, unreadable] {
 		other->EventBoardEntry(core_entry(readable, board, AUTHOR_CID, 1786440000));
 		other->EventBoardEntry(core_entry(unreadable, board, AUTHOR_CID, 1786440001));
 		other->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID, 1786440002));
@@ -2024,8 +2024,8 @@ void TestBridge::aHeldDocumentIsReadWithoutAskingAnybody()
 	const QByteArray hash = tth.toUtf8();
 	bool queued = true;
 
-	QVERIFY(m_thread->runOnCoreBlocking([this, hash, &queued] {
-		QuickDC::Core* core = m_thread->core();
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash, &queued] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->queue) return;
 
 		queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
@@ -2044,7 +2044,7 @@ void TestBridge::aHeldDocumentIsReadWithoutAskingAnybody()
 
 	posts.readHeld(hubUrl, absent);
 
-	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 	QCoreApplication::processEvents();
 
 	QCOMPARE(posts.postState(OTHER_TTH), Qdc::PostState::Announced);
@@ -2054,8 +2054,8 @@ void TestBridge::aHeldDocumentIsReadWithoutAskingAnybody()
 	const QByteArray other = OTHER_TTH.toUtf8();
 	queued = true;
 
-	QVERIFY(m_thread->runOnCoreBlocking([this, other, &queued] {
-		QuickDC::Core* core = m_thread->core();
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, other, &queued] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->queue) return;
 
 		queued = core->queue->getFileByTTH(other.constData()) != nullptr;
@@ -2126,8 +2126,8 @@ void TestBridge::aDocumentKnownNotToBeThePostIsNotOfferedAsFetchable()
 	const QByteArray hash = tth.toUtf8();
 	bool queued = true;
 
-	QVERIFY(m_thread->runOnCoreBlocking([this, hash, &queued] {
-		QuickDC::Core* core = m_thread->core();
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash, &queued] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->queue) return;
 
 		queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
@@ -2140,8 +2140,8 @@ bool TestBridge::isOffered(const QByteArray& tth)
 {
 	bool free = false;
 
-	m_thread->runOnCoreBlocking([this, tth, &free] {
-		QuickDC::Core* core = m_thread->core();
+	Qdc::Testing::runOnCore(m_thread, [this, tth, &free] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->shares) return;
 
 		free = core->shares->isSlotFreeByTTH(tth.constData());
@@ -2172,7 +2172,7 @@ void TestBridge::readAPostInAnEarlierSession(const QString& directory,
 		QSignalSpy stored(&posts, &Qdc::BoardBridge::entriesStored);
 		QVERIFY(stored.isValid());
 
-		QVERIFY(m_thread->runOnCoreBlocking([listener, tth, board] {
+		QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, tth, board] {
 			listener->EventBoardEntry(core_entry(tth, board, AUTHOR_CID, 1786439662));
 		}));
 
@@ -2203,8 +2203,8 @@ void TestBridge::readAPostInAnEarlierSession(const QString& directory,
 	/* The document is on the disk, and this session's offer of it is withdrawn. */
 	QVERIFY(QFile::exists(QDir(directory).filePath(QStringLiteral("posts/") + tth)));
 
-	QVERIFY(m_thread->runOnCoreBlocking([this, hash] {
-		QuickDC::Core* core = m_thread->core();
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash] {
+		QuickDC::Core* core = Qdc::Testing::core(m_thread);
 		if (!core || !core->shares) return;
 
 		core->shares->detach(hash.constData());

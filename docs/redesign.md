@@ -110,7 +110,7 @@ earlier ones.
       that reach into `core->queue`, `core->hubs` and the rest. Mechanism
       in place (`Core::submit`, `Api::Service::execute`); commands are added
       with the bridge that needs them.
-- [~] B5. Migrate bridges one at a time, smallest first: hublist, drop,
+- [x] B5. Migrate bridges one at a time, smallest first: hublist, drop,
       media, config, filelist, search, transfer, hub, board. Each one: stop
       touching core objects, stop implementing core listener interfaces, consume
       events. GUI suite green after each.
@@ -123,10 +123,11 @@ earlier ones.
             a reason code, the GUI words them.
       - [x] media: `AttachFile` / `AttachmentReady` / `AttachmentFailed`;
             the service is the share manager's attachment listener.
-      - [ ] config - deferred to after C1: it mirrors the whole preference
-            store and seeds it with a blocking call; what replaces it is the
-            typed, change-announcing settings C1 builds, and today a value the
-            core writes itself never reaches that mirror.
+      - [x] config: one settings copy in `CoreChannel`, seeded from a
+            snapshot the core takes as it starts, kept current by
+            `SettingChanged`; writes go ahead locally and are acknowledged by
+            `SettingsWritten`. No blocking seed; core-written values now reach
+            the views.
       - [x] filelist: `RequestFilelist` / `FilelistReady` (decoded tree as
             `Api::RemoteDirectory`) / `FilelistFailed`. The queue now announces
             a file list request ending (`QueueListener::EventFilelistFinished`),
@@ -152,14 +153,21 @@ earlier ones.
             answer arrives (`BoardBridge::ask`). Checking that a document is
             the post it was asked for (tiger tree root, parse, author) moved
             into the core with it, and its refusals became codes.
-- [ ] B6. Remove `CoreThread::core()`, `runOnCoreBlocking`, `Relay` (R2, R4).
+- [x] B6. Remove `CoreThread::core()`, `runOnCoreBlocking`, `Relay` (R2, R4).
+      `Relay` and `call()` are gone; `core()`, `post()` and the blocking call
+      are private, reachable only through `Qdc::Testing` (src/core/testing.h)
+      for white-box tests, and the lint in tests/nothing-blocks-the-views.sh
+      now fails any source under src/ that names it.
 
 ### Phase C - reactive state
 
-- [ ] C1. Settings schema (R5): one declaration table, typed accessors, defaults
+- [~] C1. Settings schema (R5): one declaration table, typed accessors, defaults
       in one place, reads that never write, change notification as an event.
       Versioned migrations replace one-off fix-ups (the withdrawn hublist, the
       connection-mode settlement).
+      Done: every change to a `Preferences` is told to its subscribers with a
+      revision (C1a), which is what the config migration stands on. Left: the
+      declared, typed schema and reads that never write (C1b).
 - [ ] C2. Network plan (R6): connection mode + port + bind address + forwarding
       + drop server -> one computed plan; one reconciler applies the difference
       (listen sockets, gateway mapping, measurement, INF re-announce to every
@@ -239,3 +247,4 @@ earlier ones.
 - 2026-11-23: transfer bridge migrated; snapshot requests correlated (D6). Green.
 - 2026-11-23: hub bridge migrated; GUI holds no core hub object. Green (1260).
 - 2026-11-23: board bridge migrated. Every bridge but config is on the boundary. Green (1260).
+- 2026-11-23: config bridge migrated (B5 complete), B6 done, C1a done. Green (1264).
