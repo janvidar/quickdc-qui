@@ -91,9 +91,13 @@ earlier ones.
 
 ### Phase B - the boundary (commands in, events out)
 
-- [ ] B1. The core owns its loop and a thread-safe inbox: the job queue and
+- [x] B1. The core owns its loop and a thread-safe inbox: the job queue and
       notifier move out of `Qdc::CoreThread` into the core (`Core::post`,
       `Core::runUntilStopped`, `Core::stop`). `CoreThread` becomes a host.
+      Landed as `QuickDC::Inbox` (open/post/drain/close, tested alone) and
+      `Core::post`, `Core::requestStop`, `Core::runUntilStopped(running)`;
+      `CoreThread` keeps its state machine and blocking call but owns no
+      queue, notifier or loop of its own.
 - [ ] B2. Value types for what crosses the boundary (`QuickDC::Api`): user,
       hub state, chat line, queue item, transfer, search result, board entry,
       reachability verdict, setting value. No pointers into the core.
@@ -158,3 +162,4 @@ earlier ones.
 - 2026-11-23: A3+A4 landed. No `Core::getInstance`, `quickdc_core`,
   `CID::getInstance` or `global_cid` left anywhere. Full suite green (1247);
   ASan core failures identical to baseline, no new sanitizer errors.
+- 2026-11-23: B1 landed. Full suite green (1254, 7 new inbox cases).

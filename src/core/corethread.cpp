@@ -5,7 +5,6 @@
 #include "corethread.h"
 
 #include <api/core.h>
-#include <samurai/io/net/notifier.h>
 
 #include <QDebug>
 #include <QElapsedTimer>
@@ -121,8 +120,11 @@ void Qdc::CoreThread::shutdown()
 		if (m_state == State::Idle) return;
 	}
 
-	m_stopRequested.store(true, std::memory_order_release);
-	wake();
+	{
+		std::lock_guard<std::mutex> guard(m_mutex);
+		m_stopRequested = true;
+		if (m_core) m_core->requestStop();
+	}
 
 	/*
 	 * Unconditional, including for a core that failed to build or has already
@@ -136,13 +138,9 @@ void Qdc::CoreThread::post(std::function<void()> job)
 {
 	if (!job) return;
 
-	{
-		std::lock_guard<std::mutex> guard(m_mutex);
-		if (m_state != State::Running) return;
-		m_jobs.push_back(std::move(job));
-	}
-
-	wake();
+	std::lock_guard<std::mutex> guard(m_mutex);
+	if (m_state != State::Running || !m_core) return;
+	m_core->post(std::move(job));
 }
 
 bool Qdc::CoreThread::runOnCoreBlocking(std::function<void()> job, int timeout)
@@ -163,9 +161,9 @@ bool Qdc::CoreThread::runOnCoreBlocking(std::function<void()> job, int timeout)
 
 	{
 		std::lock_guard<std::mutex> guard(m_mutex);
-		if (m_state != State::Running) return false;
+		if (m_state != State::Running || !m_core) return false;
 
-		m_jobs.push_back([meeting, job = std::move(job)] {
+		const bool queued = m_core->post([meeting, job = std::move(job)] {
 			{
 				std::lock_guard<std::mutex> inner(meeting->mutex);
 
@@ -202,9 +200,9 @@ bool Qdc::CoreThread::runOnCoreBlocking(std::function<void()> job, int timeout)
 				meeting->changed.notify_one();
 			}
 		});
-	}
 
-	wake();
+		if (!queued) return false;
+	}
 
 	QElapsedTimer parked;
 	parked.start();
@@ -254,52 +252,22 @@ bool Qdc::CoreThread::runOnCoreBlocking(std::function<void()> job, int timeout)
 	return answered;
 }
 
-void Qdc::CoreThread::wake()
-{
-	/*
-	 * Copied out under the lock: shutdown() releases the notifier on the core
-	 * thread while another thread may be in here.
-	 */
-	std::shared_ptr<Samurai::IO::Net::Notifier> notifier;
-	{
-		std::lock_guard<std::mutex> guard(m_mutex);
-		notifier = m_notifier;
-	}
-
-	if (notifier) notifier->notify();
-}
-
-void Qdc::CoreThread::drainJobs()
-{
-	for (;;)
-	{
-		std::function<void()> job;
-		{
-			std::lock_guard<std::mutex> guard(m_mutex);
-			if (m_jobs.empty()) return;
-			job = std::move(m_jobs.front());
-			m_jobs.pop_front();
-		}
-
-		job();
-	}
-}
-
 void Qdc::CoreThread::run()
 {
 	QString failure;
+	QuickDC::Core* built = nullptr;
 
 	try
 	{
 		if (m_useExplicitFiles)
 		{
-			m_core = new QuickDC::Core(m_configFile.toStdString(),
-			                           m_sessionFile.toStdString(),
-			                           m_queueFile.toStdString());
+			built = new QuickDC::Core(m_configFile.toStdString(),
+			                          m_sessionFile.toStdString(),
+			                          m_queueFile.toStdString());
 		}
 		else
 		{
-			m_core = new QuickDC::Core();
+			built = new QuickDC::Core();
 		}
 	}
 	catch (const std::exception& e)
@@ -311,10 +279,10 @@ void Qdc::CoreThread::run()
 		failure = QStringLiteral("the QuickDC core threw an unrecognised exception");
 	}
 
-	if (!m_core && failure.isEmpty())
+	if (!built && failure.isEmpty())
 		failure = QStringLiteral("the QuickDC core could not be constructed");
 
-	if (!m_core)
+	if (!built)
 	{
 		{
 			std::lock_guard<std::mutex> guard(m_mutex);
@@ -326,59 +294,38 @@ void Qdc::CoreThread::run()
 		return;
 	}
 
-	/*
-	 * Built after the core, because the core takes the socket monitor that the
-	 * notifier registers itself with.
-	 *
-	 * The callback is empty on purpose. Waking the reactor is the whole job: it
-	 * runs from inside the monitor's dispatch, part way through a turn, and a
-	 * job that deleted a hub or a socket from there would be mutating the
-	 * registry the monitor is walking. Jobs are run by the drainJobs() below
-	 * instead, once the turn is over and nothing is iterating anything.
-	 *
-	 * A null notifier is not fatal and so is not checked - it only costs
-	 * latency, up to one poll timeout, because jobs are drained every turn
-	 * regardless. It is null where there is no socketpair(), meaning Windows.
-	 */
 	{
-		std::shared_ptr<Samurai::IO::Net::Notifier> notifier =
-			Samurai::IO::Net::Notifier::create([] { });
-
 		std::lock_guard<std::mutex> guard(m_mutex);
-		m_notifier = std::move(notifier);
-		m_state = State::Running;
-	}
-	m_stateChanged.notify_all();
-	emit coreStarted();
+		m_core = built;
 
-	while (!m_stopRequested.load(std::memory_order_acquire))
-	{
-		m_core->run();
-		drainJobs();
+		/* A shutdown() that came in while the core was being built. */
+		if (m_stopRequested) m_core->requestStop();
 	}
 
 	/*
-	 * Refuse new jobs and take the ones already queued in the same breath, so
-	 * that a caller blocked in runOnCoreBlocking() is either in this batch or was told the
-	 * core had stopped. Anything either of these jobs posts is dropped.
+	 * Running only once the core's inbox accepts work, so that a post() made the
+	 * moment startAndWait() returns is never refused.
 	 */
-	std::deque<std::function<void()>> remaining;
+	m_core->runUntilStopped([this] {
+		{
+			std::lock_guard<std::mutex> guard(m_mutex);
+			m_state = State::Running;
+		}
+		m_stateChanged.notify_all();
+		emit coreStarted();
+	});
+
+	/*
+	 * The inbox has closed and run what it held, so a caller blocked in
+	 * runOnCoreBlocking() has had its job run or been told the core stopped.
+	 */
 	{
 		std::lock_guard<std::mutex> guard(m_mutex);
 		m_state = State::Stopping;
-		remaining.swap(m_jobs);
+		m_core = nullptr;
 	}
 
-	for (auto& job : remaining)
-		job();
-
-	{
-		std::lock_guard<std::mutex> guard(m_mutex);
-		m_notifier.reset();
-	}
-
-	delete m_core;
-	m_core = nullptr;
+	delete built;
 
 	{
 		std::lock_guard<std::mutex> guard(m_mutex);

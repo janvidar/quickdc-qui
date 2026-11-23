@@ -11,9 +11,7 @@
 #include <QString>
 #include <QThread>
 
-#include <atomic>
 #include <condition_variable>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -21,14 +19,6 @@
 
 namespace QuickDC {
 class Core;
-}
-
-namespace Samurai {
-namespace IO {
-namespace Net {
-class Notifier;
-}
-}
 }
 
 namespace Qdc {
@@ -45,10 +35,10 @@ namespace Qdc {
  *
  * So the core gets a thread of its own, and both directions are marshalled.
  *
- *   towards the core   post(), call() and runOnCoreBlocking() append to a job
- *                      queue and wake the reactor through a socketpair, so a
- *                      pending poll returns at once rather than sitting out its
- *                      timeout.
+ *   towards the core   post(), call() and runOnCoreBlocking() hand a job to the
+ *                      core's own inbox (QuickDC::Inbox), which wakes the
+ *                      reactor so a pending poll returns at once rather than
+ *                      sitting out its timeout.
  *   towards the views  the bridges copy each event into a value type and hand
  *                      it to QMetaObject::invokeMethod, which puts it on the
  *                      receiving thread's event queue.
@@ -201,17 +191,6 @@ protected:
 	void run() override;
 
 private:
-	/**
-	 * Run every job queued so far.
-	 *
-	 * The lock is never held while a job runs, both because a job may post
-	 * another and because a job is free to take as long as it likes.
-	 */
-	void drainJobs();
-
-	/** Return the reactor from poll() early, if we managed to build a notifier. */
-	void wake();
-
 	enum class State {
 		Idle,
 		Starting,
@@ -221,17 +200,16 @@ private:
 		Stopped
 	};
 
+	/** Set and cleared under m_mutex, so post() never reaches a core being deleted. */
 	QuickDC::Core* m_core = nullptr;
-	std::shared_ptr<Samurai::IO::Net::Notifier> m_notifier;
 
 	mutable std::mutex m_mutex;
 	std::condition_variable m_stateChanged;
-	std::deque<std::function<void()>> m_jobs;
 	State m_state = State::Idle;
 	QString m_failure;
 
-	/** Read every turn of the reactor, so it cannot be guarded by m_mutex. */
-	std::atomic<bool> m_stopRequested{false};
+	/** For a shutdown() that arrives before there is a core to tell. */
+	bool m_stopRequested = false;
 
 	QString m_configFile;
 	QString m_sessionFile;
