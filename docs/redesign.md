@@ -305,8 +305,6 @@ earlier ones.
 
 ## Next
 
-- Fold the check-map-recheck state (`mapping_asked_for`, `measurement_owed`)
-  into the network plan.
 - Versioned settings migrations; share the schema's defaults with the GUI.
 - samurai's own singletons (D2).
 - 2026-11-23: smoke test of the real app (driver in the session scratchpad):
@@ -326,3 +324,13 @@ earlier ones.
   so a global password is copied into every hub's group) - harmless today
   but the same shape; worth the same treatment.
 - 2026-11-23: settings migrations; pinned identities unpinned once on upgrade; sessions no longer write back the password either. Green (1278).
+- 2026-11-23: the check-map-recheck state folded: `network/mappingpolicy.{h,cpp}`
+  decides whether to hold a gateway mapping from the plan's wish and the
+  evidence (useless only when a check *started* through it; cleared on a
+  configuration change; a refused one re-asked while still needed). Every
+  start/stop goes through `MappingPolicy::apply()`, via the plan
+  (`AutomationState::applyMapping`) - the reconciler and the drop listener no
+  longer each drive the gateway. Behaviour change: a mapping made at start-up
+  (automatic mode) is now let go on the same evidence as one the loop asked
+  for; the ownership distinction existed only for front-end-made mappings,
+  which no longer exist. 9 new cases; 1287 green; ASan unchanged.
