@@ -133,7 +133,12 @@ earlier ones.
             so the bridge's one-second poll of the pending set is gone.
       - [x] search: `Search` / `SearchSent`. Results still arrive through
             the hub bridge's listener and move with it.
-      - [ ] transfer  - [ ] hub  - [ ] board
+      - [x] transfer: `Enqueue`, `EnqueueFromSearch`, `EnqueueForReading`,
+            `AddFallbackSource`, `SetPriority`, `RemoveFromQueue`,
+            `SnapshotTransfers`; events `Transfer{Started,Finished,Stopped,
+            Error}`, `QueueChanged`, `DownloadCompleted`, `TransfersSnapshot`.
+            The service is the queue's and the transfer manager's listener.
+      - [ ] hub  - [ ] board
 - [ ] B6. Remove `CoreThread::core()`, `runOnCoreBlocking`, `Relay` (R2, R4).
 
 ### Phase C - reactive state
@@ -169,6 +174,11 @@ earlier ones.
 - D5. A hublist fetch now belongs to the core's service, not the bridge
   that asked: a bridge destroyed mid-fetch lets it finish and hears
   nothing. Previously it aborted the download.
+- D6. A request whose answer is broadcast carries an id the answer echoes
+  (`SnapshotTransfers.request`), because every sink hears every event: a
+  bridge took a snapshot a destroyed bridge had asked for, queued ahead of
+  its own commands, and read the queue as it was before them. Found by
+  `tst_search`.
 - D3. Keep the protocol in-process and C++-typed (a `std::variant`), not
   serialised. Serialising for a remote front end is easy later from value
   types and costs nothing to defer.
@@ -208,3 +218,4 @@ earlier ones.
 - 2026-11-23: drop and media bridges migrated. Green.
 - 2026-11-23: filelist bridge migrated, polling replaced by an event. Green.
 - 2026-11-23: search bridge migrated. Green (1260).
+- 2026-11-23: transfer bridge migrated; snapshot requests correlated (D6). Green.

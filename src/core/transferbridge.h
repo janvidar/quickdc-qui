@@ -6,36 +6,33 @@
 #define HAVE_QUICKDC_QUI_TRANSFERBRIDGE_H
 
 #include "coretypes.h"
-#include "relay.h"
 
 #include <QElapsedTimer>
 #include <QObject>
 #include <QStringList>
 #include <QVector>
 
-#include <memory>
+
+namespace QuickDC { namespace Api { struct Event; namespace Events { struct TransfersSnapshot; } } }
 
 namespace Qdc {
 
 class CoreThread;
-class QueueReporter;
-class TransferReporter;
 
 /**
  * The transfer engine and the download queue, as a view sees it.
  *
- * Lives on the thread that constructed it. The core side half is a
- * TransferReporter registered with the core's transfer manager, added and
- * removed inside jobs on the core thread.
+ * Lives on the thread that constructed it. It hears the core's transfer and
+ * queue events and asks for everything else with commands, so it holds nothing
+ * on the core thread.
  *
  * The two halves of a transfer view are served differently, because the core
  * serves them differently:
  *
  *   comings and goings   pushed. transferStarted() and the three ways a
  *                        transfer can end are all real events from the core.
- *   rates and progress   pulled. QuickDC::TransferListener declares an
- *                        EventTransferProgress that nothing ever emits, so
- *                        activeTransfers() polls instead. A view wanting a live
+ *   rates and progress   pulled. Nothing in the core announces progress, so
+ *                        refresh() asks for a TransfersSnapshot instead. A view wanting a live
  *                        rate column drives it from a timer of its own; there is
  *                        no point going faster than the core's own quarter
  *                        second turn.
@@ -308,27 +305,10 @@ signals:
 	void transferError(const Qdc::TransferInfo& transfer);
 
 private:
-	friend class QueueReporter;
+	void onCoreEvent(const QuickDC::Api::Event& event);
+	void absorb(const QuickDC::Api::Events::TransfersSnapshot& taken);
 
 	CoreThread* m_thread;
-
-	/** Owned by the core thread; only touched from a job there. */
-	/**
-	 * The listeners, in a box that outlives this object.
-	 *
-	 * Owned by the core thread, including the job that unregisters and deletes
-	 * them - which runs after this bridge is gone, so it cannot be reached through
-	 * it. Every job holds a reference, so the box lasts as long as it is wanted.
-	 */
-	struct ReporterBox {
-		TransferReporter* transfers = nullptr;
-		QueueReporter* queue = nullptr;
-	};
-
-	std::shared_ptr<ReporterBox> m_reporters;
-
-	/** Where an event from the core lands; see Qdc::Relay. */
-	std::shared_ptr<Relay> m_relay;
 
 	/** The last figures the core thread handed over; see activeTransfers(). */
 	QVector<TransferInfo> m_active;
@@ -348,6 +328,9 @@ private:
 
 	/** Whether a reading has been asked for and not yet arrived. */
 	bool m_reading = false;
+
+	/** Which snapshot is this bridge's own; see SnapshotTransfers. */
+	quint64 m_request = 0;
 };
 
 }

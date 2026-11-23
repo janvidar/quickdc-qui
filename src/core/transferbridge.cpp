@@ -4,18 +4,12 @@
 
 #include "transferbridge.h"
 
+#include "corechannel.h"
 #include "corethread.h"
 
-#include <api/core.h>
-#include <api/transfers.h>
-#include <network/downloadqueue.h>
-#include <network/filesource.h>
-#include <samurai/io/file.h>
 
-#include <QByteArray>
 #include <QSet>
 
-#include <QMetaObject>
 
 #include <vector>
 
@@ -40,290 +34,102 @@ constexpr int IDLE_GRACE_MS = 3000;
  */
 constexpr int RATE_INTERVAL_MIN_MS = 250;
 
-Qdc::TransferInfo convert(QuickDC::Transfer* transfer)
+Qdc::TransferInfo convert(const QuickDC::Api::Transfer& transfer)
 {
 	Qdc::TransferInfo info;
-	if (!transfer) return info;
-
-	/*
-	 * The address, as an opaque row key. Never dereferenced again - by the time
-	 * a view reads this the transfer may be gone - which is also why it is
-	 * everything else here that has to be copied out now.
-	 */
-	info.id = reinterpret_cast<quintptr>(transfer);
-
-	if (Samurai::IO::File* file = transfer->getFile())
-		info.filename = QString::fromStdString(file->getName());
-
-	info.transferred     = transfer->getTransferred();
-	info.length          = transfer->getLength();
-	info.bytesPerSecond  = transfer->getBps();
-	info.ratio           = transfer->getRatio();
-	info.upload          = transfer->isUpload();
-	info.finished        = transfer->isFinished();
-
+	info.id              = static_cast<quintptr>(transfer.id);
+	info.filename        = QString::fromStdString(transfer.filename);
+	info.transferred     = transfer.transferred;
+	info.length          = transfer.length;
+	info.bytesPerSecond  = transfer.bytesPerSecond;
+	info.ratio           = transfer.ratio;
+	info.upload          = transfer.upload;
+	info.finished        = transfer.finished;
 	return info;
 }
 
-QuickDC::QueueFile::Priority convert(Qdc::Priority priority)
+QuickDC::Api::Priority convert(Qdc::Priority priority)
 {
 	switch (priority)
 	{
-		case Qdc::Priority::Paused: return QuickDC::QueueFile::PrioPaused;
-		case Qdc::Priority::Low:    return QuickDC::QueueFile::PrioLow;
-		case Qdc::Priority::Normal: return QuickDC::QueueFile::PrioNormal;
-		case Qdc::Priority::High:   return QuickDC::QueueFile::PrioHigh;
+		case Qdc::Priority::Paused: return QuickDC::Api::Priority::Paused;
+		case Qdc::Priority::Low:    return QuickDC::Api::Priority::Low;
+		case Qdc::Priority::Normal: return QuickDC::Api::Priority::Normal;
+		case Qdc::Priority::High:   return QuickDC::Api::Priority::High;
 	}
-
-	return QuickDC::QueueFile::PrioNormal;
+	return QuickDC::Api::Priority::Normal;
 }
 
-Qdc::Priority convert(QuickDC::QueueFile::Priority priority)
+Qdc::Priority convert(QuickDC::Api::Priority priority)
 {
 	switch (priority)
 	{
-		case QuickDC::QueueFile::PrioPaused: return Qdc::Priority::Paused;
-		case QuickDC::QueueFile::PrioLow:    return Qdc::Priority::Low;
-		case QuickDC::QueueFile::PrioNormal: return Qdc::Priority::Normal;
-		case QuickDC::QueueFile::PrioHigh:   return Qdc::Priority::High;
+		case QuickDC::Api::Priority::Paused: return Qdc::Priority::Paused;
+		case QuickDC::Api::Priority::Low:    return Qdc::Priority::Low;
+		case QuickDC::Api::Priority::Normal: return Qdc::Priority::Normal;
+		case QuickDC::Api::Priority::High:   return Qdc::Priority::High;
 	}
-
 	return Qdc::Priority::Normal;
 }
 
-/**
- * The name a download will have when it is finished.
- *
- * A download writes into the queue's temporary file, so that is the name its
- * transfers carry - and the name the queue itself keeps is the final one, which
- * is what a view shows and what the two are matched on.
- */
 QString final_name(const QString& path)
 {
-	const QString suffix = QStringLiteral(QUICKDC_PART_SUFFIX);
+	const QString suffix = QString::fromLatin1(QuickDC::Api::PART_SUFFIX);
 	return path.endsWith(suffix) ? path.chopped(suffix.size()) : path;
 }
 
-Qdc::QueueEntry convert(const QuickDC::QueueStatus& status)
+Qdc::QueueEntry convert(const QuickDC::Api::QueueItem& item)
 {
 	Qdc::QueueEntry entry;
-
-	/* Both strings point into the QueueFile, so neither may outlive this call. */
-	entry.filename       = status.filename ? QString::fromUtf8(status.filename) : QString();
-	entry.tth            = status.tth ? QString::fromUtf8(status.tth) : QString();
-	entry.size           = status.size;
-	entry.done           = status.done;
-	entry.sources        = static_cast<quint32>(status.sources);
-	entry.activeSources  = static_cast<quint32>(status.activeSources);
-	entry.priority       = convert(status.priority);
-	entry.complete       = status.complete;
-
+	entry.filename       = QString::fromStdString(item.filename);
+	entry.tth            = QString::fromStdString(item.tth);
+	entry.size           = item.size;
+	entry.done           = item.done;
+	entry.sources        = item.sources;
+	entry.activeSources  = item.activeSources;
+	entry.priority       = convert(item.priority);
+	entry.complete       = item.complete;
 	return entry;
 }
-
-}
-
-namespace Qdc {
-
-/** Everything one pass over the core gathers, carried back in one piece. */
-struct Snapshot {
-	QVector<TransferInfo> active;
-	QVector<QueueEntry> queued;
-	quint32 count = 0;
-};
-
-/**
- * The core side half of a TransferBridge.
- *
- * Registered with the core's transfer manager, which calls these from inside
- * Transfer::exec() - so the transfer is still whole and its byte counts and rate
- * are still readable, but it may be deleted moments later. Hence the copy before
- * anything is handed across.
- */
-class TransferReporter final : public QuickDC::TransferListener {
-
-public:
-	TransferReporter(TransferBridge* bridge, std::shared_ptr<Relay> relay)
-		: m_bridge(bridge)
-		, m_relay(std::move(relay))
-	{
-	}
-
-	void EventTransferStarted(QuickDC::Transfer* transfer) override
-	{
-		report(transfer, &TransferBridge::transferStarted);
-	}
-
-	void EventTransferFinished(QuickDC::Transfer* transfer) override
-	{
-		report(transfer, &TransferBridge::transferFinished);
-	}
-
-	void EventTransferStopped(QuickDC::Transfer* transfer) override
-	{
-		report(transfer, &TransferBridge::transferStopped);
-	}
-
-	void EventTransferError(QuickDC::Transfer* transfer) override
-	{
-		report(transfer, &TransferBridge::transferError);
-	}
-
-private:
-	using Signal = void (TransferBridge::*)(const TransferInfo&);
-
-	/**
-	 * Queued explicitly, for the same reason as in HubBridge: this only ever
-	 * runs on the core thread, where an inline call would mean emitting straight
-	 * into a view. Addressed to the relay, which a bridge detaches on its way out,
-	 * so an event in flight when that happens becomes nothing.
-	 */
-	void report(QuickDC::Transfer* transfer, Signal signal)
-	{
-		const TransferInfo info = convert(transfer);
-		TransferBridge* bridge = m_bridge;
-
-		std::shared_ptr<Relay> relay = m_relay;
-		Relay* target = relay.get();
-
-		QMetaObject::invokeMethod(target,
-			[relay = std::move(relay), bridge, signal, info] {
-				if (!relay->detached()) (bridge->*signal)(info);
-			}, Qt::QueuedConnection);
-	}
-
-	TransferBridge* m_bridge;
-	std::shared_ptr<Relay> m_relay;
-};
-
-/**
- * The queue half.
- *
- * The core calls these from inside QueueManager::process(), and hands over a
- * QueueFile it deletes immediately afterwards - so the completion event copies
- * what it needs on the spot, and the change events carry nothing at all.
- */
-class QueueReporter final : public QuickDC::QueueListener {
-
-public:
-	QueueReporter(TransferBridge* bridge, std::shared_ptr<Relay> relay)
-		: m_bridge(bridge)
-		, m_relay(std::move(relay))
-	{
-	}
-
-	void EventQueueFileAdded(const QuickDC::QueueFile*) override
-	{
-		announce();
-	}
-
-	void EventQueueFileRemoved(const QuickDC::QueueFile*) override
-	{
-		announce();
-	}
-
-	void EventQueueFileVerified(const QuickDC::QueueFile* file) override
-	{
-		if (!file) return;
-
-		const QString filename = file->getLocalFilename()
-			? QString::fromUtf8(file->getLocalFilename()) : QString();
-		const QString tth = file->getTTH() ? QString::fromUtf8(file->getTTH())
-		                                   : QString();
-		const quint64 size = file->getSize();
-
-		TransferBridge* bridge = m_bridge;
-
-		std::shared_ptr<Relay> relay = m_relay;
-		Relay* target = relay.get();
-
-		QMetaObject::invokeMethod(target,
-			[relay = std::move(relay), bridge, filename, size, tth] {
-				if (!relay->detached())
-					emit bridge->downloadCompleted(filename, size, tth);
-			}, Qt::QueuedConnection);
-	}
-
-private:
-	void announce()
-	{
-		TransferBridge* bridge = m_bridge;
-
-		std::shared_ptr<Relay> relay = m_relay;
-		Relay* target = relay.get();
-
-		QMetaObject::invokeMethod(target, [relay = std::move(relay), bridge] {
-			if (relay->detached()) return;
-
-			emit bridge->queueChanged();
-			bridge->refresh();
-		}, Qt::QueuedConnection);
-	}
-
-	TransferBridge* m_bridge;
-	std::shared_ptr<Relay> m_relay;
-};
 
 }
 
 Qdc::TransferBridge::TransferBridge(CoreThread* thread, QObject* parent)
 	: QObject(parent)
 	, m_thread(thread)
-	, m_reporters(std::make_shared<ReporterBox>())
-	, m_relay(Relay::create())
 {
-	if (!m_thread) return;
-
-	/*
-	 * Posted rather than waited on. Registering a listener happens between turns of
-	 * the reactor, and the window is built before anything has been transferred, so
-	 * there is nothing to miss by not waiting - and a great deal to lose by waiting,
-	 * since the wait is a whole core turn at whatever the core is busy with.
-	 */
-	m_thread->post([holder = m_reporters, relay = m_relay, thread = m_thread,
-	                bridge = this] {
-		QuickDC::Core* core = thread->core();
-		if (!core || !core->transfers) return;
-
-		holder->transfers = new TransferReporter(bridge, relay);
-		core->transfers->addListener(holder->transfers);
-
-		/* A core built without a queue file has no queue to listen to. */
-		if (!core->queue) return;
-
-		holder->queue = new QueueReporter(bridge, relay);
-		core->queue->addListener(holder->queue);
-	});
+	if (m_thread)
+		connect(m_thread->channel(), &CoreChannel::event, this, &TransferBridge::onCoreEvent);
 }
 
-Qdc::TransferBridge::~TransferBridge()
+Qdc::TransferBridge::~TransferBridge() = default;
+
+void Qdc::TransferBridge::onCoreEvent(const QuickDC::Api::Event& event)
 {
-	/* Nothing in flight has anywhere to report to from here on. */
-	m_relay->detach();
+	using namespace QuickDC::Api::Events;
 
-	if (!m_thread) return;
-
-	/*
-	 * Posted, and no longer blocking. The manager holds a raw pointer to each
-	 * reporter and would call it on the next transfer event, but the call goes to
-	 * the relay rather than to this object and the relay is detached above - so an
-	 * event landing between here and the job running has nowhere to go.
-	 */
-	m_thread->post([holder = m_reporters, thread = m_thread] {
-		QuickDC::Core* core = thread->core();
-
-		if (core && core->transfers && holder->transfers)
-			core->transfers->removeListener(holder->transfers);
-
-		if (core && core->queue && holder->queue)
-			core->queue->removeListener(holder->queue);
-
-		delete holder->transfers;
-		holder->transfers = nullptr;
-
-		delete holder->queue;
-		holder->queue = nullptr;
-	});
+	if (const auto* e = event.as<TransferStarted>())
+		emit transferStarted(convert(e->transfer));
+	else if (const auto* e = event.as<TransferFinished>())
+		emit transferFinished(convert(e->transfer));
+	else if (const auto* e = event.as<TransferStopped>())
+		emit transferStopped(convert(e->transfer));
+	else if (const auto* e = event.as<TransferError>())
+		emit transferError(convert(e->transfer));
+	else if (event.as<QueueChanged>())
+	{
+		emit queueChanged();
+		refresh();
+	}
+	else if (const auto* e = event.as<DownloadCompleted>())
+	{
+		emit downloadCompleted(QString::fromStdString(e->filename), e->size,
+		                       QString::fromStdString(e->tth));
+	}
+	else if (const auto* e = event.as<TransfersSnapshot>())
+	{
+		if (m_reading && e->request == m_request) absorb(*e);
+	}
 }
 
 QVector<Qdc::TransferInfo> Qdc::TransferBridge::activeTransfers() const
@@ -666,266 +472,94 @@ void Qdc::TransferBridge::refresh()
 {
 	if (!m_thread || m_reading) return;
 
-	m_reading = true;
+	static quint64 requests = 0;
+	const quint64 request = ++requests;
 
-	/*
-	 * Posted rather than waited on. Everything the core is asked for is gathered in
-	 * one pass on its own thread and carried back as plain values, which is the same
-	 * rule every event here follows: copy what the core lent us, then hand the copy
-	 * to the thread that will draw it.
-	 */
-	m_thread->call(m_relay, [thread = m_thread] {
-		QuickDC::Core* core = thread->core();
+	if (m_thread->submit(QuickDC::Api::Commands::SnapshotTransfers{request}))
+	{
+		m_reading = true;
+		m_request = request;
+	}
+}
 
-		Snapshot taken;
-		QVector<TransferInfo>& active = taken.active;
-		QVector<QueueEntry>& queued = taken.queued;
-		quint32& count = taken.count;
+void Qdc::TransferBridge::absorb(const QuickDC::Api::Events::TransfersSnapshot& taken)
+{
+	QVector<TransferInfo> active;
+	active.reserve(static_cast<qsizetype>(taken.active.size()));
+	for (const QuickDC::Api::Transfer& transfer : taken.active) active.append(convert(transfer));
 
-		if (core && core->transfers)
+	QVector<QueueEntry> queued;
+	queued.reserve(static_cast<qsizetype>(taken.queued.size()));
+	for (const QuickDC::Api::QueueItem& item : taken.queued) queued.append(convert(item));
+
+	const int since = m_taken.isValid() ? static_cast<int>(m_taken.restart()) : 0;
+	if (!m_taken.isValid()) m_taken.start();
+
+	m_active = foldByFile(active, queued, m_active, since, m_hidden);
+
+	QVector<QueueEntry> visible;
+	visible.reserve(queued.size());
+	quint32 count = taken.activeDownloads;
+
+	for (const QueueEntry& entry : queued)
+	{
+		if (!isUnder(entry.filename, m_hidden))
 		{
-			for (QuickDC::Transfer* transfer = core->transfers->first(); transfer;
-			     transfer = core->transfers->next())
-			{
-				active.append(convert(transfer));
-			}
+			visible.append(entry);
+			continue;
 		}
 
-		if (core && core->queue)
-		{
-			std::vector<QuickDC::QueueStatus> status;
-			core->queue->getStatus(status);
+		/* A hidden download's connections are not this view's to count either. */
+		count -= qMin(count, entry.activeSources);
+	}
 
-			queued.reserve(static_cast<qsizetype>(status.size()));
-			for (const QuickDC::QueueStatus& entry : status)
-				queued.append(convert(entry));
+	m_queue = markTransferring(visible, m_active);
+	m_activeCount = count;
+	m_reading = false;
 
-			count = static_cast<quint32>(core->queue->countActiveTransfers());
-		}
-
-		return taken;
-	}, [this](const Snapshot& taken) {
-		/*
-		 * Folded here rather than in each view, so that all of them are handed
-		 * the same rows and none has to know that one file arrives in several
-		 * pieces. On this side of the hand-over rather than the core's, because
-		 * holding a row steady means reading the one before it - and the rows
-		 * belong to this thread.
-		 */
-		const int since = m_taken.isValid()
-			? static_cast<int>(m_taken.restart()) : 0;
-
-		if (!m_taken.isValid()) m_taken.start();
-
-		m_active = foldByFile(taken.active, taken.queued, m_active, since, m_hidden);
-
-		QVector<QueueEntry> visible;
-		visible.reserve(taken.queued.size());
-
-		quint32 count = taken.count;
-
-		for (const QueueEntry& entry : taken.queued)
-		{
-			if (!isUnder(entry.filename, m_hidden))
-			{
-				visible.append(entry);
-				continue;
-			}
-
-			/*
-			 * Taken out of the count as well as out of the list. The count is what a
-			 * badge is drawn from, and a badge saying ten downloads is the same
-			 * disclosure as ten rows saying it - the core counts requests, so this
-			 * subtracts them the same way.
-			 */
-			count -= qMin(count, entry.activeSources);
-		}
-
-		m_queue = markTransferring(visible, m_active);
-		m_activeCount = count;
-		m_reading = false;
-
-		emit snapshotChanged();
-	});
+	emit snapshotChanged();
 }
 
 void Qdc::TransferBridge::setPriority(const QString& filename, Priority priority)
 {
 	if (!m_thread || filename.isEmpty()) return;
-
-	const QByteArray name = filename.toUtf8();
-
-	/*
-	 * Posted, not waited for. Nothing here reads an answer, and a click that waited
-	 * would freeze the window for as long as the core's current turn takes.
-	 *
-	 * The captures are by value because the job outlives this call.
-	 */
-	m_thread->post([thread = m_thread, name, priority] {
-		QuickDC::Core* core = thread->core();
-		if (!core || !core->queue) return;
-
-		if (QuickDC::QueueFile* file = core->queue->getFileByName(name.constData()))
-			file->setPriority(convert(priority));
-	});
-
-	/*
-	 * Priority is not part of the queue's own change events - it does not add or
-	 * remove an entry - so the table is told from here.
-	 */
-	emit queueChanged();
+	m_thread->submit(QuickDC::Api::Commands::SetPriority{filename.toStdString(), convert(priority)});
 }
 
 void Qdc::TransferBridge::removeFromQueue(const QString& filename, bool deletePartial)
 {
 	if (!m_thread || filename.isEmpty()) return;
-
-	const QByteArray name = filename.toUtf8();
-
-	m_thread->post([thread = m_thread, name, deletePartial] {
-		QuickDC::Core* core = thread->core();
-		if (!core || !core->queue) return;
-
-		QuickDC::QueueFile* file = core->queue->getFileByName(name.constData());
-		if (!file) return;
-
-		/*
-		 * The temporary name has to be read before the entry goes: remove()
-		 * deletes the QueueFile that knows it.
-		 */
-		std::string partial;
-		if (deletePartial && file->getTempFilename())
-			partial = file->getTempFilename();
-
-		core->queue->remove(file);
-
-		if (!partial.empty()) Samurai::IO::File(partial).remove();
-	});
+	m_thread->submit(QuickDC::Api::Commands::RemoveFromQueue{filename.toStdString(), deletePartial});
 }
 
-void Qdc::TransferBridge::enqueue(const QString& filename, const QString& tth,
-                                  quint64 size)
+void Qdc::TransferBridge::enqueue(const QString& filename, const QString& tth, quint64 size)
 {
 	if (!m_thread || filename.isEmpty()) return;
-
-	const QByteArray name = filename.toUtf8();
-	const QByteArray hash = tth.toUtf8();
-
-	/*
-	 * Posted for the same reason, and this one matters most: a picture arriving in chat
-	 * is queued from the message path, so waiting here stopped the interface once per
-	 * message on a hub where people send pictures.
-	 */
-	m_thread->post([thread = m_thread, name, hash, size] {
-		QuickDC::Core* core = thread->core();
-		if (!core || !core->queue) return;
-
-		core->queue->add(name.constData(),
-		                 hash.isEmpty() ? nullptr : hash.constData(), size);
-
-		/* The queue's own event reports the new entry, which refreshes the figures. */
-	});
+	m_thread->submit(QuickDC::Api::Commands::Enqueue{filename.toStdString(), tth.toStdString(), size});
 }
 
-void Qdc::TransferBridge::enqueueForReading(const QString& filename,
-                                            const QString& tth, quint64 size,
-                                            const QString& hubUrl)
+void Qdc::TransferBridge::enqueueForReading(const QString& filename, const QString& tth,
+                                            quint64 size, const QString& hubUrl)
 {
 	if (!m_thread || filename.isEmpty() || tth.isEmpty()) return;
-
-	const QByteArray name = filename.toUtf8();
-	const QByteArray hash = tth.toUtf8();
-	const QByteArray only = hubUrl.toUtf8();
-
-	m_thread->post([thread = m_thread, name, hash, size, only] {
-		QuickDC::Core* core = thread->core();
-		if (!core || !core->queue) return;
-
-		QuickDC::QueueFile* file =
-			core->queue->add(name.constData(), hash.constData(), size);
-
-		/*
-		 * And looked for on that hub alone. The hash of a post is on one hub's board,
-		 * where its subscribers can read it; a search anywhere else tells another
-		 * operator which boards this client reads and reaches nobody who could
-		 * answer, since a post is offered by hash and only by that board's readers.
-		 */
-		if (file && !only.isEmpty()) file->searchOnlyOn(only.constData());
-
-		/*
-		 * Asked for at once rather than left to the rotation, and the outcome is not
-		 * consulted: a search that was refused for asking too often, or that could
-		 * not go out because no hub is logged in, is one the rotation will make
-		 * eventually. What matters is that the file somebody is waiting on is not at
-		 * the back of a two-minute queue.
-		 */
-		core->queue->requestSourceSearch(hash.constData());
-	});
+	m_thread->submit(QuickDC::Api::Commands::EnqueueForReading{
+		filename.toStdString(), tth.toStdString(), size, hubUrl.toStdString()});
 }
 
-void Qdc::TransferBridge::addFallbackSource(const QString& tth,
-                                            const QString& hubUrl,
+void Qdc::TransferBridge::addFallbackSource(const QString& tth, const QString& hubUrl,
                                             const QString& cid)
 {
 	if (!m_thread || tth.isEmpty() || hubUrl.isEmpty() || cid.isEmpty()) return;
-
-	const QByteArray hash = tth.toUtf8();
-	const QByteArray hub = hubUrl.toUtf8();
-	const QByteArray user = cid.toUtf8();
-
-	m_thread->post([thread = m_thread, hash, hub, user] {
-		QuickDC::Core* core = thread->core();
-		if (!core || !core->queue) return;
-
-		QuickDC::QueueFile* file = core->queue->getFileByTTH(hash.constData());
-		if (!file) return;
-
-		/*
-		 * Somebody else has answered, so this source is not needed - and the one
-		 * being held back is the party who would learn most from being asked. The
-		 * question is settled here rather than by the caller because only the queue
-		 * knows whether its search found anybody.
-		 */
-		if (file->countSources() > 0) return;
-
-		core->queue->addKnownSource(hash.constData(), hub.constData(),
-		                            user.constData());
-	});
+	m_thread->submit(QuickDC::Api::Commands::AddFallbackSource{
+		tth.toStdString(), hubUrl.toStdString(), cid.toStdString()});
 }
 
 void Qdc::TransferBridge::enqueue(const QString& filename, const Qdc::SearchHit& hit)
 {
 	if (!m_thread || filename.isEmpty()) return;
-
-	/* Nowhere to download from, which is the one thing this overload is for. */
 	if (hit.hubUrl.isEmpty() || hit.user.sourceId.isEmpty()) return;
 
-	const QByteArray name = filename.toUtf8();
-	const QByteArray hash = hit.tth.toUtf8();
-	const QByteArray hub = hit.hubUrl.toUtf8();
-	const QByteArray source = hit.user.sourceId.toUtf8();
-	const QByteArray remote = hit.name.toUtf8();
-	const quint64 size = hit.size;
-
-	m_thread->post([thread = m_thread, name, hash, hub, source, remote, size] {
-		QuickDC::Core* core = thread->core();
-		if (!core || !core->queue) return;
-
-		QuickDC::QueueFile* file = core->queue->add(
-			name.constData(), hash.isEmpty() ? nullptr : hash.constData(), size);
-
-		if (!file) return;
-
-		/*
-		 * The same shape the sessions use when a reply matches something already
-		 * queued, in ADC::HubSession::onSearchResult(): a source names the hub, the
-		 * user, and what the file is called on their side, and one we already have
-		 * is left alone rather than added twice.
-		 */
-		if (file->findSource(hub.constData(), source.constData())) return;
-
-		file->addSource(new QuickDC::FileSource(
-			hub.constData(), source.constData(),
-			remote.isEmpty() ? nullptr : remote.constData()));
-	});
+	m_thread->submit(QuickDC::Api::Commands::EnqueueFromSearch{
+		filename.toStdString(), hit.tth.toStdString(), hit.size,
+		hit.hubUrl.toStdString(), hit.user.sourceId.toStdString(), hit.name.toStdString()});
 }
