@@ -99,7 +99,7 @@ Qdc::TransferBridge::TransferBridge(CoreThread* thread, QObject* parent)
 	, m_thread(thread)
 {
 	if (m_thread)
-		connect(m_thread->channel(), &CoreChannel::event, this, &TransferBridge::onCoreEvent);
+		connect(m_thread->channel(), &CoreChannel::received, this, &TransferBridge::onCoreEvent);
 }
 
 Qdc::TransferBridge::~TransferBridge() = default;

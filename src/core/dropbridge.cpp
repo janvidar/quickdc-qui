@@ -85,7 +85,7 @@ Qdc::DropBridge::DropBridge(CoreThread* thread, QObject* parent)
 {
 	if (!m_thread) return;
 
-	connect(m_thread->channel(), &CoreChannel::event, this, &DropBridge::onCoreEvent);
+	connect(m_thread->channel(), &CoreChannel::received, this, &DropBridge::onCoreEvent);
 
 	/* Both families, since either may have been measured before this existed. */
 	m_thread->submit(QuickDC::Api::Commands::ReplayReachability{});

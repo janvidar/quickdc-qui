@@ -220,14 +220,19 @@ void Qdc::BoardBridge::onCoreEvent(const QuickDC::Api::Event& event)
 	std::visit([this](const auto& e) {
 		if constexpr (requires { e.store; e.request; })
 		{
-			if (e.store != m_store) return;
+			/* Settings name a store too; only a board store's answers are this bridge's. */
+			using Store = std::decay_t<decltype(e.store)>;
+			if constexpr (std::is_same_v<Store, QuickDC::Api::BoardStoreHandle>)
+			{
+				if (e.store != m_store) return;
 
-			const auto found = m_replies.find(e.request);
-			if (found == m_replies.end()) return;
+				const auto found = m_replies.find(e.request);
+				if (found == m_replies.end()) return;
 
-			const auto reply = std::move(found->second);
-			m_replies.erase(found);
-			reply(QuickDC::Api::Event(e));
+				const auto reply = std::move(found->second);
+				m_replies.erase(found);
+				reply(QuickDC::Api::Event(e));
+			}
 		}
 	}, event.value);
 }
@@ -327,7 +332,7 @@ Qdc::BoardBridge::BoardBridge(CoreThread* thread, TransferBridge* transfers,
 	static QuickDC::Api::BoardStoreHandle stores = 0;
 	m_store = ++stores;
 
-	connect(m_thread->channel(), &CoreChannel::event, this, &BoardBridge::onCoreEvent);
+	connect(m_thread->channel(), &CoreChannel::received, this, &BoardBridge::onCoreEvent);
 
 	m_thread->submit(QuickDC::Api::Commands::OpenBoardStore{
 		m_store, to_std(boards), to_std(documents), to_std(incoming)});

@@ -65,7 +65,7 @@ Qdc::SearchBridge::SearchBridge(CoreThread* thread, QObject* parent)
 	, m_thread(thread)
 {
 	if (m_thread)
-		connect(m_thread->channel(), &CoreChannel::event, this, &SearchBridge::onCoreEvent);
+		connect(m_thread->channel(), &CoreChannel::received, this, &SearchBridge::onCoreEvent);
 }
 
 Qdc::SearchBridge::~SearchBridge() = default;

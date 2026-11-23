@@ -53,7 +53,7 @@ class EventRelay final : public QuickDC::Api::EventSink {
 
 		void deliver(const QuickDC::Api::Event& event) override
 		{
-			emit channel->event(event);
+			emit channel->received(event);
 		}
 
 	private:
@@ -334,6 +334,9 @@ void Qdc::CoreThread::run()
 	QuickDC::Subscription events = m_core->subscribe(&relay);
 
 	m_core->runUntilStopped([this] {
+		/* Before running is said, so a bridge built on hearing it has the settings. */
+		m_channel->offerSnapshot(m_core->settingsSnapshot());
+
 		{
 			std::lock_guard<std::mutex> guard(m_mutex);
 			m_state = State::Running;

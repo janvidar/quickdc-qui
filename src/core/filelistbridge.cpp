@@ -42,7 +42,7 @@ Qdc::FilelistBridge::FilelistBridge(CoreThread* thread, QObject* parent)
 	, m_thread(thread)
 {
 	if (m_thread)
-		connect(m_thread->channel(), &CoreChannel::event, this, &FilelistBridge::onCoreEvent);
+		connect(m_thread->channel(), &CoreChannel::received, this, &FilelistBridge::onCoreEvent);
 }
 
 Qdc::FilelistBridge::~FilelistBridge() = default;

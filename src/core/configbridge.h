@@ -6,7 +6,6 @@
 #define HAVE_QUICKDC_QUI_CONFIGBRIDGE_H
 
 #include "coretypes.h"
-#include "relay.h"
 
 #include <QHash>
 #include <QList>
@@ -14,12 +13,15 @@
 #include <QPointer>
 #include <QVariantHash>
 #include <QPair>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
-#include <memory>
+#include <cstdint>
 
 class QTimer;
+
+namespace QuickDC { namespace Api { struct Event; } }
 
 namespace Qdc {
 
@@ -132,40 +134,31 @@ signals:
 	void changed(Qdc::ConfigStore store, const QString& group, const QString& key);
 
 private:
-	typedef QHash<QString, QString> Section;
-	typedef QHash<QString, Section> Store;
-
-	/** Fill the copy from the core. The one thing here that waits, and only once. */
-	void seed();
-
 	void flush();
+	void onCoreEvent(const QuickDC::Api::Event& event);
 
-	Store& mirror(ConfigStore store);
-	const Store& mirror(ConfigStore store) const;
-
-	/** The stored text, or null where there is no such group or key. */
+	/** The value in the channel's copy of the settings, or null. */
 	const QString* find(ConfigStore store, const QString& group,
 	                    const QString& key) const;
 
-	/** Change the copy, post the same change to the core, and report it. */
 	void write(ConfigStore store, const QString& group, const QString& key,
 	           const QString& value);
 
-	/**
-	 * Guarded, because the core thread is not this object's to outlive: both are
-	 * often children of the same parent, and Qt destroys them in the order they
-	 * were made, which puts the thread first.
-	 */
+	/** replaceGroup(), with the key changed() names - empty for several at once. */
+	void replaceGroup(ConfigStore store, const QString& group,
+	                  const QStringList& removeKeys,
+	                  const QList<QPair<QString, QString>>& values,
+	                  const QString& announced);
+
 	QPointer<CoreThread> m_thread;
-
-	std::shared_ptr<Relay> m_relay;
-
-	Store m_application;
-	Store m_session;
 
 	QTimer* m_saveTimer;
 	bool m_saveApplication = false;
 	bool m_saveSession = false;
+
+	/** Saves asked for and not yet answered, by request number. */
+	QSet<std::uint64_t> m_saving;
+	std::uint64_t m_nextSave = 0;
 };
 
 }

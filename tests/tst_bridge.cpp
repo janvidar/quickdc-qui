@@ -67,6 +67,8 @@ private slots:
 	void configRoundTripsThroughTheStore();
 	void aGroupIsReadInOneTrip();
 	void configWritesTheFileItWasGiven();
+	void aSettingTheCoreWritesReachesTheViews();
+	void aWriteThroughOneBridgeIsSeenThroughAnother();
 	void hubBridgeReportsErrorsOnTheCallingThread();
 	void transfersAndQueueStartEmpty();
 	void bridgesSurviveBeingDestroyedWhileRunning();
@@ -616,6 +618,52 @@ void TestBridge::configWritesTheFileItWasGiven()
 
 	config.notifyChanged();
 	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+}
+
+/**
+ * A setting the core changes by itself - an identity stored, a mode settled - used
+ * to reach no view at all: each bridge read the store once and then only ever
+ * learnt what it wrote. Now the change arrives as an event, the shared copy takes
+ * it in, and the bridge says so.
+ */
+void TestBridge::aSettingTheCoreWritesReachesTheViews()
+{
+	Qdc::ConfigBridge config(m_thread);
+	QSignalSpy changed(&config, &Qdc::ConfigBridge::changed);
+
+	const QString group = QStringLiteral("Written by the core");
+
+	QVERIFY(m_thread->runOnCoreBlocking([&] {
+		m_thread->core()->config->setString(group.toStdString(), "Value", "from the core");
+	}));
+
+	QTRY_COMPARE(config.getString(Qdc::ConfigStore::Application, group, QStringLiteral("Value")),
+	             QStringLiteral("from the core"));
+	QTRY_VERIFY(!changed.isEmpty());
+	QCOMPARE(changed.last().at(1).toString(), group);
+	QCOMPARE(changed.last().at(2).toString(), QStringLiteral("Value"));
+}
+
+/* Two bridges read one copy, so neither has to wait for the core to see the other's write. */
+void TestBridge::aWriteThroughOneBridgeIsSeenThroughAnother()
+{
+	Qdc::ConfigBridge writer(m_thread);
+	Qdc::ConfigBridge reader(m_thread);
+
+	const QString group = QStringLiteral("Shared");
+	writer.setString(Qdc::ConfigStore::Application, group, QStringLiteral("Key"),
+	                 QStringLiteral("now"));
+
+	QCOMPARE(reader.getString(Qdc::ConfigStore::Application, group, QStringLiteral("Key")),
+	         QStringLiteral("now"));
+
+	/* And an older value the core reports on its way through does not undo it. */
+	writer.setString(Qdc::ConfigStore::Application, group, QStringLiteral("Key"),
+	                 QStringLiteral("later"));
+	QVERIFY(m_thread->runOnCoreBlocking([] { }));
+	QTest::qWait(50);
+	QCOMPARE(reader.getString(Qdc::ConfigStore::Application, group, QStringLiteral("Key")),
+	         QStringLiteral("later"));
 }
 
 void TestBridge::hubBridgeReportsErrorsOnTheCallingThread()

@@ -278,7 +278,7 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 		return;
 	}
 
-	connect(m_thread->channel(), &CoreChannel::event, this, &HubBridge::onCoreEvent);
+	connect(m_thread->channel(), &CoreChannel::received, this, &HubBridge::onCoreEvent);
 
 	m_opened = m_thread->submit(QuickDC::Api::Commands::OpenHub{m_handle, m_url.toStdString()});
 	if (m_opened) sendPolicy();

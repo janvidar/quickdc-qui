@@ -24,7 +24,7 @@ Qdc::MediaBridge::MediaBridge(CoreThread* thread, ConfigBridge* config, QObject*
 	loadOffered(config);
 
 	if (m_thread)
-		connect(m_thread->channel(), &CoreChannel::event, this, &MediaBridge::onCoreEvent);
+		connect(m_thread->channel(), &CoreChannel::received, this, &MediaBridge::onCoreEvent);
 }
 
 Qdc::MediaBridge::~MediaBridge() = default;
