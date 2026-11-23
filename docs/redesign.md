@@ -168,13 +168,26 @@ earlier ones.
       Done: every change to a `Preferences` is told to its subscribers with a
       revision (C1a), which is what the config migration stands on. Left: the
       declared, typed schema and reads that never write (C1b).
-- [ ] C2. Network plan (R6): connection mode + port + bind address + forwarding
+- [x] C2. Network plan (R6): connection mode + port + bind address + forwarding
       + drop server -> one computed plan; one reconciler applies the difference
       (listen sockets, gateway mapping, measurement, INF re-announce to every
       hub). Replaces the `mapping_asked_for` / `measurement_owed` state machine.
-- [ ] C3. Listen port and bind address change without restart.
-- [ ] C4. Front end binds settings pages to setting/plan events; remove the
+- [x] C3. Listen port and bind address change without restart.
+- [x] C4. Front end binds settings pages to setting/plan events; remove the
       "tell the hubs again" control and the settings-path republish calls.
+      Landed together: `Core::Automation` subscribes to the configuration,
+      notes which of [Network], [User] and [Local hub] moved, and once per
+      loop turn computes the plan (`planFrom`, peeks only) and applies the
+      difference from the last one applied - reopening the peer port
+      (`DCServer::listen(Endpoint)`), starting/stopping/moving the gateway
+      mapping, measuring again or looking the address up, telling the hubs
+      (throttled), and waking the local hub. `ApplyPortForwarding`,
+      `RepublishClientInfo`, `AnnounceSettingsChanged`, the bridge methods
+      behind them and the settings page's hand-ordered sequence are gone;
+      the page no longer says a port change waits for a restart.
+      Not yet: the check-map-recheck state machine (`mapping_asked_for`,
+      `measurement_owed`) still drives the measurement loop itself; folding
+      it into the plan is the next step if it earns it.
 
 ## Decisions
 
@@ -248,3 +261,4 @@ earlier ones.
 - 2026-11-23: hub bridge migrated; GUI holds no core hub object. Green (1260).
 - 2026-11-23: board bridge migrated. Every bridge but config is on the boundary. Green (1260).
 - 2026-11-23: config bridge migrated (B5 complete), B6 done, C1a done. Green (1264).
+- 2026-11-23: C2, C3, C4 landed. Green (1269, 5 new network plan cases).

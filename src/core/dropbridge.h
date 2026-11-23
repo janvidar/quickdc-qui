@@ -5,14 +5,12 @@
 #ifndef HAVE_QUICKDC_QUI_DROPBRIDGE_H
 #define HAVE_QUICKDC_QUI_DROPBRIDGE_H
 
-
 #include <QDateTime>
 #include <QMetaType>
 #include <QObject>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
-
 
 namespace QuickDC { namespace Api { struct Event; } }
 
@@ -189,50 +187,6 @@ public:
 	void recheck();
 
 	/**
-	 * Bring the gateway mapping into line with what [Network] Mode now asks for,
-	 * starting a search or releasing what was granted.
-	 *
-	 * The wanted state is derived from the mode rather than read off UseUPnP,
-	 * because in automatic mode the stored key is not the answer: the mode is, and
-	 * it says to ask the gateway whatever that key happens to hold. See
-	 * QuickDC::networkModeKeys(), which is where that mapping lives so that the
-	 * core and a settings page cannot disagree about it.
-	 *
-	 * Called after the setting is written, so that turning it on forwards the
-	 * port now rather than at the next start: a user who turned it on because a
-	 * check said passive is waiting for that check to say something else.
-	 *
-	 * Returns at once and reports nothing. Whether the port ended up forwarded
-	 * is answered by measuring again, which is the only thing that can answer
-	 * it - a gateway reports success without knowing whether anything above it
-	 * honours the mapping.
-	 */
-	void applyForwarding();
-
-	/**
-	 * Have every hub this client is logged in to told again what it advertises.
-	 *
-	 * Whether a peer may connect here, and on which port, is part of what a hub is
-	 * told at login - so a hub joined before that answer changed is still handing
-	 * the old one to every other peer, and will go on doing so until something
-	 * happens to make this client announce itself again. Nothing else on the
-	 * settings path arranges that: saving writes the store and announces that the
-	 * configuration changed, and no client hub session listens for that.
-	 *
-	 * Kept apart from applyForwarding() because forwarding a port and republishing
-	 * an announcement are two different acts on two different things, and a caller
-	 * routinely wants one without the other: releasing a mapping changes nothing
-	 * any hub was told, and going passive changes what every hub was told while
-	 * having no mapping to release.
-	 *
-	 * Returns at once and reports nothing. The core throttles the update - this
-	 * schedules one rather than sending anything - so a save that touches several
-	 * settings may call it for each of them and still produce a single
-	 * announcement.
-	 */
-	void republishClientInfo();
-
-	/**
 	 * Ask a DROP server what address it sees this client at, and nothing further.
 	 *
 	 * For passive mode, where the address the world sees is worth showing but
@@ -288,7 +242,6 @@ private:
 	 * were made, which puts the thread first.
 	 */
 	QPointer<CoreThread> m_thread;
-
 
 	/**
 	 * One per family, because one run answers for one of them.

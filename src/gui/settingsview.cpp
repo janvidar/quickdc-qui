@@ -435,17 +435,9 @@ QWidget* Qdc::SettingsView::buildConnection()
 		"the check below is what settles whether it helped - and where it did not, the "
 		"mapping is given up again rather than left open.")));
 
-	/*
-	 * The one group on this page that a save does not put into force. The port and the
-	 * addresses to bind are read where the listening socket is opened, which happens
-	 * once when the client starts - see the DCServer constructor in
-	 * quickdc/core/api/server.cpp - so a page that said nothing would have somebody
-	 * change the port, save, and read a verdict about the port they had before.
-	 */
 	advanced->addRow(makeNote(tr(
-		"A changed port or bind address takes effect the next time QuickDC starts, "
-		"because the socket that listens for peers is opened once and saving does not "
-		"open it again. Everything else here applies as soon as it is saved.")));
+		"Everything here applies as soon as it is saved, the port and the bind "
+		"addresses included: the peer port is opened again where they now say.")));
 
 	advanced->addRow(makeNote(tr(
 		"The check below runs against the same server automatic uses, so that a port "
@@ -1010,8 +1002,6 @@ void Qdc::SettingsView::load()
 
 	m_mode->setCurrentIndex(qMax(0, m_mode->findData(networkModeToken(mode))));
 
-	/* What a save compares against to decide whether the mode actually moved. */
-	m_savedMode = mode;
 	m_port->setValue(network.value(QStringLiteral("Port")).toInt());
 	m_bind->setText(network.value(QStringLiteral("Bind")).toString());
 	m_address->setText(network.value(QStringLiteral("Address")).toString());
@@ -1243,60 +1233,10 @@ bool Qdc::SettingsView::save()
 	m_config->save(ConfigStore::Application);
 
 	/*
-	 * Storing a nickname is not the same as using it: the hubs republish only when
-	 * asked, and this is the ask.
+	 * Nothing else to do: the core follows the configuration, so the gateway
+	 * mapping, the listening port, the measurement and what every hub was told all
+	 * move with the settings just written, at the core's next turn.
 	 */
-	m_config->notifyChanged();
-
-	/*
-	 * What the saved mode now asks for, in the order it has to happen. After the
-	 * writes above rather than before them, because the core reads the settings
-	 * rather than being handed them, and the jobs carrying both run in the order
-	 * they were posted.
-	 */
-	if (m_drop)
-	{
-		const bool changed = (mode != m_savedMode);
-
-		/* The gateway mapping, brought into line with what the mode asks for. */
-		m_drop->applyForwarding();
-
-		if (changed)
-		{
-			/*
-			 * The hubs told again. Whether a peer may connect here, and on what
-			 * port, is part of what a hub was told at login, so a hub joined before
-			 * this changed is still handing the old answer to everybody on it. Only
-			 * on a change of mode: nothing else on this page alters what a hub was
-			 * told, and a saved nickname is not a reason to announce anything.
-			 */
-			m_drop->republishClientInfo();
-
-			/*
-			 * And measured again, because what is on screen answers for the settings
-			 * that were in force before this save.
-			 *
-			 * Which run depends on the mode, for the reason the core draws the same
-			 * distinction: a passive client is shown the address the world sees it
-			 * at, and must not have a stranger dial the peer port in order to find
-			 * that out. Saving always leaves a server named, so there is always
-			 * somebody to ask by the time this runs.
-			 *
-			 * Deliberately not done for a changed port or bind address, though they
-			 * are the settings a user is most likely to want answered for. The socket
-			 * is opened once at start-up, so a measurement taken now would be about
-			 * the port still being listened on rather than the one just saved - and a
-			 * verdict about the wrong port is worse than none, because it reads as an
-			 * answer. The note beside those fields says they wait for a restart.
-			 */
-			if (mode == NetworkMode::Passive)
-				m_drop->lookupPublicAddress();
-			else
-				m_drop->recheck();
-		}
-	}
-
-	m_savedMode = mode;
 
 	/*
 	 * Here rather than as the combo changes: a theme applied while somebody is moving

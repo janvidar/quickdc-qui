@@ -235,16 +235,6 @@ private:
 	 */
 	QString m_storedServer;
 
-	/**
-	 * The mode as last loaded or saved.
-	 *
-	 * A save acts on a change of mode - it tells the hubs again and measures again -
-	 * and does neither when the mode is the one already in force. Without this, every
-	 * save of an unrelated field would announce this client on every hub it is logged
-	 * in to and spend a session with a third party's server.
-	 */
-	NetworkMode m_savedMode = NetworkMode::Advanced;
-
 	/*
 	 * Announce active mode whatever was measured, which the core reads before it looks
 	 * at the measurement at all.

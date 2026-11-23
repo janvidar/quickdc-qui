@@ -98,20 +98,10 @@ Qdc::ReachabilityVerdict Qdc::DropBridge::verdict(bool ipv6) const
 	return ipv6 ? m_verdictV6 : m_verdictV4;
 }
 
-void Qdc::DropBridge::applyForwarding()
-{
-	if (m_thread) m_thread->submit(QuickDC::Api::Commands::ApplyPortForwarding{});
-}
-
 void Qdc::DropBridge::recheck()
 {
 	if (!m_thread || !m_thread->submit(QuickDC::Api::Commands::MeasureReachability{}))
 		emit checkFailed(tr("The QuickDC core is not running, so nothing could be measured."));
-}
-
-void Qdc::DropBridge::republishClientInfo()
-{
-	if (m_thread) m_thread->submit(QuickDC::Api::Commands::RepublishClientInfo{});
 }
 
 void Qdc::DropBridge::lookupPublicAddress(bool ipv6)

@@ -229,7 +229,3 @@ void Qdc::ConfigBridge::onCoreEvent(const QuickDC::Api::Event& event)
 	else emit saveFailed(store);
 }
 
-void Qdc::ConfigBridge::notifyChanged()
-{
-	if (m_thread) m_thread->submit(QuickDC::Api::Commands::AnnounceSettingsChanged{});
-}

@@ -616,8 +616,6 @@ void TestBridge::configWritesTheFileItWasGiven()
 	/* Not the other store: save() takes one, and must not write both. */
 	QVERIFY(!QFile::exists(path(QStringLiteral("session.conf"))));
 
-	config.notifyChanged();
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 }
 
 /**

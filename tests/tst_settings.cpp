@@ -71,7 +71,7 @@ private slots:
 	void aModeShowsOnlyThePlumbingItIsAbout();
 	void switchingTheModeRearrangesThePageWithoutASave();
 	void eachModeSaysInWordsWhatItDoesInstead();
-	void advancedSaysThePortWaitsForARestart();
+	void advancedSaysThePortAppliesWhenSaved();
 	void noModeOffersAFieldForTheReachabilityServer();
 	void aServerNamedByHandSurvivesTheForm();
 
@@ -1395,14 +1395,13 @@ void TestSettings::eachModeSaysInWordsWhatItDoesInstead()
 }
 
 /**
- * Advanced says that a changed port waits for a restart.
+ * Advanced says that a changed port applies when saved, as everything else does.
  *
- * The one group on this page a save does not put into force: the listening socket is
- * opened once when the client starts, so somebody who changes the port, saves, and
- * presses the check would be reading a verdict about the port they had before - and
- * would go looking at their router for it.
+ * It used to say the opposite, and was right to: the listening socket was opened
+ * once at start-up. The core now opens it again wherever the settings say, so the
+ * page must not send anybody to restart for it.
  */
-void TestSettings::advancedSaysThePortWaitsForARestart()
+void TestSettings::advancedSaysThePortAppliesWhenSaved()
 {
 	Qdc::Shares shares(m_config);
 	Qdc::SettingsView view(m_config, &shares);
@@ -1413,12 +1412,11 @@ void TestSettings::advancedSaysThePortWaitsForARestart()
 
 	const QString page = visibleText(view);
 
-	QVERIFY2(page.contains(QStringLiteral("takes effect the next time QuickDC starts")),
-	         "the page does not say that a changed port waits for a restart");
+	QVERIFY2(page.contains(QStringLiteral("the port and the bind addresses included")),
+	         "the page does not say that a changed port applies when saved");
 
-	QVERIFY2(page.contains(QStringLiteral("Everything else here applies as soon as it "
-	                                      "is saved")),
-	         "the page does not say that the rest of the group applies at once");
+	QVERIFY2(!page.contains(QStringLiteral("next time QuickDC starts")),
+	         "the page still sends somebody to restart for a changed port");
 }
 
 /**

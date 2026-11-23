@@ -109,15 +109,6 @@ public:
 	 */
 	void save(ConfigStore store);
 
-	/**
-	 * Tell the core that the configuration changed.
-	 *
-	 * Setting a key changes what is stored, not what is running: the hubs
-	 * republish a nickname or description only when they are asked to. This is
-	 * the ask. Harmless if nothing changed.
-	 */
-	void notifyChanged();
-
 signals:
 	/** A store was written. */
 	void saved(Qdc::ConfigStore store);
