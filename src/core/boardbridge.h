@@ -6,7 +6,6 @@
 #define HAVE_QUICKDC_QUI_BOARDBRIDGE_H
 
 #include "coretypes.h"
-#include "relay.h"
 
 #include <QElapsedTimer>
 #include <QHash>
@@ -16,12 +15,15 @@
 #include <QTimer>
 #include <QVector>
 
-#include <memory>
+#include <cstdint>
+#include <functional>
+#include <map>
 #include <utility>
+
+namespace QuickDC { namespace Api { struct Event; } }
 
 namespace Qdc {
 
-class BoardStore;
 class CoreThread;
 class HubBridge;
 class TransferBridge;
@@ -36,8 +38,9 @@ class TransferBridge;
  * ask - so this is where the entries are written down, and it is what answers the
  * cursor a subscription resumes from.
  *
- * The two halves it owns live on the core thread and are reached only from a job
- * there. A BoardIndex is one hub's assertions about one board, kept per hub because
+ * The two halves are the core's - a store it opens for this bridge and reaches
+ * only through commands, each answered by an event this matches to the request
+ * that asked. A BoardIndex is one hub's assertions about one board, kept per hub because
  * merging two hubs' assertions produces a board that exists nowhere. A PostStore is
  * the documents, keyed by hash alone and shared across every hub, because a post
  * carries no board and the same bytes are the same post wherever they are indexed.
@@ -211,7 +214,7 @@ public:
 	 * The index's own count over the entries it holds, so a tombstone is not counted
 	 * and the number cannot drift out of step with the board however arrivals and
 	 * markings interleave. It is kept on this side and brought up to date whenever a
-	 * job has been through the board, because a badge is asked for while the tree is
+	 * request has been through the board, because a badge is asked for while the tree is
 	 * being painted and nothing that draws may wait for the core thread.
 	 *
 	 * Zero for a board this has heard nothing about - and zero as well for one whose
@@ -599,10 +602,10 @@ private:
 	static QString boardKey(const QString& hubUrl, const QString& board);
 
 	/**
-	 * Take in what a job said about a board's read state, and say so where it moved.
+	 * Take in what the core said about a board's read state, and say so where it moved.
 	 *
 	 * @param whole whether 'read' is the whole of what the board reads as, or only the
-	 *        part of it a job looked at on its way past - which is what decides whether
+	 *        part of it the core looked at on its way past - which is what decides whether
 	 *        what is held is replaced or added to.
 	 */
 	void noteRead(const QString& hubUrl, const QString& board, int unread,
@@ -652,22 +655,21 @@ private:
 
 	QString m_directory;
 
+	/** The core's store for this bridge; see QuickDC::Api::BoardStoreHandle. */
+	std::uint64_t m_store = 0;
+
 	/**
-	 * The index and the documents, in a box that outlives this object.
-	 *
-	 * Owned by the core thread, including the job that deletes them - which runs
-	 * after this bridge is gone, so it cannot be reached through it. Every job
-	 * holds a reference, so the box lasts exactly as long as something still has
-	 * use for what is in it.
+	 * What to do with each answer still owed, by the request number it was asked
+	 * under. Made and run on this thread: only the answer crosses.
 	 */
-	struct StoreBox {
-		BoardStore* store = nullptr;
-	};
+	std::map<std::uint64_t, std::function<void(const QuickDC::Api::Event&)>> m_replies;
+	std::uint64_t m_nextRequest = 0;
 
-	std::shared_ptr<StoreBox> m_stores;
+	void onCoreEvent(const QuickDC::Api::Event& event);
 
-	/** Where an answer from the core lands; see Qdc::Relay. */
-	std::shared_ptr<Relay> m_relay;
+	/** Send 'command' to this bridge's store and run 'then' with its 'Reply'. */
+	template<typename Reply, typename Command, typename Then>
+	void ask(Command command, Then then);
 
 	/** The hubs being followed, and the key each one's boards are filed under. */
 	QHash<HubBridge*, QString> m_followed;
@@ -699,7 +701,7 @@ private:
 	 * whose document is on this disk is read from it the moment somebody opens the post,
 	 * and nothing that draws may wait for the core thread to say whether it is. Filled
 	 * where a board is read back and where a document is adopted, which are the two
-	 * moments a job has just looked.
+	 * moments the core has just looked.
 	 */
 	QSet<QString> m_held;
 

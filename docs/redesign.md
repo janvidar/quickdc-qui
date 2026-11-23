@@ -144,7 +144,14 @@ earlier ones.
             from the chat archive by command. Redirect/peer policy is handed
             over in advance (`SetHubPolicy`) instead of being atomics the core
             thread read out of a box the bridge shared.
-      - [ ] board
+      - [x] board: the index and post store are the core's
+            (`Api::Service::BoardStore`, `api/service_boards.cpp`), one per
+            bridge under a `BoardStoreHandle`; 13 commands, each answered by
+            an event echoing its request number. The bridge keeps its
+            completion code and runs it on its own thread when the matching
+            answer arrives (`BoardBridge::ask`). Checking that a document is
+            the post it was asked for (tiger tree root, parse, author) moved
+            into the core with it, and its refusals became codes.
 - [ ] B6. Remove `CoreThread::core()`, `runOnCoreBlocking`, `Relay` (R2, R4).
 
 ### Phase C - reactive state
@@ -231,3 +238,4 @@ earlier ones.
 - 2026-11-23: search bridge migrated. Green (1260).
 - 2026-11-23: transfer bridge migrated; snapshot requests correlated (D6). Green.
 - 2026-11-23: hub bridge migrated; GUI holds no core hub object. Green (1260).
+- 2026-11-23: board bridge migrated. Every bridge but config is on the boundary. Green (1260).
