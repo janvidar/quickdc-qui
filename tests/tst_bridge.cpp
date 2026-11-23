@@ -485,7 +485,7 @@ void TestBridge::aPostIsOfferedForTheSessionAndWithoutASlot()
 	int remembered = -1;
 
 	QVERIFY(m_thread->runOnCoreBlocking([&] {
-		QuickDC::Core* core = QuickDC::Core::getInstance();
+		QuickDC::Core* core = m_thread->core();
 		if (!core || !core->shares || !core->config) return;
 
 		postFree = core->shares->isSlotFreeByTTH(postTth.constData());

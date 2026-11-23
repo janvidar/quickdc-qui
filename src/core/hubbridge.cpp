@@ -294,10 +294,10 @@ namespace Qdc {
 class HubSession final : public QuickDC::Hub, public QuickDC::HubListener {
 
 public:
-	HubSession(HubBridge* bridge, std::shared_ptr<Relay> relay,
+	HubSession(QuickDC::Core& core, HubBridge* bridge, std::shared_ptr<Relay> relay,
 	           std::shared_ptr<HubBridge::SessionBox> holder,
 	           Samurai::IO::Net::URL* url)
-		: QuickDC::Hub(this, url)
+		: QuickDC::Hub(core, this, url)
 		, m_bridge(bridge)
 		, m_relay(std::move(relay))
 		, m_holder(std::move(holder))
@@ -743,7 +743,10 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 	 * through the relay and so not at all once the relay is detached.
 	 */
 	m_thread->call(m_relay, [holder = m_holder, relay = m_relay, address,
-	                         bridge = this] {
+	                         bridge = this, thread = m_thread] {
+		QuickDC::Core* core = thread->core();
+		if (!core) return false;
+
 		/*
 		 * Hub copies the URL it is given, so this one is ours to destroy - and
 		 * it has to be, since Hub keeps no reference to it.
@@ -751,7 +754,7 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 		Samurai::IO::Net::URL parsed(address.toStdString());
 		if (!parsed.isValid()) return false;
 
-		holder->session = new HubSession(bridge, relay, holder, &parsed);
+		holder->session = new HubSession(*core, bridge, relay, holder, &parsed);
 		return true;
 	}, [this, address](bool built) {
 		if (!built)
@@ -777,10 +780,8 @@ Qdc::HubBridge::~HubBridge()
 	 *
 	 * The box rather than a member, because by the time this job runs there is no
 	 * bridge left to read one from. A core that has already stopped drops the job
-	 * and leaks the session, which remains the lesser evil: ~Hub asks
-	 * Core::getInstance() to unregister it, and getInstance() builds a new Core
-	 * when there is none - so deleting it from this thread would resurrect the
-	 * whole reactor in order to tear one hub out of it.
+	 * and leaves the session to ~HubManager, which deletes every hub still
+	 * registered with it when the core goes.
 	 */
 	m_thread->post([holder = m_holder] {
 		if (!holder->session) return;

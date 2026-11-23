@@ -367,8 +367,7 @@ void TestHubList::aDirectoryWithNoConfigurationWritesTheDefaults()
 {
 	/*
 	 * Before any other test here names its own sources, because there is one store
-	 * and one core in a process - QuickDC::Core is a singleton, so a second one
-	 * cannot be built to hold a store of its own.
+	 * and one core in this suite, shared by every test in it.
 	 */
 	QVERIFY2(!m_config->contains(Qdc::ConfigStore::Application,
 	                             QStringLiteral("Hublists"), QStringLiteral("Total")),

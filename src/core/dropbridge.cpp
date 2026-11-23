@@ -182,7 +182,7 @@ public:
 		 * check having one session and one armed window. Both verdicts arrive
 		 * through this same listener as they are established.
 		 */
-		if (!QuickDC::startDropCheck(false))
+		if (!QuickDC::startDropCheck(*core, false))
 			return;
 	}
 
@@ -228,7 +228,7 @@ public:
 		 * server, and whatever it is reports through this same listener when it is
 		 * done - so there is nothing to say here and nothing to correct.
 		 */
-		if (!QuickDC::startAddressLookup(ipv6))
+		if (!QuickDC::startAddressLookup(*core, ipv6))
 			return;
 	}
 
@@ -312,16 +312,17 @@ Qdc::DropBridge::DropBridge(CoreThread* thread, QObject* parent)
 	CoreThread* core = m_thread.data();
 
 	m_thread->post([holder = m_watch, relay = m_relay, core, bridge = this] {
-		if (!core->core()) return;
+		QuickDC::Core* running = core->core();
+		if (!running) return;
 
 		holder->watcher = new DropWatcher(bridge, relay);
 
-		QuickDC::setDropCheckListener(holder->watcher);
+		QuickDC::setDropCheckListener(*running, holder->watcher);
 
 		/* Both families, since either may have been measured before this existed. */
 		for (const bool ipv6 : {false, true})
 		{
-			const QuickDC::DropVerdict known = QuickDC::lastDropVerdict(ipv6);
+			const QuickDC::DropVerdict known = QuickDC::lastDropVerdict(*running, ipv6);
 			if (known.ran) holder->watcher->replay(known);
 		}
 	});
@@ -333,8 +334,9 @@ Qdc::DropBridge::~DropBridge()
 
 	if (!m_thread) return;
 
-	m_thread->post([holder = m_watch] {
-		QuickDC::setDropCheckListener(nullptr);
+	m_thread->post([holder = m_watch, thread = m_thread.data()] {
+		if (QuickDC::Core* running = thread->core())
+			QuickDC::setDropCheckListener(*running, nullptr);
 
 		delete holder->watcher;
 		holder->watcher = nullptr;
