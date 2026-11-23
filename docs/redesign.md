@@ -174,6 +174,13 @@ earlier ones.
       still stand where they were), and the GUI's own defaults are separate
       constants (checked by hand: Port, Slots, Max downloads, Chunk size agree;
       the page now shows the default bind address).
+      Migrations: `config/migrations.{h,cpp}` - numbered steps, each run once,
+      `[Settings] Version` recording how far an installation got; run in the
+      core's constructor before anything reads either store. Step 1 settles
+      the connection mode (was a one-off call), step 2 unpins hub identities
+      left by closed sessions (nickname or password equal to the global one,
+      or the product-name fallback). The withdrawn-hublist filter stays in
+      the GUI: it is idempotent on every load, not a one-time step.
 - [x] C2. Network plan (R6): connection mode + port + bind address + forwarding
       + drop server -> one computed plan; one reconciler applies the difference
       (listen sockets, gateway mapping, measurement, INF re-announce to every
@@ -318,3 +325,4 @@ earlier ones.
   Still pinned the same way: the password (~HubSession writes it back,
   so a global password is copied into every hub's group) - harmless today
   but the same shape; worth the same treatment.
+- 2026-11-23: settings migrations; pinned identities unpinned once on upgrade; sessions no longer write back the password either. Green (1278).
