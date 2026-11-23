@@ -6,9 +6,7 @@
 #define HAVE_QUICKDC_QUI_HUBLISTBRIDGE_H
 
 #include "coretypes.h"
-#include "relay.h"
 
-#include <QHash>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -16,24 +14,24 @@
 #include <memory>
 #include <QVector>
 
+namespace QuickDC { namespace Api { struct Event; } }
+
 namespace Qdc {
 
 class CoreThread;
-class HubListFetch;
 
 /**
  * Downloading a public hublist, as a view sees it.
  *
  * The download itself is the core's - QuickDC::HubList fetches the XML over HTTP,
  * unpacks it if it arrived compressed, and refuses a list it could not read in
- * full - and all of that happens on the core thread, because the HTTP client is a
- * socket registered with the reactor. So each source gets a core side half, built
- * inside a job and only ever called from there, and the hubs it names cross back
- * as a value type on a queued signal.
+ * full. This asks for one with a FetchHubList command and hears how it went from
+ * the core's events, so nothing here touches a core object or outlives one.
  *
  * Lives on the thread that constructed it. One outstanding download per source
  * URL: asking again for a list already on its way is ignored rather than queued,
- * since the answer would be the same list.
+ * since the answer would be the same list. A bridge destroyed while one is on
+ * its way leaves it to finish in the core and simply hears nothing of it.
  */
 class HubListBridge final : public QObject {
 	Q_OBJECT
@@ -43,63 +41,26 @@ public:
 	~HubListBridge() override;
 
 	/**
-	 * Fetch the hublist at 'url'.
+	 * Download the hublist at 'url' and report it with fetched() or failed().
 	 *
-	 * Answered exactly once by fetched() or failed(), always after this has
-	 * returned and always with the URL as it was given, so a caller with several
-	 * in flight can tell them apart. An address that is not an http or https URL
+	 * An address that is not http or https, or a core that is not running,
 	 * is refused without troubling the core thread, and a repeat while one is
-	 * outstanding does nothing.
+	 * on its way is ignored.
 	 */
 	void fetch(const QString& url);
 
-	/** Whether a download of 'url' is on its way. */
 	bool isFetching(const QString& url) const;
-
-	/** Whether any download is on its way. */
 	bool isFetching() const;
 
 signals:
-	/** The hubs the list named, which may legitimately be none. */
 	void fetched(const QString& url, const QVector<Qdc::HubListEntry>& hubs);
-
-	/** @param reason a sentence fit to show whoever asked for the list. */
 	void failed(const QString& url, const QString& reason);
 
 private:
-	friend class HubListFetch;
-
-	/** Report a failure without going anywhere near the core. */
+	void onCoreEvent(const QuickDC::Api::Event& event);
 	void refuse(const QString& url, const QString& reason);
 
 	CoreThread* m_thread;
-
-	/**
-	 * The core side half per source, built on first use.
-	 *
-	 * Kept rather than deleted when a download ends: a HubList owns the HTTP
-	 * client that is calling back into it, so tearing one down from inside its own
-	 * event would destroy the object dispatching it. There are a handful of
-	 * sources and each is a client with no socket open between downloads.
-	 *
-	 * Only ever touched from a job on the core thread.
-	 */
-	/**
-	 * One downloader per source, in a box that outlives this object.
-	 *
-	 * Owned by the core thread, including the job that deletes them - which runs
-	 * after this bridge is gone, so it cannot be reached through it.
-	 */
-	struct FetchBox {
-		QHash<QString, HubListFetch*> fetches;
-	};
-
-	std::shared_ptr<FetchBox> m_fetches;
-
-	/** Where an event from the core lands; see Qdc::Relay. */
-	std::shared_ptr<Relay> m_relay;
-
-	/** What is outstanding, as this thread sees it; see isFetching(). */
 	QSet<QString> m_busy;
 };
 

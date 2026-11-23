@@ -98,17 +98,26 @@ earlier ones.
       `Core::post`, `Core::requestStop`, `Core::runUntilStopped(running)`;
       `CoreThread` keeps its state machine and blocking call but owns no
       queue, notifier or loop of its own.
-- [ ] B2. Value types for what crosses the boundary (`QuickDC::Api`): user,
+- [~] B2. Value types for what crosses the boundary (`QuickDC::Api`): user,
       hub state, chat line, queue item, transfer, search result, board entry,
       reachability verdict, setting value. No pointers into the core.
-- [ ] B3. `Api::Event` (a variant of those) and an `EventSink` the host supplies
+      Grown per bridge in `api/protocol.h`; hublist entries so far
+      (`api/hublistentry.h`, so the protocol drags in no HTTP headers).
+- [x] B3. `Api::Event` (a variant of those) and an `EventSink` the host supplies
       - the core calls it on its own thread with a value; the host marshals.
-- [ ] B4. `Api::Command` set and `Core::submit()`, replacing the GUI's lambdas
-      that reach into `core->queue`, `core->hubs` and the rest.
-- [ ] B5. Migrate bridges one at a time, smallest first: hublist, drop,
+      `Core::subscribe(EventSink*)` (core thread), fed by `Api::Service`.
+- [x] B4. `Api::Command` set and `Core::submit()`, replacing the GUI's lambdas
+      that reach into `core->queue`, `core->hubs` and the rest. Mechanism
+      in place (`Core::submit`, `Api::Service::execute`); commands are added
+      with the bridge that needs them.
+- [~] B5. Migrate bridges one at a time, smallest first: hublist, drop,
       media, config, filelist, search, transfer, hub, board. Each one: stop
       touching core objects, stop implementing core listener interfaces, consume
       events. GUI suite green after each.
+      - [x] hublist: `FetchHubList` / `HubListFetched` / `HubListFailed`;
+            no Relay, no core object, no listener in the bridge.
+      - [ ] drop  - [ ] media  - [ ] config  - [ ] filelist  - [ ] search
+      - [ ] transfer  - [ ] hub  - [ ] board
 - [ ] B6. Remove `CoreThread::core()`, `runOnCoreBlocking`, `Relay` (R2, R4).
 
 ### Phase C - reactive state
@@ -133,6 +142,17 @@ earlier ones.
   `TimerManager`, `OSBase`) are left for now. They are the platform layer's,
   and R1 is about the core. Revisit after Phase B, since they are what still
   stops two cores existing in one process.
+- D4. The GUI-isolation rule stays: `qdcgui` cannot see a core header
+  (enforced by the link). So `Api::Event` and `Api::Command` are structs
+  around their variants (forward-declarable), and the event signal lives on
+  `Qdc::CoreChannel`, whose header only bridge sources include.
+  `CoreThread` subscribes one sink and re-emits through the channel; Qt's
+  queued connection is what carries the value across, and its automatic
+  disconnect is what ends a destroyed bridge's interest - which is R3/R4
+  without a Relay.
+- D5. A hublist fetch now belongs to the core's service, not the bridge
+  that asked: a bridge destroyed mid-fetch lets it finish and hears
+  nothing. Previously it aborted the download.
 - D3. Keep the protocol in-process and C++-typed (a `std::variant`), not
   serialised. Serialising for a remote front end is easy later from value
   types and costs nothing to defer.
@@ -163,3 +183,5 @@ earlier ones.
   `CID::getInstance` or `global_cid` left anywhere. Full suite green (1247);
   ASan core failures identical to baseline, no new sanitizer errors.
 - 2026-11-23: B1 landed. Full suite green (1254, 7 new inbox cases).
+- 2026-11-23: B3/B4 mechanism + hublist bridge migrated (B5). 1258 + 2 new
+  GUI cases, green.

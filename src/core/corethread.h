@@ -19,9 +19,12 @@
 
 namespace QuickDC {
 class Core;
+namespace Api { struct Command; }
 }
 
 namespace Qdc {
+
+class CoreChannel;
 
 /**
  * Owns the QuickDC core and the thread it runs on.
@@ -177,6 +180,16 @@ public:
 	 */
 	QuickDC::Core* core() const;
 
+	/**
+	 * Hand 'command' to the core; what comes of it arrives as coreEvent().
+	 *
+	 * @return false where the core is not running and the command was dropped.
+	 */
+	bool submit(const QuickDC::Api::Command& command);
+
+	/** Where what the core reports arrives, as values; see corechannel.h. */
+	CoreChannel* channel() const { return m_channel; }
+
 signals:
 	/** The core is up. Delivered on the thread that connected to it. */
 	void coreStarted();
@@ -199,6 +212,8 @@ private:
 		Stopping,
 		Stopped
 	};
+
+	CoreChannel* m_channel;
 
 	/** Set and cleared under m_mutex, so post() never reaches a core being deleted. */
 	QuickDC::Core* m_core = nullptr;

@@ -3,6 +3,7 @@
  */
 
 #include "corethread.h"
+#include "corechannel.h"
 
 #include <api/core.h>
 
@@ -45,11 +46,27 @@ struct Rendezvous {
  */
 const int SLOW_CALL_MS = 100;
 
+/* Re-emits every event the core reports as the thread's own signal. */
+class EventRelay final : public QuickDC::Api::EventSink {
+	public:
+		explicit EventRelay(Qdc::CoreChannel* channel) : channel(channel) { }
+
+		void deliver(const QuickDC::Api::Event& event) override
+		{
+			emit channel->event(event);
+		}
+
+	private:
+		Qdc::CoreChannel* channel;
+};
+
 }
 
 Qdc::CoreThread::CoreThread(QObject* parent)
 	: QThread(parent)
+	, m_channel(new CoreChannel(this))
 {
+
 	setObjectName(QStringLiteral("quickdc-core"));
 }
 
@@ -252,6 +269,13 @@ bool Qdc::CoreThread::runOnCoreBlocking(std::function<void()> job, int timeout)
 	return answered;
 }
 
+bool Qdc::CoreThread::submit(const QuickDC::Api::Command& command)
+{
+	std::lock_guard<std::mutex> guard(m_mutex);
+	if (m_state != State::Running || !m_core) return false;
+	return m_core->submit(command);
+}
+
 void Qdc::CoreThread::run()
 {
 	QString failure;
@@ -306,6 +330,9 @@ void Qdc::CoreThread::run()
 	 * Running only once the core's inbox accepts work, so that a post() made the
 	 * moment startAndWait() returns is never refused.
 	 */
+	EventRelay relay(m_channel);
+	QuickDC::Subscription events = m_core->subscribe(&relay);
+
 	m_core->runUntilStopped([this] {
 		{
 			std::lock_guard<std::mutex> guard(m_mutex);
@@ -325,6 +352,7 @@ void Qdc::CoreThread::run()
 		m_core = nullptr;
 	}
 
+	events.reset();
 	delete built;
 
 	{

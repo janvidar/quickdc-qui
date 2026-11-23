@@ -12,6 +12,7 @@ add_library(qdcbridge STATIC
     configbridge.h
     completed.cpp
     completed.h
+    corechannel.cpp
     corethread.cpp
     corethread.h
     coretypes.h
