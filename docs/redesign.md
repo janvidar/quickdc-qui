@@ -170,16 +170,16 @@ earlier ones.
       `config/settings.h` declares every key the core reads (group, type,
       default) and every core read of the configuration goes through it,
       peeking - none writes a default back. A saved empty bind address means
-      the default. Not done: versioned migrations (the two one-off fix-ups
-      still stand where they were), and the GUI's own defaults are separate
-      constants (checked by hand: Port, Slots, Max downloads, Chunk size agree;
-      the page now shows the default bind address).
+      the default. The GUI reads the same declarations, re-exported by the
+      bridge as `Qdc::Settings` (src/core/uisettings.h), with the interface's
+      own settings declared there once (2026-11-24, see Log).
       Migrations: `config/migrations.{h,cpp}` - numbered steps, each run once,
       `[Settings] Version` recording how far an installation got; run in the
       core's constructor before anything reads either store. Step 1 settles
       the connection mode (was a one-off call), step 2 unpins hub identities
       left by closed sessions (nickname or password equal to the global one,
-      or the product-name fallback). The withdrawn-hublist filter stays in
+      or the product-name fallback), step 3 resets a reachability server the
+      page can no longer change. The withdrawn-hublist filter stays in
       the GUI: it is idempotent on every load, not a one-time step.
 - [x] C2. Network plan (R6): connection mode + port + bind address + forwarding
       + drop server -> one computed plan; one reconciler applies the difference
@@ -244,15 +244,12 @@ earlier ones.
   makes this explicit.
 - `Preferences::setGroup()` is a cursor shared by every reader - C1.
 - The 78 baseline LeakSanitizer reports (see Baseline).
-- Every sink is told every event, and Qt queues a copy per connected
-  bridge: a hub's user list at login is thousands of `UserUpdated` events,
-  each copied to ~10 receivers that mostly ignore it. Fine so far; if it
-  shows, route by handle in `CoreChannel` (one signal per hub) before
-  anything cleverer.
-- Search tokens are numbered per SearchBridge from 1, so two bridges would
-  hand out the same token and take each other's SearchSent (and results).
-  Pre-existing; the app builds one. Move numbering into the core when the
-  hub bridge's results move.
+- ~~Every sink is told every event, and Qt queues a copy per connected
+  bridge~~ - done 2026-11-24: an event with a hub goes to that hub's
+  `HubRoute` only (see Log).
+- ~~Search tokens are numbered per SearchBridge from 1~~ - already settled
+  in B5: `SearchBridge::start()` numbers from one process-wide counter, and
+  a result carries its token back to the search that asked. Nothing to move.
 
 - libdrop-cpp `droptest` bounds assertion (baseline).
 - samurai `autotest` load sensitivity under `-j32` (baseline).
@@ -305,8 +302,8 @@ earlier ones.
 
 ## Next
 
-- Versioned settings migrations; share the schema's defaults with the GUI.
-- samurai's own singletons (D2).
+- samurai's own singletons (D2). The last of the global state; worth it only
+  to run more than one core in a process, or to test with several.
 - 2026-11-23: smoke test of the real app (driver in the session scratchpad):
   port change without restart, local hub enabled live, hublists, a public
   ADCS hub, mode switches, config file holding only what was saved - all
@@ -334,3 +331,58 @@ earlier ones.
   (automatic mode) is now let go on the same evidence as one the loop asked
   for; the ownership distinction existed only for front-end-made mappings,
   which no longer exist. 9 new cases; 1287 green; ASan unchanged.
+- 2026-11-24: smoke run on the maintainer's own setup found four things, all
+  fixed and verified there:
+  - Queued sources (quickdc `7a4c39e`, `c24e568`): a source that could not be
+    connected to was asked again on every scheduler pass, several times a
+    second, for ever - it was claimed after the ask and a failed ask recorded
+    no failure. A source's user is now looked up on whichever hub they are on
+    (a CID is the same on every hub), one who is away is left for the retry
+    interval without counting against the source, and a search reply relayed
+    by a hub no longer records a source with an empty CID.
+  - Migration step 3 (`51659f9`): a reachability server stored before the
+    page stopped offering one (here `drop.extatic.org`, which no longer
+    resolves) outranked the default for good, so every check failed. Put
+    back to `drop.quickdc.org` once; an empty one stays empty (that is how a
+    client opts out of asking a third party).
+  - "Occupied" on a retry (`6a089fb`, pre-existing): the probe answered a
+    DROP challenge from whatever had arrived when the connection became
+    readable. Split across segments, half the nonce went back - or none,
+    when the prefix itself was cut and the line was dropped as unknown - and
+    the server read a wide open port as taken by something else. A challenge
+    is now read off the socket and answered from the whole line.
+    `challengeProgress()`; three cases. Six rechecks in a row against the
+    real server: all open; with the old probe, one of six occupied.
+  - IPv6 on a host with no IPv6 route (`722b5b4`, `a57802d`): the check ran
+    after every IPv4 one and again on every refresh (a check that never
+    completes is never fresh), and logged an ERROR each time. Skipped where
+    no interface that is up holds a global address (`hostHasGlobalIPv6()`:
+    link-local and the unique-local one a VPN overlay hands out do not
+    count); the error line, a duplicate of the debug one, is gone.
+  Pushed to gitea; the redesign clone is deleted. 1300 green.
+- 2026-11-24: passwords no longer pinned per hub. The migration unpinned the
+  copies already made, but two paths still made new ones: NMDC wrote an empty
+  password into the hub's group when the hub refused one - and an empty value
+  per hub outranks the global password for good - and typing the global
+  password at a hub's prompt kept a copy of it there. `Settings::writeForHub()`
+  keeps a per-hub value only where it differs from the global one and is not
+  empty; a refused password is removed on both protocols (ADC kept offering it
+  on every run). 4 cases, each failing without the fix.
+- 2026-11-24: one definition per setting, GUI included (C1b's last part). The
+  settings page, hubs view, hub pane, search, home page and theme read every
+  setting through `Qdc::Settings` (src/core/uisettings.h): the core's from its
+  schema, re-exported by the bridge library (`constinit`) because a view may
+  not include a core header, and the interface's own (chat media, boards,
+  theme) defined there once rather than in two views. `ConfigBridge::read()`
+  / `write()` take a setting. The copies had drifted: an unset nickname and
+  description showed empty while the core announced "QuickDC" and "QuickDC
+  user" (and Save then wrote the empty ones); "Active mode" defaulted on in
+  the GUI and off in the core. `[Network] Mode` and `[Downloads] Directory`
+  joined the core schema. The home page still asks for a nickname until one
+  other than the default is chosen.
+- 2026-11-24: hub events routed. `CoreChannel::deliver()` sends an event with
+  a hub to that hub's `HubRoute`, queued once to the channel and handed on in
+  the GUI thread; everything else stays on `received()`. Only `HubBridge`
+  consumed hub events, so nothing else changes. Previously each `UserUpdated`
+  at login was queued as a copy to every bridge (~10). 1 case; identity,
+  census and full smoke scenarios pass against adcs://adcs.uhub.org:1511.
