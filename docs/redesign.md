@@ -251,7 +251,7 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   the verdict. An interactive mode is the same parser reading a terminal.
 - Scenarios are ctest tests: a script plus the files it shares and expects.
 
-- [ ] F1. The CLI: core threads, the event pump, the script language, JSON event
+- [x] F1. The CLI: core threads, the event pump, the script language, JSON event
       output, `wait`/`expect`, exit status, `--home`; hubs, chat and settings.
 - [ ] F2. Offline scenarios on loopback: join a local hub, chat, private message,
       search, file list, download (active, passive, TLS), as ctest tests.
@@ -491,3 +491,26 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   once, either destroyed first. samurai 1184 + 11 new, libdrop 109, full suite
   1360, sanitizer build 1313, all green; the four smoke scenarios pass against
   adcs://adcs.uhub.org:1511 and drop.quickdc.org.
+- 2026-11-24: F1 done. `qdc` (quickdc/cli, namespace QuickDC::Cli): cores on
+  threads of their own via `runUntilStopped()`, commands in by `submit()`, events
+  out as JSON lines; `preset`/`set`/`save`/`open`/`connect`/`chat`/`pm`/`wait`/
+  `sleep`; one file may include api/core.h, the rest only api/protocol.h (lint
+  `cli_isolation`). The core gained `Core(const Core::Home&)`: everything a core
+  writes - settings, session, queue, hash cache, chat, keys, lists, downloads, the
+  local hub's acl, motd and boards - lives under that directory, and presets are
+  applied before migrations so a test core contacts nobody. `Core()` is that with
+  ~/.quickdc, unchanged for the GUI (smoke scenarios pass).
+  The two-core chat scenario found a real race the move to a loop per core had
+  opened: the ADC and NMDC command proxies read into one static buffer, so two
+  cores on two threads read each other's bytes (a client saw the hub's greeting
+  to the other core where its own user list belonged, about one run in twenty).
+  Every such scratch buffer is now per thread (both proxies, SID and hash
+  formatting) or local (the hub's uptime message), and the process-wide counters
+  (timer serials, connection tickets, manual connection tokens) are atomic.
+  200 runs in a row and 3x32 in parallel: no failures. Still process-wide by
+  nature: TLS keys (the last core built presents its certificate for all - F2's
+  TLS transfers between two cores in one process will need per-core keys), the
+  trace log files, the default proxy settings. Api gaps noted for F3/F4: no event
+  for the listening port or the local hub coming up, no core-up/snapshot event,
+  private messages need the hub's id for a user, no acknowledgements for
+  OpenHub/Connect/Chat, HubExtensions repeated per extension.
