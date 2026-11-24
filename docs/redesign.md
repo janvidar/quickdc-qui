@@ -202,14 +202,38 @@ earlier ones.
       `measurement_owed`) still drives the measurement loop itself; folding
       it into the plan is the next step if it earns it.
 
+### Phase E - samurai's event loop (D2)
+
+Goal: nothing in samurai, libdrop or the core reaches for process-wide state, so
+two cores - or two test environments - can live in one process without sharing a
+poll, a timer heap or a message queue.
+
+- [x] E1. `Samurai::EventLoop` owns the socket monitor, the timers, the posted
+      messages, the DNS resolver pool and the bandwidth counters; the
+      `getInstance()`s and `setSocketMonitor()` go. `OS` stays: it only caches
+      facts about the host.
+- [x] E2. Everything that registers with a loop is given one: every socket
+      constructor (an accepted socket takes its server's), `Timer`,
+      `MessageListener` and posting, `InetAddress::lookup()` and the resolvers,
+      and the components built on them (HTTP client and `fetch()`, UPnP SSDP,
+      gateway and port mapper, SOCKS resolver).
+- [x] E3. A loop destroyed first detaches what still points at it - registered
+      sockets, timers, listeners - so a late destructor does nothing rather than
+      touch freed memory. Otherwise the rule is plain: a loop outlives what is
+      made on it.
+- [x] E4. samurai's and libdrop's tests make a loop per case (or per file)
+      instead of priming singletons.
+- [x] E5. The core owns one `EventLoop` and makes everything through it; its
+      tests and helpers likewise. A test runs two cores in one process, each
+      with its own sockets and timers.
+
 ## Decisions
 
 - D1. Work in a separate clone, on `redesign` branches, so the working
   checkout (with uncommitted diagnostic work in quickdc) is untouched.
 - D2. samurai's own singletons (`SocketMonitor`, `MessageHandler`,
-  `TimerManager`, `OSBase`) are left for now. They are the platform layer's,
-  and R1 is about the core. Revisit after Phase B, since they are what still
-  stops two cores existing in one process.
+  `TimerManager`, `OSBase`) were left through Phase B. Taken up 2026-11-24
+  (Phase E below).
 - D4. The GUI-isolation rule stays: `qdcgui` cannot see a core header
   (enforced by the link). So `Api::Event` and `Api::Command` are structs
   around their variants (forward-declarable), and the event signal lives on
@@ -410,3 +434,20 @@ earlier ones.
   peer through traversal and checks it arrives from the hub port. 40 parallel
   runs of `autotest`: no socket failures (3-6 before); full suite 1353 green
   three times running.
+- 2026-11-24: Phase E (D2) done. `Samurai::EventLoop` owns the socket monitor,
+  timers, posted messages, bandwidth counters and DNS resolver pool; every
+  socket, timer, message listener and lookup, and the HTTP, UPnP, SOCKS and
+  libdrop components on them, take the loop explicitly. No `getInstance()` is
+  left but samurai's `OS` (host facts) and the CLI tool's console (stdin). A
+  loop destroyed first detaches its sockets, timers, listeners and resolvers.
+  Found on the way: OpenSSL's process state was torn down by whichever monitor
+  went first - now reference-counted; messages were process-wide, so one core's
+  posts reached another's listeners; the local hub's claim-check record was a
+  file-scope list shared by every hub, now `ClaimChecks` per hub. The core owns
+  its loop (declared first, destroyed last); `run()` keeps its turn order (poll
+  and due timers, hash, transfers, queue, timers, messages, reconcile).
+  `twocores.tcc` runs two full cores in one process - sockets, timers and
+  messages dispatched only by their own core, both running on two threads at
+  once, either destroyed first. samurai 1184 + 11 new, libdrop 109, full suite
+  1360, sanitizer build 1313, all green; the four smoke scenarios pass against
+  adcs://adcs.uhub.org:1511 and drop.quickdc.org.
