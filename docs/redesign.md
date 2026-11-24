@@ -253,7 +253,7 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
 
 - [x] F1. The CLI: core threads, the event pump, the script language, JSON event
       output, `wait`/`expect`, exit status, `--home`; hubs, chat and settings.
-- [ ] F2. Offline scenarios on loopback: join a local hub, chat, private message,
+- [x] F2. Offline scenarios on loopback: join a local hub, chat, private message,
       search, file list, download (active, passive, TLS), as ctest tests.
 - [ ] F3. Core policy out of the GUI, each step covered by a CLI scenario before
       the GUI is switched to it: search results matched to their search in the
@@ -514,3 +514,29 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   for the listening port or the local hub coming up, no core-up/snapshot event,
   private messages need the hub's id for a user, no acknowledgements for
   OpenHub/Connect/Chat, HubExtensions repeated per extension.
+- 2026-11-24: F2 done, but for passive to passive. qdc gained `file`, `share`,
+  `share-status`, `search`, `download`, `browse`, `transfers`, `priority`,
+  `dequeue`, `expect-file`, and `wait` gained `*`, `!=` and `remember`/`$NAME`.
+  Api: `ReportShare` / `ShareStatus` (files, size, still hashing - published
+  whenever hashing falls idle), and `Transfer` carries `secure` and
+  `peerKeyprint`. Scenarios on loopback: search, file list, active download,
+  passive download (reverse connect), encrypted download in both directions
+  checking each side saw the other's own certificate; 54 runs each, half in
+  parallel, no failures. TLS keys are per event loop (`TlsContext`, a loop
+  without keys uses the process-wide ones), so each core presents its own
+  certificate. Found and fixed: every file list uploaded over ADC (and NMDC's
+  ADCGET) leaked; the ADC client never read SF; parallel runs could be offered
+  the same free port (now claimed for the life of the process); a download that
+  occasionally never started, last seen with the process-wide OpenSSL context
+  that two core threads released and rebuilt under each other - not seen in
+  ~800 runs since contexts became per loop, so likely, not proven.
+  Passive to passive cannot work on loopback: with no NAT to drop the first SYN,
+  the kernel answers it with a reset before the other side's dial exists, so the
+  simultaneous open traversal depends on never lines up. Testing it needs an
+  emulated NAT (network namespaces, root) or the traversing side briefly
+  listening on its hub port. Open for F3/F4: a passive core still sends active
+  connection requests if "Active mode" is stored as 1 (peer connections read the
+  raw key, not the mode - the connection-mode derivation item); search results
+  carry no free slots; no event says which connection path a transfer took;
+  NMDC's legacy $Get/$GetListLen still have the file list ownership pattern;
+  the local hub has no TLS, so no adcs:// scenario.
