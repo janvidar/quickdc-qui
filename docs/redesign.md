@@ -243,7 +243,7 @@ earlier ones.
   that but nothing reaches it (jobs posted after stop are dropped). B1
   makes this explicit.
 - `Preferences::setGroup()` is a cursor shared by every reader - C1.
-- The 78 baseline LeakSanitizer reports (see Baseline).
+- ~~The 78 baseline LeakSanitizer reports~~ - gone 2026-11-24 (see Log).
 - ~~Every sink is told every event, and Qt queues a copy per connected
   bridge~~ - done 2026-11-24: an event with a hub goes to that hub's
   `HubRoute` only (see Log).
@@ -251,8 +251,9 @@ earlier ones.
   in B5: `SearchBridge::start()` numbers from one process-wide counter, and
   a result carries its token back to the search that asked. Nothing to move.
 
-- libdrop-cpp `droptest` bounds assertion (baseline).
-- samurai `autotest` load sensitivity under `-j32` (baseline).
+- ~~libdrop-cpp `droptest` bounds assertion~~ and ~~samurai `autotest` load
+  sensitivity~~ - both fixed 2026-11-24, both samurai bugs (see Log); neither
+  suite needs leaving out of a run any more.
 
 ## Log
 
@@ -386,3 +387,26 @@ earlier ones.
   consumed hub events, so nothing else changes. Previously each `UserUpdated`
   at login was queued as a copy to every bridge (~10). 1 case; identity,
   census and full smoke scenarios pass against adcs://adcs.uhub.org:1511.
+- 2026-11-24: the build is warning-free. The NMDC client tag was written into
+  a fixed 50 bytes, which a long version or large counts cut short - '>'
+  included; it is now built to length, with a test. The rest were cosmetic.
+- 2026-11-24: LeakSanitizer clean. The 78 failures were 14 distinct leaks, three
+  of them real: `Hub::send()` dropped its reference to a command no queue took
+  without deleting it; the welcome message was allocated on every login to the
+  local hub and leaked when there was no MOTD file (the usual case); and every
+  ADCGET/ADCSND copied its file name for a session that only borrows it. The
+  rest were test leaks. Whole suite under ASan/UBSan: 1306 of 1306.
+- 2026-11-24: the two library suites run clean, so `-E '^(autotest|droptest)$'`
+  is no longer needed. `droptest` aborted on samurai's `Buffer::append()`
+  taking `&buf[0]` of an empty buffer for an empty datagram. `autotest`'s load
+  failure was `sockets_a_second_connection_can_share_a_local_port`, and behind
+  it a real bug: NAT traversal dials from the hub connection's port, but the
+  hub connection was never made shareable, so on Linux every traversal failed
+  to bind (EADDRINUSE) before dialling - the existing tests stopped at the DNAT
+  /RNT exchange. The ADC hub connection is now opened with
+  `setReuseLocalPort(0)`, and samurai binds a shareable socket explicitly even
+  for port 0, since a port `connect()` assigns can be handed to other processes'
+  connections, which is what failed under load. A new test dials a loopback
+  peer through traversal and checks it arrives from the hub port. 40 parallel
+  runs of `autotest`: no socket failures (3-6 before); full suite 1353 green
+  three times running.
