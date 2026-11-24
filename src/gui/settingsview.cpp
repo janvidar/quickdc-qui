@@ -35,156 +35,14 @@
 
 namespace {
 
-/* The groups and keys are those listed in quickdc/core/api/config.h. */
-const QString USER = QStringLiteral("User");
-const QString NETWORK = QStringLiteral("Network");
-const QString DOWNLOADS = QStringLiteral("Downloads");
-const QString CHAT_MEDIA = QStringLiteral("Chat media");
-
-/**
- * The bulletin board settings, matching HubsView, which is what acts on them.
- *
- * The first two are the ones a hub may answer for itself, under the same names in its
- * own group of the session store; the page says as much, because a general setting
- * that a hub can override is only half an answer to what will happen.
+/*
+ * Every key and default comes from Qdc::Settings (src/core/uisettings.h), which takes
+ * the core's from its own schema: a field left unset shows what is really in force.
  */
-const QString BOARDS = QStringLiteral("Boards");
-const QString BOARD_PREFETCH = QStringLiteral("Fetch a thread ahead");
-const QString BOARD_SERVE = QStringLiteral("Offer what I have read");
-const QString BOARD_KEEP = QStringLiteral("Keep posts for days");
-const QString BOARD_CACHE = QStringLiteral("Cache size");
+namespace S = Qdc::Settings;
 
-/**
- * The hub this program can run itself.
- *
- * The group and every key are the core's own - see readConfiguration() in the local
- * hub - so that this page and the hub are reading the same thing rather than two
- * spellings of it. The hub answers on the port the Connection tab sets, so there is
- * no port of its own here: a connection is sorted onto the hub by what the peer says
- * first rather than by which socket it arrived on.
- */
-const QString LOCAL_HUB = QStringLiteral("Local hub");
-const QString LOCAL_HUB_ENABLED = QStringLiteral("Enabled");
-const QString LOCAL_HUB_NAME = QStringLiteral("Name");
-const QString LOCAL_HUB_DESCRIPTION = QStringLiteral("Description");
-const QString LOCAL_HUB_USERS = QStringLiteral("Max users");
-const QString LOCAL_HUB_HISTORY = QStringLiteral("Max history");
-const QString LOCAL_HUB_SENDQ = QStringLiteral("Max send queue bytes");
-const QString LOCAL_HUB_PER_ADDRESS = QStringLiteral("Max connections per address");
-const QString LOCAL_HUB_HANDSHAKES = QStringLiteral("Max connections in handshake");
-const QString LOCAL_HUB_HANDSHAKE_TIMEOUT = QStringLiteral("Handshake timeout");
-const QString LOCAL_HUB_IDLE_TIMEOUT = QStringLiteral("Idle timeout");
-const QString LOCAL_HUB_LINGER = QStringLiteral("Linger timeout");
-const QString LOCAL_HUB_CHECK_CLAIMS = QStringLiteral("Check reachability claims");
-
-/**
- * The core's own defaults for those, so an unset field shows what is really in force.
- *
- * Off is the one that is not merely a default: running a hub means answering
- * strangers on this machine, which is a thing to be chosen rather than arrived at.
- */
-constexpr bool LOCAL_HUB_ENABLED_DEFAULT = false;
-constexpr bool LOCAL_HUB_CHECK_CLAIMS_DEFAULT = true;
-constexpr int LOCAL_HUB_USERS_DEFAULT = 128;
-constexpr int LOCAL_HUB_HISTORY_DEFAULT = 50;
-constexpr int LOCAL_HUB_SENDQ_KIB_DEFAULT = 48;
-constexpr int LOCAL_HUB_PER_ADDRESS_DEFAULT = 8;
-constexpr int LOCAL_HUB_HANDSHAKES_DEFAULT = 32;
-constexpr int LOCAL_HUB_HANDSHAKE_TIMEOUT_DEFAULT = 30;
-constexpr int LOCAL_HUB_IDLE_TIMEOUT_DEFAULT = 900;
-constexpr int LOCAL_HUB_LINGER_DEFAULT = 30;
-
-const QString LOCAL_HUB_NAME_DEFAULT = QStringLiteral("A QuickDC hub");
-const QString LOCAL_HUB_DESCRIPTION_DEFAULT = QStringLiteral("My QuickDC hub");
-
-/**
- * The one group here that the core does not read.
- *
- * It stores a key outside the list above faithfully and then ignores it, which is
- * exactly what a setting belonging to the interface wants: one configuration file
- * rather than a second one for the sake of a single key.
- */
-const QString INTERFACE = QStringLiteral("Interface");
-
-const QString THEME_KEY = QStringLiteral("Theme");
-
-/** The limit is kept in bytes and shown in mebibytes. */
-constexpr int MIB = 1024 * 1024;
-
-/** About six months, matching HubsView. Zero keeps them for ever. */
-constexpr int MEDIA_KEEP_DAYS = 180;
-
-/**
- * What the board settings say when nothing has been written, matching HubsView.
- *
- * Fetching a thread ahead is off, and that one is not a preference this page invented:
- * a post is fetched from whoever holds it, which at first is only the person who wrote
- * it, so anything fetched without being asked for tells an author who read their post
- * and when. The bounds are generous - an index entry is a few hundred bytes and a board
- * without its entries is not a board, so only the documents are bounded at all.
- */
-constexpr bool BOARD_PREFETCH_DEFAULT = false;
-constexpr bool BOARD_SERVE_DEFAULT = true;
-constexpr int BOARD_KEEP_DAYS = 90;
-constexpr int BOARD_CACHE_MIB = 256;
-
-/** The core's own defaults, so an unset field shows what is really in force. */
-constexpr int DEFAULT_PORT = 1411;
-constexpr int DEFAULT_SLOTS = 3;
-constexpr int DEFAULT_MAX_DOWNLOADS = 3;
-constexpr int DEFAULT_CHUNK_KIB = 1024;
-
-const QString DEFAULT_BIND = QStringLiteral("0.0.0.0");
-const QString DEFAULT_DOWNLOAD_DIR = QStringLiteral("~/.quickdc/downloads");
-
-/**
- * The key the core reads a DROP server's name from, and a name to show as an example.
- *
- * Shown as a placeholder and not as a default, because there is no default: asking a
- * server tells it this client's address and the port it listens on, so the field is
- * empty until somebody puts a name in it.
- */
-const QString REACHABILITY_SERVER = QStringLiteral("Reachability server");
-
-/**
- * The key that says how much of getting connected the client works out itself.
- *
- * The one setting on the page that is not plumbing. Everything under it - the port,
- * the address to bind, whether to ask the gateway, whether to claim active mode
- * regardless - is derived from it, and in two of the three modes those are not shown
- * at all. See Qdc::networkModeKeys() for the derivation, which is the core's own so
- * that the page and the client cannot come to different conclusions.
- *
- * Absent from a file the core has not settled yet, which reads as advanced: it is
- * the mode that imposes nothing, answering with whatever values are already there.
- */
-const QString NETWORK_MODE = QStringLiteral("Mode");
-
-/**
- * The key that makes the core claim active mode before consulting anything.
- *
- * Off by default, because a claim nothing has established is one every peer on the hub
- * acts on: the core reads this ahead of the measurement, the connection that arrived and
- * the reports of peers that could not get through, so it is the only setting on the page
- * that can make this client wrong about itself on purpose.
- */
-const QString FORCE_ACTIVE = QStringLiteral("Force active mode");
-constexpr bool FORCE_ACTIVE_DEFAULT = false;
-
-/**
- * The key that has the core ask the internet gateway to forward the peer port.
- *
- * Off by default, and the reason is not caution about the gateway: finding one means
- * sending a search to the whole local segment, which tells every host on it that this
- * machine is here and what it runs. That is a disclosure whoever owns the machine
- * should choose, and a client that cannot be connected to still works - it is only
- * passive.
- */
-const QString USE_UPNP = QStringLiteral("UseUPnP");
-constexpr bool USE_UPNP_DEFAULT = false;
-
-/** Chunk size is stored in bytes and shown in KiB. */
 constexpr int KIB = 1024;
+constexpr int MIB = 1024 * 1024;
 
 }
 
@@ -370,7 +228,7 @@ QWidget* Qdc::SettingsView::buildConnection()
 
 	m_port->setRange(1, 65535);
 	m_port->setObjectName(QStringLiteral("connectionPort"));
-	m_bind->setPlaceholderText(DEFAULT_BIND);
+	m_bind->setPlaceholderText(QString::fromUtf8(S::Bind.fallback));
 	m_address->setPlaceholderText(tr("Detected automatically"));
 
 	/*
@@ -542,12 +400,12 @@ QWidget* Qdc::SettingsView::buildLocalHub()
 
 	m_localHubName = new QLineEdit(m_localHubFields);
 	m_localHubName->setMaxLength(63);
-	m_localHubName->setPlaceholderText(LOCAL_HUB_NAME_DEFAULT);
+	m_localHubName->setPlaceholderText(QString::fromUtf8(S::HubName.fallback));
 	connect(m_localHubName, &QLineEdit::textEdited, this, &SettingsView::markModified);
 
 	m_localHubDescription = new QLineEdit(m_localHubFields);
 	m_localHubDescription->setMaxLength(255);
-	m_localHubDescription->setPlaceholderText(LOCAL_HUB_DESCRIPTION_DEFAULT);
+	m_localHubDescription->setPlaceholderText(QString::fromUtf8(S::HubDescription.fallback));
 	connect(m_localHubDescription, &QLineEdit::textEdited,
 	        this, &SettingsView::markModified);
 
@@ -681,7 +539,7 @@ QWidget* Qdc::SettingsView::buildTransfers()
 	m_chunkSize->setToolTip(tr("The least that is asked of one peer at a time; a "
 	                           "peer that turns out to be fast is asked for more"));
 
-	m_downloadDir->setPlaceholderText(DEFAULT_DOWNLOAD_DIR);
+	m_downloadDir->setPlaceholderText(QString::fromUtf8(S::DownloadDirectory.fallback));
 
 	QPushButton* browse = new QPushButton(tr("Browse…"), page);
 	connect(browse, &QPushButton::clicked, this,
@@ -957,54 +815,26 @@ void Qdc::SettingsView::load()
 	/* So that populating the fields does not read as the user editing them. */
 	m_loading = true;
 
-	/*
-	 * A group at a time rather than a key at a time. Every read is a blocking trip to
-	 * the core thread, so a page of fourteen of them opened while the core was busy
-	 * waited a whole core turn fourteen times over.
-	 */
-	const QVariantHash user = m_config->readGroup(ConfigStore::Application, USER, {
-		{QStringLiteral("Nickname"), QString()},
-		{QStringLiteral("Description"), QString()},
-		{QStringLiteral("E-mail"), QString()},
-		{QStringLiteral("Client ID"), QString()}
-	});
+	m_nickname->setText(m_config->read(S::Nickname));
+	m_description->setText(m_config->read(S::Description));
+	m_email->setText(m_config->read(S::Email));
 
-	m_nickname->setText(user.value(QStringLiteral("Nickname")).toString());
-	m_description->setText(user.value(QStringLiteral("Description")).toString());
-	m_email->setText(user.value(QStringLiteral("E-mail")).toString());
-
-	const QString cid = user.value(QStringLiteral("Client ID")).toString();
+	const QString cid = m_config->read(S::ClientId);
 	m_clientId->setText(cid.isEmpty() ? tr("assigned on first connection") : cid);
-
-	const QVariantHash network = m_config->readGroup(ConfigStore::Application, NETWORK, {
-		{QStringLiteral("Active mode"), true},
-		{QStringLiteral("Port"), DEFAULT_PORT},
-		{QStringLiteral("Bind"), QStringLiteral("0.0.0.0")},
-		{QStringLiteral("Address"), QString()},
-		{REACHABILITY_SERVER, QString()},
-		{NETWORK_MODE, QString()},
-		{FORCE_ACTIVE, FORCE_ACTIVE_DEFAULT},
-		{USE_UPNP, USE_UPNP_DEFAULT},
-		{QStringLiteral("Slots"), DEFAULT_SLOTS},
-		{QStringLiteral("Max downloads"), DEFAULT_MAX_DOWNLOADS},
-		{QStringLiteral("Chunk size"), DEFAULT_CHUNK_KIB * KIB}
-	});
 
 	/*
 	 * The stored mode, or the reading that imposes nothing where the file has none.
 	 * A store the core has already opened always has one; this answers for the case
 	 * where it has not, which is a page built against a configuration of its own.
 	 */
-	const NetworkMode mode = networkModeFromToken(
-		network.value(NETWORK_MODE).toString(),
-		network.value(QStringLiteral("Active mode")).toBool()
-			? NetworkMode::Advanced : NetworkMode::Passive);
+	const NetworkMode mode = networkModeFromToken(m_config->read(S::ConnectionMode),
+		m_config->read(S::ActiveMode) ? NetworkMode::Advanced : NetworkMode::Passive);
 
 	m_mode->setCurrentIndex(qMax(0, m_mode->findData(networkModeToken(mode))));
 
-	m_port->setValue(network.value(QStringLiteral("Port")).toInt());
-	m_bind->setText(network.value(QStringLiteral("Bind")).toString());
-	m_address->setText(network.value(QStringLiteral("Address")).toString());
+	m_port->setValue(m_config->read(S::Port));
+	m_bind->setText(m_config->read(S::Bind));
+	m_address->setText(m_config->read(S::Address));
 
 	/*
 	 * Carried rather than shown. Every mode measures against the same server and the
@@ -1012,80 +842,41 @@ void Qdc::SettingsView::load()
 	 * a server of their own - has to survive a save, so what was read is what is
 	 * handed back to the derivation.
 	 */
-	m_storedServer = network.value(REACHABILITY_SERVER).toString().trimmed();
+	m_storedServer = m_config->read(S::ReachabilityServer).trimmed();
 
-	m_forceActive->setChecked(network.value(FORCE_ACTIVE).toBool());
+	m_forceActive->setChecked(m_config->read(S::ForceActiveMode));
+	m_useUpnp->setChecked(m_config->read(S::UseUpnp));
 
-	m_useUpnp->setChecked(network.value(USE_UPNP).toBool());
+	m_slots->setValue(m_config->read(S::Slots));
+	m_maxDownloads->setValue(m_config->read(S::MaxDownloads));
+	m_chunkSize->setValue(qMax(m_chunkSize->minimum(), m_config->read(S::ChunkSize) / KIB));
 
-	m_slots->setValue(network.value(QStringLiteral("Slots")).toInt());
-	m_maxDownloads->setValue(network.value(QStringLiteral("Max downloads")).toInt());
+	m_downloadDir->setText(m_config->read(S::DownloadDirectory));
 
-	/* Stored in bytes, shown in KiB. */
-	const int chunk = network.value(QStringLiteral("Chunk size")).toInt();
-	m_chunkSize->setValue(qMax(m_chunkSize->minimum(), chunk / KIB));
-
-	m_downloadDir->setText(m_config->getString(ConfigStore::Application, DOWNLOADS,
-	                                           QStringLiteral("Directory")));
-
-	const QVariantHash localHub = m_config->readGroup(ConfigStore::Application, LOCAL_HUB, {
-		{LOCAL_HUB_ENABLED, LOCAL_HUB_ENABLED_DEFAULT},
-		{LOCAL_HUB_NAME, LOCAL_HUB_NAME_DEFAULT},
-		{LOCAL_HUB_DESCRIPTION, LOCAL_HUB_DESCRIPTION_DEFAULT},
-		{LOCAL_HUB_USERS, LOCAL_HUB_USERS_DEFAULT},
-		{LOCAL_HUB_HISTORY, LOCAL_HUB_HISTORY_DEFAULT},
-		{LOCAL_HUB_SENDQ, LOCAL_HUB_SENDQ_KIB_DEFAULT * KIB},
-		{LOCAL_HUB_PER_ADDRESS, LOCAL_HUB_PER_ADDRESS_DEFAULT},
-		{LOCAL_HUB_HANDSHAKES, LOCAL_HUB_HANDSHAKES_DEFAULT},
-		{LOCAL_HUB_HANDSHAKE_TIMEOUT, LOCAL_HUB_HANDSHAKE_TIMEOUT_DEFAULT},
-		{LOCAL_HUB_IDLE_TIMEOUT, LOCAL_HUB_IDLE_TIMEOUT_DEFAULT},
-		{LOCAL_HUB_LINGER, LOCAL_HUB_LINGER_DEFAULT},
-		{LOCAL_HUB_CHECK_CLAIMS, LOCAL_HUB_CHECK_CLAIMS_DEFAULT}
-	});
-
-	m_localHub->setChecked(localHub.value(LOCAL_HUB_ENABLED).toBool());
-
+	m_localHub->setChecked(m_config->read(S::HubEnabled));
 	m_localHubFields->setEnabled(m_localHub->isChecked());
 
-	m_localHubName->setText(localHub.value(LOCAL_HUB_NAME).toString());
-	m_localHubDescription->setText(localHub.value(LOCAL_HUB_DESCRIPTION).toString());
+	m_localHubName->setText(m_config->read(S::HubName));
+	m_localHubDescription->setText(m_config->read(S::HubDescription));
+	m_localHubUsers->setValue(m_config->read(S::HubMaxUsers));
+	m_localHubHistory->setValue(m_config->read(S::HubMaxHistory));
+	m_localHubPerAddress->setValue(m_config->read(S::HubMaxPerAddress));
+	m_localHubHandshakes->setValue(m_config->read(S::HubMaxHandshakes));
+	m_localHubHandshakeTimeout->setValue(m_config->read(S::HubHandshakeTimeout));
+	m_localHubIdleTimeout->setValue(m_config->read(S::HubIdleTimeout));
+	m_localHubLinger->setValue(m_config->read(S::HubLingerTimeout));
+	m_localHubCheckClaims->setChecked(m_config->read(S::HubCheckClaims));
+	m_localHubSendQueue->setValue(
+		qMax(m_localHubSendQueue->minimum(), m_config->read(S::HubMaxSendQueue) / KIB));
 
-	m_localHubUsers->setValue(localHub.value(LOCAL_HUB_USERS).toInt());
-	m_localHubHistory->setValue(localHub.value(LOCAL_HUB_HISTORY).toInt());
-	m_localHubPerAddress->setValue(localHub.value(LOCAL_HUB_PER_ADDRESS).toInt());
-	m_localHubHandshakes->setValue(localHub.value(LOCAL_HUB_HANDSHAKES).toInt());
-	m_localHubHandshakeTimeout->setValue(
-		localHub.value(LOCAL_HUB_HANDSHAKE_TIMEOUT).toInt());
-	m_localHubIdleTimeout->setValue(localHub.value(LOCAL_HUB_IDLE_TIMEOUT).toInt());
-	m_localHubLinger->setValue(localHub.value(LOCAL_HUB_LINGER).toInt());
-	m_localHubCheckClaims->setChecked(localHub.value(LOCAL_HUB_CHECK_CLAIMS).toBool());
+	m_fetchMedia->setChecked(m_config->read(S::ChatMediaFetch));
+	m_mediaLimit->setValue(qMax(0, m_config->read(S::ChatMediaLimit) / MIB));
+	m_mediaKeep->setValue(qMax(0, m_config->read(S::ChatMediaKeepDays)));
 
-	const int sendq = localHub.value(LOCAL_HUB_SENDQ).toInt();
-	m_localHubSendQueue->setValue(qMax(m_localHubSendQueue->minimum(), sendq / KIB));
-
-	const QVariantHash media = m_config->readGroup(ConfigStore::Application, CHAT_MEDIA, {
-		{QStringLiteral("Fetch automatically"), false},
-		{QStringLiteral("Maximum size"), 2 * MIB},
-		{QStringLiteral("Keep pasted for days"), MEDIA_KEEP_DAYS}
-	});
-
-	m_fetchMedia->setChecked(media.value(QStringLiteral("Fetch automatically")).toBool());
-	m_mediaLimit->setValue(
-		qMax(0, media.value(QStringLiteral("Maximum size")).toInt() / MIB));
-	m_mediaKeep->setValue(
-		qMax(0, media.value(QStringLiteral("Keep pasted for days")).toInt()));
-
-	const QVariantHash boards = m_config->readGroup(ConfigStore::Application, BOARDS, {
-		{BOARD_PREFETCH, BOARD_PREFETCH_DEFAULT},
-		{BOARD_SERVE, BOARD_SERVE_DEFAULT},
-		{BOARD_KEEP, BOARD_KEEP_DAYS},
-		{BOARD_CACHE, BOARD_CACHE_MIB * MIB}
-	});
-
-	m_prefetchPosts->setChecked(boards.value(BOARD_PREFETCH).toBool());
-	m_servePosts->setChecked(boards.value(BOARD_SERVE).toBool());
-	m_postKeep->setValue(qMax(0, boards.value(BOARD_KEEP).toInt()));
-	m_postCache->setValue(qMax(0, boards.value(BOARD_CACHE).toInt() / MIB));
+	m_prefetchPosts->setChecked(m_config->read(S::BoardPrefetch));
+	m_servePosts->setChecked(m_config->read(S::BoardServe));
+	m_postKeep->setValue(qMax(0, m_config->read(S::BoardKeepDays)));
+	m_postCache->setValue(qMax(0, m_config->read(S::BoardCache) / MIB));
 
 	/*
 	 * Read afresh each time rather than once when the form was built, so that a theme
@@ -1096,8 +887,8 @@ void Qdc::SettingsView::load()
 	for (const Theme& scheme : availableThemes())
 		m_theme->addItem(scheme.name, scheme.name);
 
-	const QString chosen = m_config->getString(ConfigStore::Application, INTERFACE,
-	                                           THEME_KEY, theme().name);
+	const QString stored = m_config->read(S::ThemeName);
+	const QString chosen = stored.isEmpty() ? theme().name : stored;
 
 	const int found = m_theme->findData(chosen);
 	m_theme->setCurrentIndex(qMax(0, found));
@@ -1119,12 +910,9 @@ bool Qdc::SettingsView::save()
 {
 	if (!m_config) return false;
 
-	m_config->setString(ConfigStore::Application, USER,
-	                    QStringLiteral("Nickname"), m_nickname->text().trimmed());
-	m_config->setString(ConfigStore::Application, USER,
-	                    QStringLiteral("Description"), m_description->text().trimmed());
-	m_config->setString(ConfigStore::Application, USER,
-	                    QStringLiteral("E-mail"), m_email->text().trimmed());
+	m_config->write(S::Nickname, m_nickname->text().trimmed());
+	m_config->write(S::Description, m_description->text().trimmed());
+	m_config->write(S::Email, m_email->text().trimmed());
 
 	/*
 	 * The mode, and then everything it decides.
@@ -1143,16 +931,11 @@ bool Qdc::SettingsView::save()
 		m_forceActive->isChecked(),
 		m_storedServer);
 
-	m_config->setString(ConfigStore::Application, NETWORK, NETWORK_MODE,
-	                    networkModeToken(mode));
-
-	m_config->setBool(ConfigStore::Application, NETWORK,
-	                  QStringLiteral("Active mode"), keys.activeMode);
-	m_config->setString(ConfigStore::Application, NETWORK,
-	                    REACHABILITY_SERVER, keys.reachabilityServer);
-	m_config->setBool(ConfigStore::Application, NETWORK,
-	                  FORCE_ACTIVE, keys.forceActive);
-	m_config->setBool(ConfigStore::Application, NETWORK, USE_UPNP, keys.useUpnp);
+	m_config->write(S::ConnectionMode, networkModeToken(mode));
+	m_config->write(S::ActiveMode, keys.activeMode);
+	m_config->write(S::ReachabilityServer, keys.reachabilityServer);
+	m_config->write(S::ForceActiveMode, keys.forceActive);
+	m_config->write(S::UseUpnp, keys.useUpnp);
 
 	/*
 	 * The plumbing only where somebody is choosing it. The port is not merely bound
@@ -1163,67 +946,40 @@ bool Qdc::SettingsView::save()
 	 */
 	if (mode == NetworkMode::Advanced)
 	{
-		m_config->setNumber(ConfigStore::Application, NETWORK,
-		                    QStringLiteral("Port"), m_port->value());
-		m_config->setString(ConfigStore::Application, NETWORK,
-		                    QStringLiteral("Bind"), m_bind->text().trimmed());
-		m_config->setString(ConfigStore::Application, NETWORK,
-		                    QStringLiteral("Address"), m_address->text().trimmed());
+		m_config->write(S::Port, m_port->value());
+		m_config->write(S::Bind, m_bind->text().trimmed());
+		m_config->write(S::Address, m_address->text().trimmed());
 	}
 
-	m_config->setNumber(ConfigStore::Application, NETWORK,
-	                    QStringLiteral("Slots"), m_slots->value());
-	m_config->setNumber(ConfigStore::Application, NETWORK,
-	                    QStringLiteral("Max downloads"), m_maxDownloads->value());
-	m_config->setNumber(ConfigStore::Application, NETWORK,
-	                    QStringLiteral("Chunk size"), m_chunkSize->value() * KIB);
+	m_config->write(S::Slots, m_slots->value());
+	m_config->write(S::MaxDownloads, m_maxDownloads->value());
+	m_config->write(S::ChunkSize, m_chunkSize->value() * KIB);
 
-	m_config->setString(ConfigStore::Application, DOWNLOADS,
-	                    QStringLiteral("Directory"), m_downloadDir->text().trimmed());
+	m_config->write(S::DownloadDirectory, m_downloadDir->text().trimmed());
 
-	m_config->setBool(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_ENABLED,
-	                  m_localHub->isChecked());
-	m_config->setString(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_NAME,
-	                    m_localHubName->text().trimmed());
-	m_config->setString(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_DESCRIPTION,
-	                    m_localHubDescription->text().trimmed());
-	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_USERS,
-	                    m_localHubUsers->value());
-	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_HISTORY,
-	                    m_localHubHistory->value());
-	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_SENDQ,
-	                    m_localHubSendQueue->value() * KIB);
-	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_PER_ADDRESS,
-	                    m_localHubPerAddress->value());
-	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_HANDSHAKES,
-	                    m_localHubHandshakes->value());
-	m_config->setNumber(ConfigStore::Application, LOCAL_HUB,
-	                    LOCAL_HUB_HANDSHAKE_TIMEOUT, m_localHubHandshakeTimeout->value());
-	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_IDLE_TIMEOUT,
-	                    m_localHubIdleTimeout->value());
-	m_config->setNumber(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_LINGER,
-	                    m_localHubLinger->value());
-	m_config->setBool(ConfigStore::Application, LOCAL_HUB, LOCAL_HUB_CHECK_CLAIMS,
-	                  m_localHubCheckClaims->isChecked());
+	m_config->write(S::HubEnabled, m_localHub->isChecked());
+	m_config->write(S::HubName, m_localHubName->text().trimmed());
+	m_config->write(S::HubDescription, m_localHubDescription->text().trimmed());
+	m_config->write(S::HubMaxUsers, m_localHubUsers->value());
+	m_config->write(S::HubMaxHistory, m_localHubHistory->value());
+	m_config->write(S::HubMaxSendQueue, m_localHubSendQueue->value() * KIB);
+	m_config->write(S::HubMaxPerAddress, m_localHubPerAddress->value());
+	m_config->write(S::HubMaxHandshakes, m_localHubHandshakes->value());
+	m_config->write(S::HubHandshakeTimeout, m_localHubHandshakeTimeout->value());
+	m_config->write(S::HubIdleTimeout, m_localHubIdleTimeout->value());
+	m_config->write(S::HubLingerTimeout, m_localHubLinger->value());
+	m_config->write(S::HubCheckClaims, m_localHubCheckClaims->isChecked());
 
-	m_config->setBool(ConfigStore::Application, CHAT_MEDIA,
-	                  QStringLiteral("Fetch automatically"), m_fetchMedia->isChecked());
-	m_config->setNumber(ConfigStore::Application, CHAT_MEDIA,
-	                    QStringLiteral("Maximum size"), m_mediaLimit->value() * MIB);
-	m_config->setNumber(ConfigStore::Application, CHAT_MEDIA,
-	                    QStringLiteral("Keep pasted for days"), m_mediaKeep->value());
+	m_config->write(S::ChatMediaFetch, m_fetchMedia->isChecked());
+	m_config->write(S::ChatMediaLimit, m_mediaLimit->value() * MIB);
+	m_config->write(S::ChatMediaKeepDays, m_mediaKeep->value());
 
-	m_config->setBool(ConfigStore::Application, BOARDS, BOARD_PREFETCH,
-	                  m_prefetchPosts->isChecked());
-	m_config->setBool(ConfigStore::Application, BOARDS, BOARD_SERVE,
-	                  m_servePosts->isChecked());
-	m_config->setNumber(ConfigStore::Application, BOARDS, BOARD_KEEP,
-	                    m_postKeep->value());
-	m_config->setNumber(ConfigStore::Application, BOARDS, BOARD_CACHE,
-	                    m_postCache->value() * MIB);
+	m_config->write(S::BoardPrefetch, m_prefetchPosts->isChecked());
+	m_config->write(S::BoardServe, m_servePosts->isChecked());
+	m_config->write(S::BoardKeepDays, m_postKeep->value());
+	m_config->write(S::BoardCache, m_postCache->value() * MIB);
 
-	m_config->setString(ConfigStore::Application, INTERFACE, THEME_KEY,
-	                    m_theme->currentData().toString());
+	m_config->write(S::ThemeName, m_theme->currentData().toString());
 
 	/*
 	 * The file is written a moment later, on the core's own thread. Waiting to be

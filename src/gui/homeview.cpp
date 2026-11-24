@@ -257,18 +257,18 @@ void Qdc::HomeView::refreshGreeting()
 		return;
 	}
 
-	const QString nickname = m_config->getString(ConfigStore::Application,
-		QStringLiteral("User"), QStringLiteral("Nickname")).trimmed();
+	namespace S = Qdc::Settings;
+
+	/* Only a chosen one: the name the core falls back to is nobody's choice. */
+	QString nickname = m_config->read(S::Nickname).trimmed();
+	if (nickname == QString::fromUtf8(S::Nickname.fallback)) nickname.clear();
 
 	m_greeting->setText(nickname.isEmpty()
 		? tr("Welcome to QuickDC")
 		: tr("Welcome back, %1").arg(nickname));
 
-	const QString description = m_config->getString(ConfigStore::Application,
-		QStringLiteral("User"), QStringLiteral("Description")).trimmed();
-
-	const bool active = m_config->getBool(ConfigStore::Application,
-		QStringLiteral("Network"), QStringLiteral("Active mode"), true);
+	const QString description = m_config->read(S::Description).trimmed();
+	const bool active = m_config->read(S::ActiveMode);
 
 	QStringList parts;
 	if (!description.isEmpty()) parts << description;

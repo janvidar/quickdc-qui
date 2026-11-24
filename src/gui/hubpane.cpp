@@ -53,11 +53,12 @@ constexpr int FILTER_GLYPH = 14;
  * globally in quickdc.conf under [User] - the same four names in both, which is what
  * makes one a fallback for the other.
  */
-const QString USER_GROUP = QStringLiteral("User");
-const QString NICKNAME_KEY = QStringLiteral("Nickname");
-const QString DESCRIPTION_KEY = QStringLiteral("Description");
-const QString EMAIL_KEY = QStringLiteral("E-mail");
-const QString PASSWORD_KEY = QStringLiteral("Password");
+namespace S = Qdc::Settings;
+
+const QString NICKNAME_KEY = S::keyOf(S::Nickname);
+const QString DESCRIPTION_KEY = S::keyOf(S::Description);
+const QString EMAIL_KEY = S::keyOf(S::Email);
+const QString PASSWORD_KEY = S::keyOf(S::Password);
 
 /**
  * Why the composer is not sendable, or empty when it is.
@@ -608,11 +609,6 @@ void Qdc::HubPane::loadSession()
 	/* Canonical, so a keyprint in the address does not split the settings in two. */
 	const QString group = HubBridge::settingsUrl(hub()->url());
 
-	/*
-	 * A group at a time would be better, as the settings page does it, but these are
-	 * two groups rather than one - the hub's own and the global one it falls back to -
-	 * and the placeholders need both.
-	 */
 	const QVariantHash mine = m_config->readGroup(ConfigStore::Session, group, {
 		{NICKNAME_KEY, QString()},
 		{DESCRIPTION_KEY, QString()},
@@ -620,21 +616,16 @@ void Qdc::HubPane::loadSession()
 		{PASSWORD_KEY, QString()}
 	});
 
-	const QVariantHash general = m_config->readGroup(ConfigStore::Application,
-	                                                 USER_GROUP, {
-		{NICKNAME_KEY, QString()},
-		{DESCRIPTION_KEY, QString()},
-		{EMAIL_KEY, QString()}
-	});
 
 	m_nickname->setText(mine.value(NICKNAME_KEY).toString());
 	m_description->setText(mine.value(DESCRIPTION_KEY).toString());
 	m_email->setText(mine.value(EMAIL_KEY).toString());
 	m_password->setText(mine.value(PASSWORD_KEY).toString());
 
-	m_nickname->setPlaceholderText(general.value(NICKNAME_KEY).toString());
-	m_description->setPlaceholderText(general.value(DESCRIPTION_KEY).toString());
-	m_email->setPlaceholderText(general.value(EMAIL_KEY).toString());
+	/* What the hub is given where this form says nothing: the general identity, defaults and all. */
+	m_nickname->setPlaceholderText(m_config->read(S::Nickname));
+	m_description->setPlaceholderText(m_config->read(S::Description));
+	m_email->setPlaceholderText(m_config->read(S::Email));
 	m_password->setPlaceholderText(tr("none"));
 
 	m_loadingSession = false;

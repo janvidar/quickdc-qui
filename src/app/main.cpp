@@ -158,9 +158,8 @@ int main(int argc, char** argv)
 	{
 		Qdc::ConfigBridge config(&core);
 
-		Qdc::applyTheme(Qdc::themeByName(
-			config.getString(Qdc::ConfigStore::Application, QStringLiteral("Interface"),
-			                 QStringLiteral("Theme"), Qdc::defaultTheme().name)));
+		const QString chosen = config.read(Qdc::Settings::ThemeName);
+		Qdc::applyTheme(Qdc::themeByName(chosen.isEmpty() ? Qdc::defaultTheme().name : chosen));
 	}
 
 	/* Does nothing unless QDC_THEME_WATCH is set; see watchThemes(). */

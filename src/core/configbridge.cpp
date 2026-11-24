@@ -116,6 +116,42 @@ void Qdc::ConfigBridge::setBool(ConfigStore store, const QString& group,
 	      value ? QStringLiteral("true") : QStringLiteral("false"));
 }
 
+QString Qdc::ConfigBridge::read(const Settings::Text& setting) const
+{
+	return getString(ConfigStore::Application, QString::fromUtf8(setting.group),
+	                 QString::fromUtf8(setting.key), QString::fromUtf8(setting.fallback));
+}
+
+int Qdc::ConfigBridge::read(const Settings::Number& setting) const
+{
+	return getNumber(ConfigStore::Application, QString::fromUtf8(setting.group),
+	                 QString::fromUtf8(setting.key), setting.fallback);
+}
+
+bool Qdc::ConfigBridge::read(const Settings::Flag& setting) const
+{
+	return getBool(ConfigStore::Application, QString::fromUtf8(setting.group),
+	               QString::fromUtf8(setting.key), setting.fallback);
+}
+
+void Qdc::ConfigBridge::write(const Settings::Text& setting, const QString& value)
+{
+	setString(ConfigStore::Application, QString::fromUtf8(setting.group),
+	          QString::fromUtf8(setting.key), value);
+}
+
+void Qdc::ConfigBridge::write(const Settings::Number& setting, int value)
+{
+	setNumber(ConfigStore::Application, QString::fromUtf8(setting.group),
+	          QString::fromUtf8(setting.key), value);
+}
+
+void Qdc::ConfigBridge::write(const Settings::Flag& setting, bool value)
+{
+	setBool(ConfigStore::Application, QString::fromUtf8(setting.group),
+	        QString::fromUtf8(setting.key), value);
+}
+
 void Qdc::ConfigBridge::remove(ConfigStore store, const QString& group,
                                const QString& key)
 {

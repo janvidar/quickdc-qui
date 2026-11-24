@@ -56,49 +56,28 @@
 
 namespace {
 
-/** Where the pictures-in-chat settings live; see HubsView::fetchesMediaOn(). */
-const QString CHAT_MEDIA = QStringLiteral("Chat media");
-const QString MEDIA_FETCH = QStringLiteral("Fetch automatically");
-const QString MEDIA_LIMIT = QStringLiteral("Maximum size");
-const QString MEDIA_KEEP = QStringLiteral("Keep pasted for days");
+namespace S = Qdc::Settings;
 
-/** Where the folder a fetched picture lands in is named. */
-const QString DOWNLOADS_GROUP = QStringLiteral("Downloads");
-
-/**
- * Where the bulletin board settings live; see HubsView::prefetchesOn().
- *
- * The two policies are the ones a hub may answer for itself, under the same names in
- * its own group of the session store, which is how the per hub choices in the tree's
- * menu are written. Both are read once and kept in hand, because a post arriving is
- * no time to be reading a preference file.
+/*
+ * The groups this view follows, and the keys a hub may answer for itself under the
+ * same names in its own group of the session store - which is how the per hub choices
+ * in the tree's menu are written. Read once and kept in hand, because a post or a
+ * picture arriving is no time to be reading a preference file.
  */
-const QString BOARDS_GROUP = QStringLiteral("Boards");
+const QString CHAT_MEDIA = S::groupOf(S::ChatMediaFetch);
+const QString MEDIA_FETCH = S::keyOf(S::ChatMediaFetch);
+const QString DOWNLOADS_GROUP = S::groupOf(S::DownloadDirectory);
+const QString BOARDS_GROUP = S::groupOf(S::BoardPrefetch);
+const QString BOARD_PREFETCH = S::keyOf(S::BoardPrefetch);
+const QString BOARD_SERVE = S::keyOf(S::BoardServe);
+const QString USER_GROUP = S::groupOf(S::ClientId);
 
-/** Where this installation's own client id lives; see HubsView::ownCid(). */
-const QString USER_GROUP = QStringLiteral("User");
-
-/**
- * The hub this program can run itself; see HubsView::reloadLocalHub().
- *
- * The group and the key are the core's own, so that the switch on the settings page,
- * the row in this tree and the hub in the core are all reading one thing. Its address
- * is not configured anywhere: the hub answers on the port this client already listens
- * on, and a connection is sorted onto it by what the peer says first, so the port is
- * read from the network settings rather than from a setting of the hub's own.
+/*
+ * The local hub answers on the port this client already listens on, so its address
+ * is read from the network settings rather than from a setting of the hub's own.
  */
-const QString LOCAL_HUB_GROUP = QStringLiteral("Local hub");
-const QString LOCAL_HUB_ENABLED = QStringLiteral("Enabled");
-constexpr bool LOCAL_HUB_ENABLED_DEFAULT = false;
-
-const QString NETWORK_GROUP = QStringLiteral("Network");
-const QString NETWORK_PORT = QStringLiteral("Port");
-constexpr int NETWORK_PORT_DEFAULT = 1411;
-
-const QString BOARD_PREFETCH = QStringLiteral("Fetch a thread ahead");
-const QString BOARD_SERVE = QStringLiteral("Offer what I have read");
-const QString BOARD_KEEP = QStringLiteral("Keep posts for days");
-const QString BOARD_CACHE = QStringLiteral("Cache size");
+const QString LOCAL_HUB_GROUP = S::groupOf(S::HubEnabled);
+const QString NETWORK_GROUP = S::groupOf(S::Port);
 
 /**
  * What was open last time, so that it can be opened again.
@@ -126,33 +105,6 @@ const QString BOARDS_ENTRY = QStringLiteral("Board ");
  * was appended, so reading more would be work thrown away.
  */
 constexpr int RESTORED_LINES = 4000;
-
-/** Two megabytes: enough for a photograph, small enough to arrive unnoticed. */
-constexpr int MEDIA_LIMIT_DEFAULT = 2 * 1024 * 1024;
-
-/**
- * How long a pasted picture is kept: about six months.
- *
- * A round number rather than a considered one. It is long enough that following a link
- * in a conversation somebody comes back to is expected to work, and short enough that
- * the folder does not grow for the life of the installation. Nothing depends on the
- * exact value, and zero keeps everything.
- */
-constexpr int MEDIA_KEEP_DEFAULT = 180;
-
-/**
- * What the board settings say when nothing has been written; the same figures the
- * settings page offers, which is where they are explained.
- *
- * Fetching ahead is off, and that one is the extension's own default rather than a
- * preference: a body is fetched from whoever has it, which at first is the person who
- * wrote it, so a client that fetched without being asked would tell an author who read
- * their post and when.
- */
-constexpr bool BOARD_PREFETCH_DEFAULT = false;
-constexpr bool BOARD_SERVE_DEFAULT = true;
-constexpr int BOARD_KEEP_DEFAULT = 90;
-constexpr int BOARD_CACHE_DEFAULT = 256 * 1024 * 1024;
 
 constexpr int SECONDS_IN_A_DAY = 24 * 60 * 60;
 
@@ -1550,8 +1502,7 @@ QString Qdc::HubsView::ownCid() const
 {
 	if (!m_config) return QString();
 
-	return m_config->getString(ConfigStore::Application, USER_GROUP,
-	                           QStringLiteral("Client ID")).trimmed();
+	return m_config->read(S::ClientId).trimmed();
 }
 
 QString Qdc::HubsView::hubKeyOf(BoardPane* pane) const
@@ -2640,20 +2591,14 @@ void Qdc::HubsView::reloadMediaPolicy()
 {
 	if (!m_config) return;
 
-	m_fetchMedia = m_config->getBool(ConfigStore::Application, CHAT_MEDIA, MEDIA_FETCH);
+	m_fetchMedia = m_config->read(S::ChatMediaFetch);
+	m_mediaLimit = static_cast<quint64>(qMax(0, m_config->read(S::ChatMediaLimit)));
 
-	const int limit = m_config->getNumber(ConfigStore::Application, CHAT_MEDIA,
-	                                     MEDIA_LIMIT, MEDIA_LIMIT_DEFAULT);
-	m_mediaLimit = static_cast<quint64>(qMax(0, limit));
-
-	const QString configured = m_config->getString(ConfigStore::Application,
-		DOWNLOADS_GROUP, QStringLiteral("Directory")).trimmed();
-
-	m_downloadDir = configured.isEmpty() ? QStringLiteral("~/.quickdc/downloads")
+	const QString configured = m_config->read(S::DownloadDirectory).trimmed();
+	m_downloadDir = configured.isEmpty() ? QString::fromUtf8(S::DownloadDirectory.fallback)
 	                                     : configured;
 
-	m_mediaKeepDays = qMax(0, m_config->getNumber(ConfigStore::Application, CHAT_MEDIA,
-	                                              MEDIA_KEEP, MEDIA_KEEP_DEFAULT));
+	m_mediaKeepDays = qMax(0, m_config->read(S::ChatMediaKeepDays));
 
 	/* What each open hub decided, so a message needs no reading at all. */
 	for (const Entry* entry : m_entries)
@@ -2712,17 +2657,11 @@ void Qdc::HubsView::reloadBoardPolicy()
 {
 	if (!m_config) return;
 
-	m_prefetchPosts = m_config->getBool(ConfigStore::Application, BOARDS_GROUP,
-	                                    BOARD_PREFETCH, BOARD_PREFETCH_DEFAULT);
+	m_prefetchPosts = m_config->read(S::BoardPrefetch);
+	m_servePosts = m_config->read(S::BoardServe);
 
-	m_servePosts = m_config->getBool(ConfigStore::Application, BOARDS_GROUP,
-	                                 BOARD_SERVE, BOARD_SERVE_DEFAULT);
-
-	const int days = qMax(0, m_config->getNumber(ConfigStore::Application, BOARDS_GROUP,
-	                                             BOARD_KEEP, BOARD_KEEP_DEFAULT));
-
-	const int bytes = qMax(0, m_config->getNumber(ConfigStore::Application, BOARDS_GROUP,
-	                                              BOARD_CACHE, BOARD_CACHE_DEFAULT));
+	const int days = qMax(0, m_config->read(S::BoardKeepDays));
+	const int bytes = qMax(0, m_config->read(S::BoardCache));
 
 	m_postKeepSeconds = static_cast<quint64>(days) * SECONDS_IN_A_DAY;
 	m_postCacheBytes = static_cast<quint64>(bytes);
@@ -2750,9 +2689,8 @@ void Qdc::HubsView::reloadBoardPolicy()
 QString Qdc::HubsView::localHubUrl() const
 {
 	const int port = m_config
-		? m_config->getNumber(ConfigStore::Application, NETWORK_GROUP, NETWORK_PORT,
-		                      NETWORK_PORT_DEFAULT)
-		: NETWORK_PORT_DEFAULT;
+		? m_config->read(S::Port)
+		: S::Port.fallback;
 
 	return HubBridge::normalisedUrl(QStringLiteral("adc://127.0.0.1:%1").arg(port));
 }
@@ -2761,9 +2699,7 @@ void Qdc::HubsView::reloadLocalHub()
 {
 	if (!m_config) return;
 
-	const bool enabled = m_config->getBool(ConfigStore::Application, LOCAL_HUB_GROUP,
-	                                       LOCAL_HUB_ENABLED,
-	                                       LOCAL_HUB_ENABLED_DEFAULT);
+	const bool enabled = m_config->read(S::HubEnabled);
 
 	const QString wanted = enabled ? localHubUrl() : QString();
 	if (wanted == m_localHubUrl) return;

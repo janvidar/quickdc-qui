@@ -6,6 +6,7 @@
 #define HAVE_QUICKDC_QUI_CONFIGBRIDGE_H
 
 #include "coretypes.h"
+#include "uisettings.h"
 
 #include <QHash>
 #include <QList>
@@ -71,6 +72,15 @@ public:
 	void setBool(ConfigStore store, const QString& group, const QString& key,
 	             bool value);
 	void remove(ConfigStore store, const QString& group, const QString& key);
+
+	/** A setting of the application store, by its one definition in uisettings.h. */
+	QString read(const Settings::Text& setting) const;
+	int read(const Settings::Number& setting) const;
+	bool read(const Settings::Flag& setting) const;
+
+	void write(const Settings::Text& setting, const QString& value);
+	void write(const Settings::Number& setting, int value);
+	void write(const Settings::Flag& setting, bool value);
 
 	/**
 	 * Rewrite a group: 'removeKeys' cleared, then 'values' written.

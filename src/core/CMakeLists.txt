@@ -9,6 +9,7 @@ add_library(qdcbridge STATIC
     boardbridge.cpp
     boardbridge.h
     configbridge.cpp
+    uisettings.cpp
     configbridge.h
     completed.cpp
     completed.h

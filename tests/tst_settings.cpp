@@ -51,6 +51,7 @@ private slots:
 	void sharesShrinkWithoutLeavingATail();
 
 	void formLoadsTheStoredValues();
+	void anUnsetFieldShowsWhatTheCoreUses();
 	void formDoesNotWaitForABusyCore();
 	void formWritesWhatTheCoreReads();
 	void formTracksBeingEdited();
@@ -313,6 +314,33 @@ void TestSettings::formLoadsTheStoredValues()
 	                             QStringLiteral("Slots")), 9);
 	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Network"),
 	                           QStringLiteral("Active mode"), true), false);
+}
+
+void TestSettings::anUnsetFieldShowsWhatTheCoreUses()
+{
+	using Qdc::ConfigStore;
+
+	/*
+	 * The page kept defaults of its own, and they had drifted: an unset nickname
+	 * showed as empty while the core announced "QuickDC", and saving the page then
+	 * wrote the empty one. Read back through save(), which writes what each field
+	 * holds.
+	 */
+	const QString user = QStringLiteral("User");
+	m_config->remove(ConfigStore::Application, user, QStringLiteral("Nickname"));
+	m_config->remove(ConfigStore::Application, user, QStringLiteral("Description"));
+	m_config->remove(ConfigStore::Application, QStringLiteral("Local hub"), QStringLiteral("Max users"));
+
+	Qdc::Shares shares(m_config);
+	Qdc::SettingsView view(m_config, &shares);
+	QVERIFY(view.save());
+
+	QCOMPARE(m_config->getString(ConfigStore::Application, user, QStringLiteral("Nickname")),
+	         QStringLiteral("QuickDC"));
+	QCOMPARE(m_config->getString(ConfigStore::Application, user, QStringLiteral("Description")),
+	         QStringLiteral("QuickDC user"));
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Local hub"),
+	                             QStringLiteral("Max users")), 128);
 }
 
 void TestSettings::formDoesNotWaitForABusyCore()

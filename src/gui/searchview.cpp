@@ -41,8 +41,7 @@
 
 namespace {
 
-const QString DOWNLOADS = QStringLiteral("Downloads");
-const QString DEFAULT_DOWNLOAD_DIR = QStringLiteral("~/.quickdc/downloads");
+const QString DEFAULT_DOWNLOAD_DIR = QString::fromUtf8(Qdc::Settings::DownloadDirectory.fallback);
 
 /** A megabyte in the size filter is a mebibyte, as everywhere else here. */
 constexpr quint64 MIB = 1024 * 1024;
@@ -637,8 +636,7 @@ QString Qdc::SearchView::downloadDirectory() const
 	 * download somebody asked for by hand, where HubsView caches the same setting
 	 * because it queues a file for every picture that arrives in chat.
 	 */
-	const QString directory = m_config->getString(ConfigStore::Application, DOWNLOADS,
-	                                              QStringLiteral("Directory")).trimmed();
+	const QString directory = m_config->read(Qdc::Settings::DownloadDirectory).trimmed();
 
 	return directory.isEmpty() ? DEFAULT_DOWNLOAD_DIR : directory;
 }
