@@ -33,6 +33,46 @@ Qdc::CoreChannel::CoreChannel(QObject* parent)
 
 	/* First, so that every other receiver of an event finds the copy up to date. */
 	connect(this, &CoreChannel::received, this, &CoreChannel::absorb, Qt::QueuedConnection);
+	connect(this, &CoreChannel::hubReceived, this, &CoreChannel::dispatchToHub, Qt::QueuedConnection);
+}
+
+void Qdc::CoreChannel::deliver(const QuickDC::Api::Event& event)
+{
+	if (hubOf(event))
+		emit hubReceived(event, QPrivateSignal());
+	else
+		emit received(event);
+}
+
+std::optional<QuickDC::Api::HubHandle> Qdc::CoreChannel::hubOf(const QuickDC::Api::Event& event)
+{
+	return std::visit([](const auto& e) -> std::optional<QuickDC::Api::HubHandle> {
+		if constexpr (requires { e.hub; })
+			return e.hub;
+		else
+			return std::nullopt;
+	}, event.value);
+}
+
+Qdc::HubRoute* Qdc::CoreChannel::route(QuickDC::Api::HubHandle hub)
+{
+	HubRoute*& found = m_routes[hub];
+	if (!found) found = new HubRoute(this);
+	return found;
+}
+
+void Qdc::CoreChannel::releaseRoute(QuickDC::Api::HubHandle hub)
+{
+	delete m_routes.take(hub);
+}
+
+void Qdc::CoreChannel::dispatchToHub(const QuickDC::Api::Event& event)
+{
+	const std::optional<QuickDC::Api::HubHandle> hub = hubOf(event);
+	if (!hub) return;
+
+	/* A hub nobody is listening to any more: its events end here. */
+	if (HubRoute* to = m_routes.value(*hub)) emit to->received(event);
 }
 
 void Qdc::CoreChannel::offerSnapshot(QuickDC::Api::SettingsSnapshot snapshot)

@@ -4,6 +4,7 @@
 
 #include <core/boardbridge.h>
 #include <core/configbridge.h>
+#include <core/corechannel.h>
 #include <core/corethread.h>
 #include <core/filelistbridge.h>
 #include <core/hubbridge.h>
@@ -57,6 +58,7 @@ private slots:
 	void cleanupTestCase();
 
 	void coreIsOnlyReachableFromItsOwnThread();
+	void aHubsEventsReachOnlyThatHubsRoute();
 	void jobsRunInOrderOnTheCoreThread();
 	void aBlockingCallDoesNotWaitForThePollInterval();
 	void snapshotsDoNotWaitForABusyCore();
@@ -2405,6 +2407,50 @@ void TestBridge::aWatchSaysNothingAboutANetworkThatHasNotChanged()
 	QTest::qWait(3500);
 
 	QCOMPARE(changed.count(), 0);
+}
+
+/*
+ * An event that belongs to a hub reaches that hub's route and nothing else, so a
+ * hub's user list at login is not queued once to every bridge for all but one to
+ * throw away; an event of no hub stays where every bridge hears it.
+ */
+void TestBridge::aHubsEventsReachOnlyThatHubsRoute()
+{
+	namespace Events = QuickDC::Api::Events;
+
+	Qdc::CoreChannel channel;
+	QSignalSpy everyone(&channel, &Qdc::CoreChannel::received);
+	QSignalSpy first(channel.route(1), &Qdc::HubRoute::received);
+	QSignalSpy second(channel.route(2), &Qdc::HubRoute::received);
+
+	/* From another thread, as the core delivers them, so the queueing is the real one. */
+	QThread* core = QThread::create([&channel] {
+		channel.deliver(Events::UserJoined{1, "alice"});
+		channel.deliver(Events::UserJoined{1, "bob"});
+		channel.deliver(Events::UserJoined{2, "carol"});
+		channel.deliver(Events::QueueChanged{});
+		channel.deliver(Events::UserJoined{3, "nobody listens"});
+	});
+	core->start();
+	QVERIFY(core->wait(5000));
+	delete core;
+
+	QTRY_COMPARE(everyone.count(), 1);
+	QTRY_COMPARE(first.count(), 2);
+	QCOMPARE(second.count(), 1);
+
+	const auto nick = [](const QSignalSpy& spy, int n) {
+		return spy.at(n).at(0).value<QuickDC::Api::Event>().as<Events::UserJoined>()->nick;
+	};
+	QCOMPARE(nick(first, 0), std::string("alice"));
+	QCOMPARE(nick(first, 1), std::string("bob"));
+	QCOMPARE(nick(second, 0), std::string("carol"));
+	QVERIFY(everyone.at(0).at(0).value<QuickDC::Api::Event>().as<Events::QueueChanged>());
+
+	/* A route given back hears nothing more, and asking again starts a fresh one. */
+	channel.releaseRoute(2);
+	QSignalSpy again(channel.route(2), &Qdc::HubRoute::received);
+	QCOMPARE(again.count(), 0);
 }
 
 QTEST_GUILESS_MAIN(TestBridge)

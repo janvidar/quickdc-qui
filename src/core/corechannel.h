@@ -37,12 +37,45 @@ namespace Qdc {
  * reaches every reader, and nothing has to wait on the core to read one. This
  * object is the first receiver of its own signal, so by the time any bridge
  * hears of a change the copy already holds it.
+ *
+ * An event that belongs to one hub is not on received() at all, but on that hub's
+ * route(). A hub's user list at login is thousands of UserUpdated events, and on a
+ * signal every bridge listens to each was queued as a copy per bridge - ten or so -
+ * for all but one to throw away. Such an event is queued once, to this object, and
+ * handed on in the same thread to the one route that wants it.
  */
+/** The events of one hub, emitted on the thread that draws; see CoreChannel::route(). */
+class HubRoute final : public QObject {
+	Q_OBJECT
+
+public:
+	using QObject::QObject;
+
+signals:
+	void received(const QuickDC::Api::Event& event);
+};
+
 class CoreChannel final : public QObject {
 	Q_OBJECT
 
 public:
 	explicit CoreChannel(QObject* parent = nullptr);
+
+	/**
+	 * Called on the core thread with every event: one that belongs to a hub goes to
+	 * that hub's route, and every other one out on received().
+	 */
+	void deliver(const QuickDC::Api::Event& event);
+
+	/** The hub an event belongs to, or none. */
+	static std::optional<QuickDC::Api::HubHandle> hubOf(const QuickDC::Api::Event& event);
+
+	/**
+	 * Where the events of one hub arrive, made on first asking. Only on the thread
+	 * this object lives on, and given back with releaseRoute() once nothing listens.
+	 */
+	HubRoute* route(QuickDC::Api::HubHandle hub);
+	void releaseRoute(QuickDC::Api::HubHandle hub);
 
 	/** Hand over the stores as they stood. Any thread; the core's, in practice. */
 	void offerSnapshot(QuickDC::Api::SettingsSnapshot snapshot);
@@ -62,6 +95,9 @@ public:
 signals:
 	void received(const QuickDC::Api::Event& event);
 
+	/** A hub's event on its way to route(); see deliver(). */
+	void hubReceived(const QuickDC::Api::Event& event, QPrivateSignal);
+
 	/** A setting changed in the core, and not by a write made here. */
 	void settingChanged(Qdc::ConfigStore store, const QString& group, const QString& key);
 
@@ -78,6 +114,7 @@ private:
 
 	void adoptSnapshot();
 	void absorb(const QuickDC::Api::Event& event);
+	void dispatchToHub(const QuickDC::Api::Event& event);
 	Store& of(ConfigStore store);
 
 	Store m_application;
@@ -86,6 +123,8 @@ private:
 
 	std::mutex m_offered;
 	std::optional<QuickDC::Api::SettingsSnapshot> m_snapshot;
+
+	QHash<QuickDC::Api::HubHandle, HubRoute*> m_routes;
 };
 
 }

@@ -53,7 +53,7 @@ class EventRelay final : public QuickDC::Api::EventSink {
 
 		void deliver(const QuickDC::Api::Event& event) override
 		{
-			emit channel->received(event);
+			channel->deliver(event);
 		}
 
 	private:

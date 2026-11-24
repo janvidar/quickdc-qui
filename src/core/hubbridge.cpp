@@ -278,7 +278,7 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 		return;
 	}
 
-	connect(m_thread->channel(), &CoreChannel::received, this, &HubBridge::onCoreEvent);
+	connect(m_thread->channel()->route(m_handle), &HubRoute::received, this, &HubBridge::onCoreEvent);
 
 	m_opened = m_thread->submit(QuickDC::Api::Commands::OpenHub{m_handle, m_url.toStdString()});
 	if (m_opened) sendPolicy();
@@ -289,6 +289,8 @@ Qdc::HubBridge::~HubBridge()
 {
 	if (m_opened && m_thread)
 		m_thread->submit(QuickDC::Api::Commands::CloseHub{m_handle});
+
+	if (m_thread) m_thread->channel()->releaseRoute(m_handle);
 }
 
 void Qdc::HubBridge::sendPolicy()
