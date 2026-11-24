@@ -227,6 +227,46 @@ poll, a timer heap or a message queue.
       tests and helpers likewise. A test runs two cores in one process, each
       with its own sockets and timers.
 
+### Phase F - a headless front end, and a GUI with no core policy
+
+Goal: everything worth testing - hubs, chat, search, file lists, peer transfers,
+boards, settings - can be driven and checked from a plain shell, by a script, with
+no display; and the GUI is a renderer of what the core says, holding no decision
+about core behaviour. The same `Api` serves both, so whatever the CLI gains the GUI
+can use, and nothing the GUI needs is out of the CLI's reach.
+
+The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
+- Runs each core on a thread of its own via `Core::runUntilStopped()`, sends
+  `Api::Command`s with `submit()`, receives `Api::Event`s through a subscription
+  handed to its own thread - the GUI's shape, without Qt. It may include the
+  protocol header and nothing else from the core, enforced by the link as the GUI's
+  isolation is.
+- Several cores in one process (`--core a --core b`, each its own home directory);
+  a line addressed `@a` goes to that core. Two cores meeting on one's local hub over
+  loopback is how a peer transfer is tested without the internet.
+- Scripted first: one command per line from a file or stdin, mapping one-to-one
+  onto `Api::Commands` (`@a open adc://127.0.0.1:N`, `@b search foo`, ...);
+  `wait <Event> [field=value ...] [timeout=10s]` blocks until a matching event or
+  fails; `expect` checks state; events go out as JSON lines; the exit status is
+  the verdict. An interactive mode is the same parser reading a terminal.
+- Scenarios are ctest tests: a script plus the files it shares and expects.
+
+- [ ] F1. The CLI: core threads, the event pump, the script language, JSON event
+      output, `wait`/`expect`, exit status, `--home`; hubs, chat and settings.
+- [ ] F2. Offline scenarios on loopback: join a local hub, chat, private message,
+      search, file list, download (active, passive, TLS), as ctest tests.
+- [ ] F3. Core policy out of the GUI, each step covered by a CLI scenario before
+      the GUI is switched to it: search results matched to their search in the
+      core; picture auto-fetch policy and limits; the board store, fetching ahead
+      and withdrawn posts; the public hub directory (merge, cache); favourites,
+      recent hubs and completed downloads as core state; share folder management;
+      the connection-mode derivation (one copy, the core's).
+- [ ] F4. The old `quickdc_cli` retired: what it does that the `Api` lacks (hub
+      operator actions, local hub administration, the connection list, the local
+      TTH search) added as commands and events, or dropped.
+- [ ] F5. A project skill for driving it from the AI loop: build, run a scenario,
+      read the output.
+
 ## Decisions
 
 - D1. Work in a separate clone, on `redesign` branches, so the working
