@@ -605,7 +605,7 @@ void TestBoards::aSubjectCarryingABidirectionalOverrideIsDrawnReduced()
 {
 	Qdc::BoardModel model;
 
-	const QString doctored = QStringLiteral("Notes‮gpj.exe");
+	const QString doctored = QStringLiteral("Notes\u202Egpj.exe");
 
 	model.add(entry(QStringLiteral("ROOT"), base(), QString(), QString(), doctored));
 
@@ -1542,7 +1542,7 @@ void TestBoards::aReplyOpensQuotingThePostItAnswers()
 	const QString body = QStringLiteral("The hub will be offline on Saturday, from "
 	                                    "eight in the morning until the afternoon, "
 	                                    "while the disks are replaced.\n"
-	                                    "Bring the file list back‮afterwards.");
+	                                    "Bring the file list back\u202Eafterwards.");
 
 	pane.addEntry(entry(root, base()));
 	pane.read(root);
