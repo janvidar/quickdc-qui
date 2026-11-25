@@ -267,6 +267,27 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
 - [x] F5. A project skill for driving it from the AI loop: build, run a scenario,
       read the output.
 
+### Phase G - emulated networks
+
+Goal: test what loopback cannot - NAT traversal between two passive peers, UPnP
+port mapping against a gateway, reachability checks, IPv6 variants and bad links -
+with rootless podman: a fake internet network, home networks behind router
+containers doing NAT with nftables, qdc in each client container.
+
+- [ ] G1. qdc across processes: a control socket so one script drives qdc
+      processes in several containers (`@a` = the qdc in container a), same script
+      language, waits on any of their events.
+- [ ] G2. Images (a base matching the host distribution with the build tree mounted
+      read-only; a router image with nftables, iproute2, miniupnpd, tc) and a
+      topology runner that sets networks up and tears them down; a separate ctest
+      label, skipped where podman is missing.
+- [ ] G3. NAT traversal: two passive clients behind NATs that drop unsolicited
+      inbound, transfer through traversal; port-preserving vs symmetric NAT.
+- [ ] G4. UPnP against miniupnpd, a local reachability server inside the network
+      (from libdrop if it has one, else a small test server), and the "occupied"
+      verdict seen with forwarding on.
+- [ ] G5. IPv6 (dual stack, v6 only, no v6 route) and impaired links (tc netem).
+
 ## Decisions
 
 - D1. Work in a separate clone, on `redesign` branches, so the working
