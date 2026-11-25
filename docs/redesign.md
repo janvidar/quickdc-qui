@@ -277,7 +277,7 @@ containers doing NAT with nftables, qdc in each client container.
 - [x] G1. qdc across processes: a control socket so one script drives qdc
       processes in several containers (`@a` = the qdc in container a), same script
       language, waits on any of their events.
-- [ ] G2. Images (a base matching the host distribution with the build tree mounted
+- [x] G2. Images (a base matching the host distribution with the build tree mounted
       read-only; a router image with nftables, iproute2, miniupnpd, tc) and a
       topology runner that sets networks up and tears them down; a separate ctest
       label, skipped where podman is missing.
@@ -893,3 +893,31 @@ containers doing NAT with nftables, qdc in each client container.
   download-active unchanged with a and b in separate agents, plus a refused
   line (cited by number) and an agent killed mid-wait; 30 sequential and 2x24
   parallel each, no failures. json.cpp gained a parser.
+- 2026-11-25: G2 done: rootless podman test networks. `quickdc/cli/tests/net/`:
+  `host/Containerfile` (Ubuntu 26.04 like the host, qdc's runtime libraries and
+  the sanitizer runtimes; the qdc binary's directory is mounted read-only),
+  `router/Containerfile` (Alpine: nftables, iproute2, tc, miniupnpd) with
+  `router/router.sh`, and `run.sh`, which reads a topology (`net NAME`, `node
+  NAME router|client|public NET.HOST... [nat=home|symmetric|none]`), builds the
+  images it lacks (tagged by Containerfile hash, older tags removed), makes
+  `--internal --disable-dns` networks for the run (wan 198.18.N.0/24, lans
+  10.N.k.0/24, N tried until podman accepts every subnet, so parallel runs do
+  not collide), starts routers (CAP_NET_ADMIN and ip_forward in their own netns;
+  `home` masquerades and silently drops new inbound, forwarded or to the router,
+  `symmetric` is `masquerade fully-random`) and then an agent per client (its
+  default route set through its lan's router, CAP_NET_ADMIN in its own netns)
+  and public node, all serving on Unix sockets in a run directory mounted into
+  every container, so the controller runs on the host and no control traffic
+  crosses the test networks; `${IP_node}` defined per node. Teardown is by a
+  per-run label, on any exit or signal; exit 77 where podman or its networking
+  does not work. Proof `public-hub-two-lans` (ctest `cli_net_public_hub_two_lans`,
+  LABELS net, SKIP_RETURN_CODE 77): a hub and an active client w on the wan, a
+  and b each behind a home router; all log in, the hub sees a and b at their
+  routers' addresses, a and b chat, and passive a downloads from w and w from a
+  (each dialled from behind the NAT). ~5 s; 5 in a row and 2 in parallel pass and
+  leave no containers or networks. Passive a from passive b: with a reset from
+  the router the dials were refused; with silent drops both dials meet as a TCP
+  simultaneous open and then both sides start TLS as the client ("unexpected
+  message") - for G3 to settle which side is the TLS server. hubdirectory.cpp's
+  Json holds `JsonMember`s, not `std::pair<std::string, Json>`, which clang
+  refused while Json was incomplete. Full suite green (1481).
