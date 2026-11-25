@@ -1035,3 +1035,9 @@ containers doing NAT with nftables, qdc in each client container.
   ~Core calls `PortForward::release(2 s)` first, deleting the gateway mappings
   while the loop still runs. Still open: IPv6 NAT traversal, NMDC IPv6 and
   handshake deadline, the once-seen G3 net failure.
+- 2026-11-26: NMDC peer connections have a 30 s handshake deadline
+  (QUICKDC_NMDC_HANDSHAKE_SECONDS), cancelled in onKey(). IPv6 NAT traversal:
+  I6 is published whenever the address is known (passive too; TCP6 alone says
+  dialable), and DNAT/DRNT use IPv6 when both INFs carry I6. New net topology
+  ipv6-closed and test cli_net_ipv6_traversal. NMDC IPv6 peers: decided not to
+  do. Still open: the once-seen G3 net failure.
