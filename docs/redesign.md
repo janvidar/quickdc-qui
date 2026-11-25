@@ -807,3 +807,12 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   that hold (preset what login depends on, wait on events, verdicts in the
   script), stressing them with their exact ctest arguments, and what loopback
   cannot test. Phase F is done.
+- 2026-11-25: checking the drive-qdc skill's example against the traced app
+  build found the trace logs still process-wide in the wrong way: opened and
+  freed once per core, so the first core to go freed them under the others
+  (qdc aborted), written without a lock by several core threads, and always
+  under ~/.quickdc/debug and ~/.samurai/debug - a traced qdc truncated the logs
+  of the QuickDC the user was running. Now opened by the first core and closed
+  by the last, every write locked, and under the core's own home when it has
+  one; the app's default home keeps the old locations. A traced qdc opens
+  nothing under HOME (checked with strace).
