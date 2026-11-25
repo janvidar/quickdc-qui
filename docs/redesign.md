@@ -1025,3 +1025,13 @@ containers doing NAT with nftables, qdc in each client container.
   closed firewalls cannot transfer); a CTM names the IPv4 external port even where the
   peer then dials IPv6 (differs only when a gateway granted another port); NMDC has no
   IPv6 peer path.
+- 2026-11-26: four G leftovers closed. qdc agents require the controller to
+  present QDC_AGENT_KEY as its first line (`{"key":...}`); a wrong or missing
+  key is turned away and the agent keeps listening; an agent bound beyond
+  loopback without a key will not start; socket paths are mode 0600. A peer's
+  error status before approval ends the queue request we dialled for at once.
+  The CTM port follows the family the peer will dial (IPv6 where both ends have
+  it), so a gateway-granted IPv4 port is no longer sent to an IPv6 dialler.
+  ~Core calls `PortForward::release(2 s)` first, deleting the gateway mappings
+  while the loop still runs. Still open: IPv6 NAT traversal, NMDC IPv6 and
+  handshake deadline, the once-seen G3 net failure.
