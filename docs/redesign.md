@@ -264,7 +264,7 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
 - [x] F4. The old `quickdc_cli` retired: what it does that the `Api` lacks (hub
       operator actions, local hub administration, the connection list, the local
       TTH search) added as commands and events, or dropped.
-- [ ] F5. A project skill for driving it from the AI loop: build, run a scenario,
+- [x] F5. A project skill for driving it from the AI loop: build, run a scenario,
       read the output.
 
 ## Decisions
@@ -802,3 +802,8 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   so CoreStatus tells the bound port but a front end cannot yet ask for one
   picked for it; passwords in acl.xml are kept as written. 1466 green; sanitizer
   build 1419 green.
+- 2026-11-25: F5 done: the `drive-qdc` project skill (.claude/skills/drive-qdc,
+  kept out of git like run-quickdc) - building qdc, running and writing scenarios
+  that hold (preset what login depends on, wait on events, verdicts in the
+  script), stressing them with their exact ctest arguments, and what loopback
+  cannot test. Phase F is done.
