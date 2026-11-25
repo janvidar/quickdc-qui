@@ -175,6 +175,9 @@ Qdc::SearchView::~SearchView()
 	 * The widgets of each search go with this one, being children of it, but the
 	 * record holding them together is not a QObject and has to be let go by hand.
 	 */
+	for (const Search* search : std::as_const(m_searches))
+		if (m_search) m_search->forget(search->search);
+
 	qDeleteAll(m_searches);
 	m_searches.clear();
 }

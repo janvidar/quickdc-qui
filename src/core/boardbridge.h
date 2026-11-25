@@ -20,7 +20,6 @@ namespace QuickDC { namespace Api { struct Event; } }
 namespace Qdc {
 
 class CoreThread;
-class HubBridge;
 
 /**
  * What the core says about the bulletin boards, as a view draws it.
@@ -88,9 +87,39 @@ public slots:
 	/** A hub's own choice, or with none the general setting. */
 	void setPolicy(const QString& hubUrl, Policy policy, std::optional<bool> choice);
 
-	/** Write a post on the hub; a refusal comes back as postRefused(). */
-	void write(HubBridge* hub, const QString& board, const QString& parent,
+	/**
+	 * Follow a board again: one left, or with 'fromStart' every entry the hub holds
+	 * rather than from the highest timestamp held, which is the only way a hub that
+	 * reordered or removed entries becomes visible. The core follows every board a
+	 * hub describes by itself.
+	 */
+	void subscribe(const QString& hubUrl, const QString& board, bool fromStart = false);
+
+	/** Leave a board; its descriptors do not take it up again while the session lasts. */
+	void leave(const QString& hubUrl, const QString& board);
+
+	/**
+	 * Ask for one entry by hash: the parent of an orphaned reply, most often. A
+	 * question rather than a subscription: the hub answers with the single entry or
+	 * with a refusal carrying code 76.
+	 */
+	void requestEntry(const QString& hubUrl, const QString& board, const QString& tth);
+
+	/**
+	 * Write a post on the hub, the core composing, signing and offering the document;
+	 * a refusal comes back as postRefused(), and the entry coming back publishes it.
+	 *
+	 * @param parent empty for a post that starts a thread.
+	 */
+	void write(const QString& hubUrl, const QString& board, const QString& parent,
 	           const QString& subject, const QString& body, bool richText);
+
+	/**
+	 * Ask the hub to withdraw a post. That removes an index entry and not the
+	 * document, which every client that read it may go on serving, so it must never
+	 * be presented as a guarantee that a post is gone.
+	 */
+	void withdraw(const QString& hubUrl, const QString& board, const QString& tth);
 
 signals:
 	/**

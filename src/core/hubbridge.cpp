@@ -312,6 +312,8 @@ void Qdc::HubBridge::handle(const QuickDC::Api::Events::HubAuthenticate&)
 template<>
 void Qdc::HubBridge::handle(const QuickDC::Api::Events::HubRedirect& e)
 {
+	/* The core reconnects this same handle there, and what it says next names that hub. */
+	if (e.followed && !e.url.empty()) m_url = from(e.url);
 	emit redirectRequested(from(e.address), e.port, e.followed);
 }
 
@@ -556,45 +558,6 @@ void Qdc::HubBridge::sendPassword(const QString& password)
 	if (!m_opened) return;
 
 	m_thread->submit(QuickDC::Api::Commands::SendPassword{m_handle, password.toStdString()});
-}
-
-void Qdc::HubBridge::subscribeBoard(const QString& board, bool fromStart)
-{
-	if (!m_opened || board.isEmpty()) return;
-
-	m_thread->submit(QuickDC::Api::Commands::SubscribeBoard{m_handle, board.toStdString(), fromStart});
-}
-
-void Qdc::HubBridge::unsubscribeBoard(const QString& board)
-{
-	if (!m_opened || board.isEmpty()) return;
-
-	m_thread->submit(QuickDC::Api::Commands::UnsubscribeBoard{m_handle, board.toStdString()});
-}
-
-void Qdc::HubBridge::requestBoardEntry(const QString& board, const QString& tth)
-{
-	if (!m_opened || board.isEmpty() || tth.isEmpty()) return;
-
-	m_thread->submit(QuickDC::Api::Commands::RequestBoardEntry{
-		m_handle, board.toStdString(), tth.toStdString()});
-}
-
-bool Qdc::HubBridge::writePost(quint64 request, const QString& board, const QString& parent,
-                               const QString& subject, const QString& body, bool richText)
-{
-	if (!m_opened || board.isEmpty()) return false;
-
-	return m_thread->submit(QuickDC::Api::Commands::WritePost{request, m_handle, board.toStdString(),
-		parent.toStdString(), subject.toStdString(), body.toStdString(), richText});
-}
-
-void Qdc::HubBridge::withdrawPost(const QString& tth, const QString& board)
-{
-	if (!m_opened || tth.isEmpty() || board.isEmpty()) return;
-
-	m_thread->submit(QuickDC::Api::Commands::WithdrawPost{
-		m_handle, tth.toStdString(), board.toStdString()});
 }
 
 void Qdc::HubBridge::collect(const SearchHit& hit)

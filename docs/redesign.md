@@ -816,3 +816,40 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   by the last, every write locked, and under the core's own home when it has
   one; the app's default home keeps the old locations. A traced qdc opens
   nothing under HOME (checked with strace).
+- 2026-11-25: the leftovers batch. Queue: a source keeps its hub as
+  `hubSettingsGroup()` spells it and matches by CID alone on ADC (by hub, any
+  case, and nick on NMDC), so one peer is one source however it was learned;
+  a SID given for a source is turned into the user's CID (`Hub::sourceIdOf`),
+  and on ADC a source is never found by SID; the scheduler opens no second
+  request to a peer already asked for that file; leaves are fetched into a file
+  per connection and the first whole one adopted, so two connections can no
+  longer delete each other's (the endless leaf ping-pong). A peer connection
+  quoting a token nothing here waits for is answered `CSTA 240 Connection not
+  expected TO..` and closed, and every peer connection has 30 s from coming up
+  to both sides naming themselves. Redirects are followed where SetHubPolicy
+  says so (`Hub::onRedirect`/`judgeRedirect`): same protocol family, never adcs
+  to adc, never back to where the connection has been, at most
+  QUICKDC_HUB_MAX_REDIRECTS; same handle, the hub's address changes, boards and
+  recents follow; `HubRedirect` gains `url` and `why`. Board commands
+  (SubscribeBoard, UnsubscribeBoard, RequestBoardEntry, WritePost,
+  WithdrawPost) name the hub by address like the rest; the keeper finds the
+  session and answers `BoardUnavailable{hubUrl, board, tth, asked}` (or
+  PostRefused NoHub) where none carries boards; HubBridge lost the five board
+  methods, BoardBridge has them by address; qdc `board-entry` added. TLS: the
+  samurai BIO now answers BIO_CTRL_EOF, so a peer closing after a transfer is
+  an end of stream rather than "SSL read error (5): no error reported" and
+  "Protocol error"; a home with no hash cache yet logs no error; scenario.sh
+  takes `!text` for what stderr must not hold, and cli_download_tls checks
+  `!ERROR`. ADC search results carry SL (free upload slots, as the upload side
+  counts them); NMDC parsed slots already, and still sends no search results at
+  all. NMDC's $GetListLen and $Get of a list own the list they open. Port 0
+  binds TCP and UDP to one picked port (retried where UDP has it taken), and
+  every advertised port is `Core::peerPort()`, the bound one; two-cores-chat and
+  download-active use port 0 and CoreStatus (qdc `open` expands `$NAME`).
+  acl.xml must keep passwords as given - GPA/PAS proves a password with a
+  fresh salt, so no stored digest could answer - so it is written 0600 (samurai
+  `File::Mode::Private`, tightening an existing file) and the hub directory set
+  0700. A dequeued picture leaves `mediaFetches`; SearchView forgets its
+  searches when it goes. hubsession.tcc removes its peer key pair. 1476 green;
+  sanitizer build 1429 green; redirect, boards, download-tls, search,
+  two-cores-chat, download-active 78 runs each without a failure.

@@ -590,11 +590,6 @@ void TestBridge::nothingAViewAsksForWaitsForABusyCore()
 	hub.disconnectFromHub();
 
 	/* Everything a board pane reaches for. */
-	hub.subscribeBoard(QStringLiteral("general"));
-	hub.requestBoardEntry(QStringLiteral("general"), ENTRY_TTH);
-	hub.withdrawPost(ENTRY_TTH, QStringLiteral("general"));
-	hub.unsubscribeBoard(QStringLiteral("general"));
-
 	posts.postState(ENTRY_TTH);
 	posts.attribution(ENTRY_TTH);
 	posts.unread(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"));
@@ -602,8 +597,12 @@ void TestBridge::nothingAViewAsksForWaitsForABusyCore()
 	posts.read(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"), ENTRY_TTH, true);
 	posts.markAllRead(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"));
 	posts.setPolicy(QStringLiteral("adc://192.0.2.1:412"), Qdc::BoardBridge::Policy::Serve, true);
-	posts.write(&hub, QStringLiteral("general"), QString(), QStringLiteral("A subject"),
-	            QStringLiteral("A body"), false);
+	posts.subscribe(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"));
+	posts.requestEntry(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"), ENTRY_TTH);
+	posts.withdraw(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"), ENTRY_TTH);
+	posts.leave(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"));
+	posts.write(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"), QString(),
+	            QStringLiteral("A subject"), QStringLiteral("A body"), false);
 
 	const qint64 spent = timer.elapsed();
 
@@ -800,12 +799,11 @@ void TestBridge::whatTheCoreSaysOfAPostIsWhatIsDrawn()
 
 void TestBridge::aPostWithNoSessionToGoOnSaysWhy()
 {
-	Qdc::HubBridge hub(nullptr, QStringLiteral("adc://192.0.2.61:412"));
 	Qdc::BoardBridge posts(nullptr);
 	QSignalSpy refused(&posts, &Qdc::BoardBridge::postRefused);
 
-	posts.write(&hub, QStringLiteral("general"), QString(), QStringLiteral("Hello"),
-	            QStringLiteral("A body"), false);
+	posts.write(QStringLiteral("adc://192.0.2.61:412"), QStringLiteral("general"), QString(),
+	            QStringLiteral("Hello"), QStringLiteral("A body"), false);
 
 	QCOMPARE(refused.count(), 1);
 	QVERIFY(!refused.at(0).at(0).toString().isEmpty());

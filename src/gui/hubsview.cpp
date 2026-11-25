@@ -1403,29 +1403,22 @@ Qdc::BoardPane* Qdc::HubsView::openBoard(Entry& entry, const QString& board)
 
 	connect(pane, &BoardPane::parentRequested, this,
 	        [this, pane, board](const QString& tth) {
-		Entry* owner = entryForBoard(pane);
-		if (!owner || !owner->bridge) return;
-
 		/*
 		 * A question and not a subscription: the hub answers with the one entry or
 		 * with a refusal, and either way what this session is subscribed to is
 		 * untouched.
 		 */
-		owner->bridge->requestBoardEntry(board, tth);
+		bulletins()->requestEntry(hubKeyOf(pane), board, tth);
 	});
 
 	connect(pane, &BoardPane::withdrawRequested, this,
 	        [this, pane, board](const QString& tth) {
-		Entry* owner = entryForBoard(pane);
-		if (owner && owner->bridge) owner->bridge->withdrawPost(tth, board);
+		bulletins()->withdraw(hubKeyOf(pane), board, tth);
 	});
 
 	connect(pane, &BoardPane::rereadRequested, this, [this, pane, board] {
-		Entry* owner = entryForBoard(pane);
-		if (!owner || !owner->bridge) return;
-
 		/* What arrives is reconciled against what is held, so nothing is thrown away first. */
-		owner->bridge->subscribeBoard(board, true);
+		bulletins()->subscribe(hubKeyOf(pane), board, true);
 	});
 
 	connect(pane, &BoardPane::threadSubmitted, this,
@@ -1507,8 +1500,7 @@ void Qdc::HubsView::showBoard(BoardPane* pane)
 	 * back from the last session may be for a board the hub has not mentioned, and a
 	 * board followed already is not asked of the hub twice.
 	 */
-	if (Entry* owner = entryForBoard(pane))
-		if (owner->bridge) owner->bridge->subscribeBoard(pane->board());
+	if (entryForBoard(pane)) bulletins()->subscribe(hubKeyOf(pane), pane->board());
 
 	refreshBoardItem(item, pane);
 	refreshBadge();
@@ -1559,7 +1551,7 @@ void Qdc::HubsView::submitPost(Entry& entry, BoardPane* pane, const QString& par
 {
 	if (!pane || !entry.bridge) return;
 
-	bulletins()->write(entry.bridge, pane->board(), parent, subject, body, richText);
+	bulletins()->write(BoardBridge::hubKey(entry.bridge->url()), pane->board(), parent, subject, body, richText);
 }
 
 void Qdc::HubsView::setPasswordPrompt(PasswordPrompt prompt)
@@ -2239,7 +2231,7 @@ void Qdc::HubsView::showBoardMenu(QTreeWidgetItem* item, const QPoint& globalPos
 		 * detection a client has of a hub that reordered or removed entries: what
 		 * arrives is reconciled against what is held rather than replacing it.
 		 */
-		if (entry->bridge) entry->bridge->subscribeBoard(board, true);
+		if (entry->bridge) bulletins()->subscribe(BoardBridge::hubKey(entry->bridge->url()), board, true);
 
 		return;
 	}
@@ -2259,7 +2251,7 @@ void Qdc::HubsView::leaveBoard(const QString& url, const QString& board)
 	 * and a row taken away without a word would leave the hub sending a board nobody is
 	 * reading for as long as the connection lasts.
 	 */
-	if (entry->bridge) entry->bridge->unsubscribeBoard(board);
+	if (entry->bridge) bulletins()->leave(BoardBridge::hubKey(entry->bridge->url()), board);
 
 	closeBoard(*entry, board);
 }

@@ -338,15 +338,41 @@ void Qdc::BoardBridge::setPolicy(const QString& hubUrl, Policy policy, std::opti
 		!choice ? Command::Choice::Follow : *choice ? Command::Choice::Always : Command::Choice::Never});
 }
 
-void Qdc::BoardBridge::write(HubBridge* hub, const QString& board, const QString& parent,
+void Qdc::BoardBridge::subscribe(const QString& hubUrl, const QString& board, bool fromStart)
+{
+	if (m_thread && !board.isEmpty())
+		m_thread->submit(QuickDC::Api::Commands::SubscribeBoard{to_std(hubUrl), to_std(board), fromStart});
+}
+
+void Qdc::BoardBridge::leave(const QString& hubUrl, const QString& board)
+{
+	if (m_thread && !board.isEmpty())
+		m_thread->submit(QuickDC::Api::Commands::UnsubscribeBoard{to_std(hubUrl), to_std(board)});
+}
+
+void Qdc::BoardBridge::requestEntry(const QString& hubUrl, const QString& board, const QString& tth)
+{
+	if (m_thread && !board.isEmpty() && !tth.isEmpty())
+		m_thread->submit(QuickDC::Api::Commands::RequestBoardEntry{to_std(hubUrl), to_std(board), to_std(tth)});
+}
+
+void Qdc::BoardBridge::withdraw(const QString& hubUrl, const QString& board, const QString& tth)
+{
+	if (m_thread && !board.isEmpty() && !tth.isEmpty())
+		m_thread->submit(QuickDC::Api::Commands::WithdrawPost{to_std(hubUrl), to_std(board), to_std(tth)});
+}
+
+void Qdc::BoardBridge::write(const QString& hubUrl, const QString& board, const QString& parent,
                              const QString& subject, const QString& body, bool richText)
 {
 	static quint64 requests = 0;
-	if (!hub) return;
 
 	const quint64 request = ++requests;
 	m_writing.insert(request);
-	if (hub->writePost(request, board, parent, subject, body, richText)) return;
+	if (m_thread && !board.isEmpty()
+	    && m_thread->submit(QuickDC::Api::Commands::WritePost{request, to_std(hubUrl), to_std(board),
+	                                                          to_std(parent), to_std(subject), to_std(body), richText}))
+		return;
 
 	m_writing.remove(request);
 	emit postRefused(words(Ev::PostRefused{request, Ev::PostRefused::Why::NoHub, 0, 0, std::string()}));

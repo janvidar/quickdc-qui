@@ -199,46 +199,6 @@ public slots:
 	/** Answer a hub that asked for one, after authenticationRequired(). */
 	void sendPassword(const QString& password);
 
-	/**
-	 * Follow a board again: one left, or with 'fromStart' every entry the hub holds
-	 * rather than from the highest timestamp held, which is the only way a hub that
-	 * reordered or removed entries becomes visible. The core follows every board a
-	 * hub describes by itself.
-	 */
-	void subscribeBoard(const QString& board, bool fromStart = false);
-
-	/** Leave a board; its descriptors do not take it up again while the session lasts. */
-	void unsubscribeBoard(const QString& board);
-
-	/**
-	 * Ask for one entry by hash: the parent of an orphaned reply, most often.
-	 *
-	 * A question rather than a subscription. The hub answers with the single entry
-	 * or with a refusal carrying code 76, and either way the session's subscriptions
-	 * are untouched.
-	 */
-	void requestBoardEntry(const QString& board, const QString& tth);
-
-	/**
-	 * Write a post and submit it, the core composing, signing and offering the
-	 * document. Answered through BoardBridge, by 'request'; the entry coming back
-	 * is what publishes it. False where there is no session to send it on.
-	 *
-	 * @param parent empty for a post that starts a thread.
-	 */
-	bool writePost(quint64 request, const QString& board, const QString& parent,
-	               const QString& subject, const QString& body, bool richText);
-
-	/**
-	 * Ask the hub to withdraw a post.
-	 *
-	 * Withdrawal removes an index entry and does not remove the document, which by
-	 * then may be held by every client that read it and will go on being served by
-	 * them. It must never be presented to a user as a guarantee that a post is gone,
-	 * which is why this is not called "delete".
-	 */
-	void withdrawPost(const QString& tth, const QString& board);
-
 signals:
 	void netStatusChanged(Qdc::NetStatus status);
 

@@ -9,6 +9,7 @@
 
 #include <core/coretypes.h>
 
+#include <QPointer>
 #include <QList>
 #include <QString>
 
@@ -124,7 +125,7 @@ private:
 	/** Where a download goes, as the configuration has it. */
 	QString downloadDirectory() const;
 
-	SearchBridge* m_search;
+	QPointer<SearchBridge> m_search;
 	TransferBridge* m_transfers;
 	FilelistBridge* m_filelists;
 	ConfigBridge* m_config;
