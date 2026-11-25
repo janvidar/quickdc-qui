@@ -291,6 +291,19 @@ void Qdc::HubBridge::handle(const QuickDC::Api::Events::HubSystemError& e)
 }
 
 template<>
+void Qdc::HubBridge::handle(const QuickDC::Api::Events::KickRefused& e)
+{
+	using Why = QuickDC::Api::Events::KickRefused::Why;
+	switch (e.why)
+	{
+		case Why::NoSession:   emit systemError(tr("Not logged in to this hub.")); return;
+		case Why::NoSuchUser:  emit systemError(tr("That user is not on this hub.")); return;
+		case Why::NotOperator: emit systemError(tr("Only an operator of this hub can do that.")); return;
+		case Why::Unsupported: emit systemError(tr("This hub cannot be asked to ban.")); return;
+	}
+}
+
+template<>
 void Qdc::HubBridge::handle(const QuickDC::Api::Events::HubAuthenticate&)
 {
 	emit authenticationRequired();

@@ -261,7 +261,7 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
       and withdrawn posts; the public hub directory (merge, cache); favourites,
       recent hubs and completed downloads as core state; share folder management;
       the connection-mode derivation (one copy, the core's).
-- [ ] F4. The old `quickdc_cli` retired: what it does that the `Api` lacks (hub
+- [x] F4. The old `quickdc_cli` retired: what it does that the `Api` lacks (hub
       operator actions, local hub administration, the connection list, the local
       TTH search) added as commands and events, or dropped.
 - [ ] F5. A project skill for driving it from the AI loop: build, run a scenario,
@@ -732,4 +732,73 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   (subscribing, writing, withdrawing) and by address (reading, which works with no
   session); retry of a post given up on is the reader asking again. 1450 green;
   sanitizer build 1403 green; the five smoke scenarios pass.
-
+- 2026-11-25: F4 done: the old `quickdc_cli` (core/test/cli) is gone, and with it
+  the last front end that held core objects; `testdebug`, which never used its
+  console, builds on its own. Its commands, against the Api: `connect`,
+  `disconnect`, `msg`, `password`, `search`, `download`, `browse`, `queue`,
+  `transfers`, `quit` were covered; `list`, `stats` and `info` are what UserUpdated
+  already says, now printed by qdc's `users` and `info`; `allow_connections` is
+  SetHubPolicy, now qdc's `hub-policy`; `help` is generated from qdc's command
+  table. Added: `kick` and `redirect`, and a ban; `hubkick`, `hubban`, `hubunban`
+  (the last two were never implemented) and `hubstats`; `connections`;
+  `tthsearch`; `version` and `uptime`. Dropped: `ctm` (a connection is opened for
+  a download or a list, and one for nothing did nothing), `close` (never
+  implemented; a download is dequeued), `joins` (a display filter, and qdc shows
+  every event), plain text as main chat and the host:port shorthand (qdc names a
+  hub and a URL). Api: `KickUser{hub, userId, message, redirect, banSeconds}` -
+  ADC's DSC with MS, RD and TL, NMDC's $Kick and $OpForceMove - refused with
+  `KickRefused{hub, userId, NoSession|NoSuchUser|NotOperator|Unsupported}` (a ban
+  on NMDC); `ReportStatus` and `CoreStatus{request, version, started, port, tcp,
+  tcp6, udp, udp6, localHub}`, also in ReportState and `Core::state()` and told by
+  the core whenever what it listens on, or whether its hub takes logins, changes
+  (checked once a turn); `SnapshotConnections` and `ConnectionsSnapshot{request,
+  connections}` of `PeerConnection{protocol, address, port, peer, secure,
+  outbound}`; `FindShared{request, tth}` and `SharedFile{request, tth, found,
+  path, name, size, attached}`; and the local hub's administration,
+  `ReportLocalHub`, `KickFromLocalHub{who, message}`, `BanFromLocalHub{who,
+  reason, seconds}`, `UnbanFromLocalHub{who}`, `SetLocalHubAccount{nick, password,
+  User|Operator|Admin}`, `RemoveLocalHubAccount`, each answered by
+  `LocalHubState{request, enabled, name, maxUsers, started, users, accounts,
+  bans}` or `LocalHubRefused{request, NoHub|NoSuchUser|NoSuchEntry|Invalid|
+  NotSaved}`. The GUI says why a kick was refused and has no UI for the rest.
+  The local hub's access list was read and never consulted: it now keeps bans
+  (by CID, nickname or address, until a time or for good, refused at login with
+  231 or 232 and TL) and password accounts (asked with GPA, a fresh salt each
+  time, answered by the tiger digest the client already sent; the rights given
+  with CT; an entry without a password grants nothing, since a nickname is
+  anybody's and a CID is told to every hub). An operator's DSC honours MS, RD and
+  TL: the user is sent its own QUI with them - it was told only "Kicked", and a
+  redirect sent no address - and a TL is kept as a ban against its CID. The ADC
+  client reads a QUI naming itself as kicked, redirected (HubRedirect with the
+  address) or banned, and does not reconnect by itself; its DSC carried neither
+  the message nor the address before. qdc: `status`, `connections`,
+  `find-shared`, `kick`, `redirect`, `ban`, `hub-policy`, `hub-status`,
+  `hub-kick`, `hub-ban`, `hub-unban`, `hub-account`, `hub-account-remove`,
+  `users`, `info`, `help`; and an interactive mode - a terminal and no script,
+  or `-i` - reading the same language a line at a time, running each line as it
+  comes, the cores starting with the first line that is not taken before them,
+  a failed line reported and the next one read, events printed as `[core] Event
+  path=value ...` (`--json` for the JSON lines). Scenario operator: three cores,
+  b given an operator account on a's hub and logging in with its password, then
+  kicking, redirecting and banning c through the hub (by CID, so c's next
+  nickname does not get past it), c refused as no operator, a lifting the ban,
+  kicking c as the owner, banning a nickname for good and lifting that, a's
+  connections, find-shared and the account removed; two-cores-chat now turns the
+  hub on live and waits for CoreStatus instead of for a's own login, and both
+  logins run at once. cli_interactive drives `qdc -i` over a pipe: help, a typo
+  reported without ending the run, an account seen as an event and in acl.xml,
+  and --json. operator, interactive and two-cores-chat 78 runs each (30 in a row,
+  2x24 in parallel) without a failure, operator 12 more under the sanitizers.
+  Found: the hub's exotic cases built their hubs over ~/.quickdc/hub, and the
+  access list wrote itself out there on every destruction, so the suite rewrote
+  the developer's own acl.xml on every run (it had today's date); a table is now
+  written only once changed, and the cases use scratch directories. An ACL entry
+  read as expired when its time was still to come; the old table's identity
+  matchers were stubs that matched nothing. A QUI's MS and a DSC's fields were
+  looked for from the first argument, which is the SID, so a SID starting "MS"
+  was read as a message. Left as found: HubRedirect's `followed` is what the
+  policy said, and nothing in the core follows a redirect; port 0 binds TCP and
+  UDP to different ports, and what is announced to hubs is the configured port,
+  so CoreStatus tells the bound port but a front end cannot yet ask for one
+  picked for it; passwords in acl.xml are kept as written. 1466 green; sanitizer
+  build 1419 green.
