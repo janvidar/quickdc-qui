@@ -281,7 +281,7 @@ containers doing NAT with nftables, qdc in each client container.
       read-only; a router image with nftables, iproute2, miniupnpd, tc) and a
       topology runner that sets networks up and tears them down; a separate ctest
       label, skipped where podman is missing.
-- [ ] G3. NAT traversal: two passive clients behind NATs that drop unsolicited
+- [x] G3. NAT traversal: two passive clients behind NATs that drop unsolicited
       inbound, transfer through traversal; port-preserving vs symmetric NAT.
 - [ ] G4. UPnP against miniupnpd, a local reachability server inside the network
       (from libdrop if it has one, else a small test server), and the "occupied"
@@ -921,3 +921,28 @@ containers doing NAT with nftables, qdc in each client container.
   message") - for G3 to settle which side is the TLS server. hubdirectory.cpp's
   Json holds `JsonMember`s, not `std::pair<std::string, Json>`, which clang
   refused while Json was incomplete. Full suite green (1481).
+- 2026-11-25: G3 done: passive-to-passive through NAT traversal. A NATT connection
+  meets as a TCP simultaneous open, so neither connect() says which end it is;
+  `ADC::peerRole(PeerDial)` (adccommon.h) settles it as DC++ does: the DNAT sender
+  plays the dialled end (TLS server, waits for CSUP), the DRNT sender the dialler.
+  `dialFromHubPort` passes the role to `ClientSession::traverse`, which
+  EventConnected/EventTLSConnected follow; ordinary dials are unchanged. KEYP is
+  checked only as the TLS client (a server is shown no certificate). Found by the
+  second transfer between the same pair: the routers' conntrack still held the
+  first connection's 5-tuple, so the DRNT sender's early SYN reached the other
+  host before its dial existed and was reset - a refused traversal dial is now
+  repeated (50-305 ms, jittered) from the same port. A traversal that has not
+  connected in `QUICKDC_TRAVERSAL_SECONDS` (10) or fails before the handshake is
+  reported as `HubSystemError "NAT traversal with '<nick>' failed: ..."`, fails its
+  queue request, and sends no DSTA (which had the peer count a refusal against its
+  own reachability). Symmetric NAT on both sides, and on one side only, fails that
+  way on both ends in ~10 s, every time: the port named in DNAT/DRNT is not the one
+  the symmetric side's SYN leaves from. Tests: `adc_natt.tcc` (the rule),
+  hubsession.tcc (each end's ADC and TLS role, redial meeting a late peer, the
+  report), and `cli_net_passive_traversal{,_tls}` (both directions, byte-identical;
+  plain by giving each core a key without a certificate) and
+  `cli_net_traversal_{symmetric,one_symmetric}` (new topologies). The net foreach
+  now takes `test|topology|script|definitions`. Each net test 5 in a row and in 2
+  parallel runs, then 3x5 and 3x10 parallel; nothing left behind. One net
+  failure in a 3x5 round, before logs were kept, was not seen again in the 45
+  runs per test after it - unexplained.
