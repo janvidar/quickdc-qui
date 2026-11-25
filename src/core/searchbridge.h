@@ -19,21 +19,15 @@ namespace Qdc {
 class CoreThread;
 
 /**
- * Sending a search to every hub at once.
+ * Sending a search to every hub at once, and letting it go again.
  *
  * Only the sending half. Results do not come back here: the core delivers a reply
  * to the listener of the hub it arrived on, which is a HubBridge, and each one
  * emits what it received. Whoever wants them all watches every hub - HubsView
  * forwards them, because it is what owns the hubs.
  *
- * That asymmetry is the core's, not a choice made here. There is a
- * Share::SearchManager built to hold the requests and sort replies onto them by
- * token, but nothing in the core owns one or feeds it, so a reply reaches only the
- * hub's own listener.
- *
- * The token is what ties the two halves together. It goes out with the request and
- * comes back on every reply to it, so a caller running more than one search at once
- * can tell which is which.
+ * The core numbers each search, and each result says the number of the search it
+ * answers; searchSent() is where a caller learns which number its request got.
  */
 class SearchBridge final : public QObject {
 	Q_OBJECT
@@ -45,14 +39,13 @@ public:
 	/**
 	 * Ask every hub we are logged in to.
 	 *
-	 * Returns at once, and returns the token rather than a count: how many hubs
-	 * were asked is only known on the core thread, and arrives as searchSent().
-	 * Getting the token synchronously is what lets a caller have somewhere to put
-	 * the replies before the first one arrives.
-	 *
-	 * @return the token, or an empty string if there is no core to ask.
+	 * Returns at once with the number the request goes by, which searchSent()
+	 * names along with the search's own; 0 if there is no core to ask.
 	 */
-	QString start(const Qdc::SearchQuery& query);
+	quint64 start(const Qdc::SearchQuery& query);
+
+	/** No more results for the core's search 'search'. */
+	void forget(quint64 search);
 
 	/**
 	 * The extensions a category stands for, lower case and without the dot.
@@ -73,22 +66,22 @@ public:
 
 signals:
 	/**
-	 * The request went out to @a hubsAsked hubs.
+	 * The request went out as the core's search @a search, to @a hubsAsked hubs.
 	 *
 	 * Asked, not searched. A hub is told regardless of what its protocol can carry,
 	 * and NMDC currently carries nothing - DC::HubSession::sendSearchRequest() is a
 	 * stub - so this counts hubs that were given the request rather than hubs that
 	 * put it on the wire. Zero means nothing is connected.
 	 */
-	void searchSent(const QString& token, int hubsAsked);
+	void searchSent(quint64 request, quint64 search, int hubsAsked);
 
 private:
 	void onCoreEvent(const QuickDC::Api::Event& event);
 
 	CoreThread* m_thread;
 
-	/** Tokens of searches handed to the core and not yet said to have gone. */
-	QSet<QString> m_sent;
+	/** Requests handed to the core and not yet said to have gone. */
+	QSet<quint64> m_sent;
 
 };
 

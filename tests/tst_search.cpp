@@ -19,16 +19,13 @@
 #include <QTreeView>
 
 /**
- * Searching: how replies are grouped, and how each one finds the search it answers.
+ * Searching: how replies are grouped, and how each is filed under the search the
+ * core says it answers.
  *
- * None of this needs a hub. Sending is one call into the core and there is nothing
- * to assert about it without somebody on the other end, so what is tested here is
- * everything that happens to a reply after it arrives - which is where the decisions
- * are.
- *
- * Replies are fed in as SearchHit values, exactly as HubBridge emits them, so the
- * tests exercise the same path a real reply takes from the point it becomes a Qt
- * value type.
+ * None of this needs a hub. Which search a reply answers is the core's decision,
+ * tested there; what is tested here is that the view files a reply by that
+ * decision. Replies are fed in as SearchHit values, exactly as HubBridge emits
+ * them, numbered with what the core said the search was called.
  */
 class TestSearch : public QObject {
 	Q_OBJECT
@@ -48,9 +45,8 @@ private slots:
 	void aCategoryBecomesTheExtensionsItStandsFor();
 	void aNameIsFiledUnderTheCategoryOfItsExtension();
 
-	void aResultGoesToTheSearchWhoseTokenItCarries();
-	void aResultCarryingAnotherSearchesTokenIsDropped();
-	void aResultWithoutATokenGoesToTheSearchItsNameMatches();
+	void aResultGoesToTheSearchTheCoreSaysItAnswers();
+	void aResultForASearchWithNoTabIsDropped();
 	void aResultForAClosedSearchIsDroppedWithoutComplaint();
 
 	void resultsCostNoMoreThanTheirNumber();
@@ -66,12 +62,16 @@ private:
 	static Qdc::SearchHit hit(const QString& name, const QString& tth,
 	                          const QString& nick, quint32 freeSlots = 1,
 	                          quint64 size = 1024,
-	                          const QString& token = QStringLiteral("1"),
+	                          quint64 search = 0,
 	                          const QString& hubUrl
 	                              = QStringLiteral("adc://hub.example:7817"));
 
 	/** Type a query into the bar and press the button, as a user would. */
 	static void runSearch(Qdc::SearchView& view, const QString& terms);
+
+	/** Run a search and wait for the core to say what it numbered it. */
+	static quint64 searchFor(Qdc::SearchBridge& bridge, Qdc::SearchView& view,
+	                         const QString& terms);
 
 	static QLabel* summaryOf(Qdc::SearchView& view);
 
@@ -107,11 +107,11 @@ void TestSearch::dequeue(Qdc::TransferBridge& transfers, const QString& target)
 
 Qdc::SearchHit TestSearch::hit(const QString& name, const QString& tth,
                                const QString& nick, quint32 freeSlots, quint64 size,
-                               const QString& token, const QString& hubUrl)
+                               quint64 search, const QString& hubUrl)
 {
 	Qdc::SearchHit reply;
 	reply.hubUrl = hubUrl;
-	reply.token = token;
+	reply.search = search;
 	reply.name = name;
 	reply.tth = tth;
 	reply.size = size;
@@ -140,6 +140,15 @@ void TestSearch::runSearch(Qdc::SearchView& view, const QString& terms)
 	}
 
 	QFAIL("the search button was not found");
+}
+
+quint64 TestSearch::searchFor(Qdc::SearchBridge& bridge, Qdc::SearchView& view,
+                              const QString& terms)
+{
+	QSignalSpy sent(&bridge, &Qdc::SearchBridge::searchSent);
+	runSearch(view, terms);
+	if (!sent.wait(4000)) return 0;
+	return sent.first().at(1).toULongLong();
 }
 
 QLabel* TestSearch::summaryOf(Qdc::SearchView& view)
@@ -288,7 +297,7 @@ void TestSearch::searchModelCountsAPeerOncePerHub()
 	QCOMPARE(model.peerCount(), 1);
 
 	model.add(hit(QStringLiteral("c.zip"), QString(), QStringLiteral("alice"), 1, 1024,
-	              QStringLiteral("1"), QStringLiteral("adc://elsewhere:7817")));
+	              0, QStringLiteral("adc://elsewhere:7817")));
 
 	QCOMPARE(model.peerCount(), 2);
 }
@@ -352,27 +361,23 @@ void TestSearch::aNameIsFiledUnderTheCategoryOfItsExtension()
 	         SearchCategory::Any);
 }
 
-void TestSearch::aResultGoesToTheSearchWhoseTokenItCarries()
+void TestSearch::aResultGoesToTheSearchTheCoreSaysItAnswers()
 {
 	Qdc::SearchBridge bridge(m_thread);
 	Qdc::SearchView view(&bridge, nullptr, nullptr, nullptr);
 
-	runSearch(view, QStringLiteral("album"));
-	runSearch(view, QStringLiteral("holiday"));
+	const quint64 album = searchFor(bridge, view, QStringLiteral("album"));
+	const quint64 holiday = searchFor(bridge, view, QStringLiteral("holiday"));
+	QVERIFY(album && holiday && album != holiday);
 
 	QList<QTreeView*> trees = view.findChildren<QTreeView*>();
 	QCOMPARE(trees.size(), 2);
 
-	/*
-	 * The tokens are the bridge's, and the first search gets the first one. A reply
-	 * carrying it belongs to that tab however little its name has to do with the
-	 * query - the token is the answer, not the name.
-	 */
+	/* The number is the answer, not the name: the core has matched it already. */
 	view.addHit(hit(QStringLiteral("album.zip"), QString(), QStringLiteral("alice"), 1,
-	                1024, QStringLiteral("1")));
-
+	                1024, album));
 	view.addHit(hit(QStringLiteral("nothing-alike.bin"), QString(),
-	                QStringLiteral("bob"), 1, 1024, QStringLiteral("2")));
+	                QStringLiteral("bob"), 1, 1024, holiday));
 
 	QCOMPARE(trees.at(0)->model()->rowCount(), 1);
 	QCOMPARE(trees.at(1)->model()->rowCount(), 1);
@@ -381,51 +386,23 @@ void TestSearch::aResultGoesToTheSearchWhoseTokenItCarries()
 	         QStringLiteral("nothing-alike.bin"));
 }
 
-void TestSearch::aResultCarryingAnotherSearchesTokenIsDropped()
+void TestSearch::aResultForASearchWithNoTabIsDropped()
 {
 	Qdc::SearchBridge bridge(m_thread);
 	Qdc::SearchView view(&bridge, nullptr, nullptr, nullptr);
 
-	runSearch(view, QStringLiteral("album"));
+	const quint64 album = searchFor(bridge, view, QStringLiteral("album"));
+	QVERIFY(album);
 
 	QTreeView* tree = view.findChild<QTreeView*>();
 	QVERIFY(tree);
 
-	/* A token from no search of ours: somebody else's reply, or a very late one. */
 	view.addHit(hit(QStringLiteral("album.zip"), QString(), QStringLiteral("alice"), 1,
-	                1024, QStringLiteral("999")));
+	                1024, album + 1000));
+	view.addHit(hit(QStringLiteral("album.zip"), QString(), QStringLiteral("alice"), 1,
+	                1024, 0));
 
 	QCOMPARE(tree->model()->rowCount(), 0);
-}
-
-void TestSearch::aResultWithoutATokenGoesToTheSearchItsNameMatches()
-{
-	Qdc::SearchBridge bridge(m_thread);
-	Qdc::SearchView view(&bridge, nullptr, nullptr, nullptr);
-
-	runSearch(view, QStringLiteral("album"));
-	runSearch(view, QStringLiteral("holiday photos"));
-
-	QList<QTreeView*> trees = view.findChildren<QTreeView*>();
-	QCOMPARE(trees.size(), 2);
-
-	/*
-	 * NMDC carries no token, so the name is all there is to go on. Every word of the
-	 * query has to appear, which is what keeps a reply out of a search it does not
-	 * answer.
-	 */
-	view.addHit(hit(QStringLiteral("my-album.zip"), QString(), QStringLiteral("alice"),
-	                1, 1024, QString()));
-
-	view.addHit(hit(QStringLiteral("holiday-photos-2026.zip"), QString(),
-	                QStringLiteral("bob"), 1, 1024, QString()));
-
-	/* And one that matches neither is dropped rather than being guessed at. */
-	view.addHit(hit(QStringLiteral("kernel.tar.xz"), QString(), QStringLiteral("carol"),
-	                1, 1024, QString()));
-
-	QCOMPARE(trees.at(0)->model()->rowCount(), 1);
-	QCOMPARE(trees.at(1)->model()->rowCount(), 1);
 }
 
 void TestSearch::aResultForAClosedSearchIsDroppedWithoutComplaint()
@@ -433,7 +410,8 @@ void TestSearch::aResultForAClosedSearchIsDroppedWithoutComplaint()
 	Qdc::SearchBridge bridge(m_thread);
 	Qdc::SearchView view(&bridge, nullptr, nullptr, nullptr);
 
-	runSearch(view, QStringLiteral("album"));
+	const quint64 album = searchFor(bridge, view, QStringLiteral("album"));
+	QVERIFY(album);
 
 	QTabWidget* tabs = view.findChild<QTabWidget*>();
 	QVERIFY(tabs);
@@ -447,7 +425,7 @@ void TestSearch::aResultForAClosedSearchIsDroppedWithoutComplaint()
 	 * closing the tab is how somebody says they have stopped caring.
 	 */
 	view.addHit(hit(QStringLiteral("album.zip"), QString(), QStringLiteral("alice"), 1,
-	                1024, QStringLiteral("1")));
+	                1024, album));
 
 	QVERIFY(view.findChildren<QTreeView*>().isEmpty());
 }
@@ -465,8 +443,9 @@ void TestSearch::aResultForAClosedSearchIsDroppedWithoutComplaint()
 void TestSearch::resultsCostNoMoreThanTheirNumber()
 {
 	const auto feed = [this](int count) {
-		Qdc::SearchView view(nullptr, nullptr, nullptr, nullptr);
-		runSearch(view, QStringLiteral("album"));
+		Qdc::SearchBridge bridge(m_thread);
+		Qdc::SearchView view(&bridge, nullptr, nullptr, nullptr);
+		const quint64 album = searchFor(bridge, view, QStringLiteral("album"));
 
 		QVector<Qdc::SearchHit> hits;
 		hits.reserve(count);
@@ -476,7 +455,7 @@ void TestSearch::resultsCostNoMoreThanTheirNumber()
 		{
 			hits.append(hit(QStringLiteral("album-%1.zip").arg(n),
 			                QStringLiteral("ROOT%1").arg(n),
-			                QStringLiteral("peer-%1").arg(n)));
+			                QStringLiteral("peer-%1").arg(n), 1, 1024, album));
 		}
 
 		QElapsedTimer timer;
@@ -485,7 +464,9 @@ void TestSearch::resultsCostNoMoreThanTheirNumber()
 		/* One at a time, as they arrive from a hub, rather than as one batch. */
 		for (const Qdc::SearchHit& one : hits) view.addHit(one);
 
-		return timer.nsecsElapsed();
+		const qint64 took = timer.nsecsElapsed();
+		QTreeView* tree = view.findChild<QTreeView*>();
+		return tree && tree->model()->rowCount() == count ? took : -1;
 	};
 
 	/* A first run pays for whatever the process has not warmed up yet. */
@@ -493,6 +474,7 @@ void TestSearch::resultsCostNoMoreThanTheirNumber()
 
 	const qint64 small = feed(1000);
 	const qint64 large = feed(5000);
+	QVERIFY2(small >= 0 && large >= 0, "the replies were not all filed under their search");
 
 	/*
 	 * Five times the replies for no more than fifteen times the work. Generous
@@ -522,7 +504,7 @@ void TestSearch::theViewSaysWhenItAskedNoHubs()
 	/* The count comes back from the core thread, so wait for it. */
 	QVERIFY(sent.wait(4000));
 	QCOMPARE(sent.count(), 1);
-	QCOMPARE(sent.first().at(1).toInt(), 0);
+	QCOMPARE(sent.first().at(2).toInt(), 0);
 
 	QLabel* summary = summaryOf(view);
 	QVERIFY(summary);
@@ -538,13 +520,13 @@ void TestSearch::theViewSaysWhenItAskedNoHubs()
 
 void TestSearch::aSearchWithoutACoreIsNotSent()
 {
-	/* No core thread at all: start() has nothing to ask and says so with no token. */
+	/* No core thread at all: start() has nothing to ask and says so with no request. */
 	Qdc::SearchBridge bridge(nullptr);
 
 	Qdc::SearchQuery query;
 	query.terms = QStringLiteral("album");
 
-	QVERIFY(bridge.start(query).isEmpty());
+	QCOMPARE(bridge.start(query), quint64(0));
 }
 
 void TestSearch::queueingAResultBringsThePeerThatAnsweredWithIt()

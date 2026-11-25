@@ -375,10 +375,13 @@ signals:
 	 * a search is over, because on either protocol there is no such message. A
 	 * search is finished when the replies stop.
 	 *
-	 * Which search each answers is SearchHit::token, and on NMDC that is empty; see
-	 * the note on the field.
+	 * Which search each answers is SearchHit::search, the core's attribution; a
+	 * reply answering no search of ours is not told at all.
 	 */
 	void searchResultsReceived(const QVector<Qdc::SearchHit>& hits);
+
+	/** A picture a message here showed is on this disk at @a path; the core fetched it or had it. */
+	void chatMediaReady(const QString& tth, const QString& path);
 
 	/**
 	 * The hub described one of its boards, or said one no longer exists.

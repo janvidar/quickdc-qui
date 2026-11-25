@@ -54,12 +54,9 @@ extern const Number HubIdleTimeout;
 extern const Number HubLingerTimeout;
 extern const Flag   HubCheckClaims;
 
-/** Pictures in chat; a hub's own group in the session store may override the first. */
-inline constexpr Flag   ChatMediaFetch    {"Chat media", "Fetch automatically", false};
-/** Two megabytes: enough for a photograph, small enough to arrive unnoticed. */
-inline constexpr Number ChatMediaLimit    {"Chat media", "Maximum size", 2 * 1024 * 1024};
-/** About six months; zero keeps them for ever. */
-inline constexpr Number ChatMediaKeepDays {"Chat media", "Keep pasted for days", 180};
+extern const Flag   ChatMediaFetch;
+extern const Number ChatMediaLimit;
+extern const Number ChatMediaKeepDays;
 
 /**
  * Bulletin boards; a hub's own group in the session store may override the first two.

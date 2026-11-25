@@ -31,7 +31,6 @@
 #include <QTabBar>
 #include <QToolButton>
 #include <QSpinBox>
-#include <QRegularExpression>
 #include <QStackedWidget>
 #include <QStringListModel>
 #include <QTabWidget>
@@ -154,12 +153,19 @@ Qdc::SearchView::SearchView(SearchBridge* search, TransferBridge* transfers,
 	}
 
 	connect(m_search, &SearchBridge::searchSent,
-	        this, [this](const QString& token, int hubsAsked) {
-		if (Search* search = searchForToken(token))
+	        this, [this](quint64 request, quint64 number, int hubsAsked) {
+		for (Search* search : std::as_const(m_searches))
 		{
+			if (search->request != request) continue;
+
+			search->search = number;
 			search->hubsAsked = hubsAsked;
 			refreshSummary(*search);
+			return;
 		}
+
+		/* Its tab was closed before the core said what it is called. */
+		m_search->forget(number);
 	});
 }
 
@@ -258,9 +264,9 @@ void Qdc::SearchView::startSearch()
 	if (query.sizePolicy != SearchSize::Any)
 		query.size = static_cast<quint64>(m_size->value()) * MIB;
 
-	const QString token = m_search->start(query);
+	const quint64 request = m_search->start(query);
 
-	if (token.isEmpty())
+	if (!request)
 	{
 		QMessageBox::information(this, tr("Search"),
 			tr("The search could not be sent: the QuickDC core is not running."));
@@ -268,22 +274,8 @@ void Qdc::SearchView::startSearch()
 	}
 
 	Search* search = new Search;
-	search->token = token;
+	search->request = request;
 	search->terms = terms;
-
-	/*
-	 * The words a name must carry, for placing a reply that arrives without a
-	 * token. An exclusion is not among them - a reply is being recognised here,
-	 * not filtered.
-	 */
-	const QStringList words = terms.split(QRegularExpression(QStringLiteral("\\s+")),
-	                                      Qt::SkipEmptyParts);
-
-	for (const QString& word : words)
-	{
-		if (!word.startsWith(QLatin1Char('-')))
-			search->words.append(word.toLower());
-	}
 
 	search->model = new SearchModel(this);
 
@@ -381,11 +373,11 @@ void Qdc::SearchView::closeSearch(int index)
 		if (m_searches.at(n)->page != page) continue;
 
 		Search* search = m_searches.takeAt(n);
+		if (m_search) m_search->forget(search->search);
 
 		/*
 		 * The model is a child of this view rather than of the page, so it does not
-		 * go with the widgets and is deleted here. Replies for this search go on
-		 * arriving and are dropped once the token matches nothing.
+		 * go with the widgets and is deleted here.
 		 */
 		delete search->model;
 		delete search;
@@ -405,40 +397,11 @@ void Qdc::SearchView::addHit(const SearchHit& hit)
 
 void Qdc::SearchView::addHits(const QVector<SearchHit>& hits)
 {
-	/*
-	 * Sorted first and added afterwards, so that each search hears once about
-	 * everything in the batch that was for it. Which search a reply answers is
-	 * usually its token; on NMDC there is none and it has to be matched by name,
-	 * which is the expensive half and is why the answer is remembered per name
-	 * rather than worked out again for every reply carrying it.
-	 */
 	QHash<Search*, QVector<SearchHit>> sorted;
-	QHash<QString, Search*> matched;
 
 	for (const SearchHit& hit : hits)
 	{
-		Search* search = nullptr;
-
-		if (!hit.token.isEmpty())
-		{
-			search = searchForToken(hit.token);
-		}
-		else
-		{
-			const auto seen = matched.constFind(hit.name);
-
-			if (seen != matched.constEnd())
-			{
-				search = seen.value();
-			}
-			else
-			{
-				search = searchMatching(hit.name);
-				matched.insert(hit.name, search);
-			}
-		}
-
-		if (search) sorted[search].append(hit);
+		if (Search* search = searchNumbered(hit.search)) sorted[search].append(hit);
 	}
 
 	for (auto one = sorted.constBegin(); one != sorted.constEnd(); ++one)
@@ -448,36 +411,13 @@ void Qdc::SearchView::addHits(const QVector<SearchHit>& hits)
 	}
 }
 
-Qdc::SearchView::Search* Qdc::SearchView::searchForToken(const QString& token)
+Qdc::SearchView::Search* Qdc::SearchView::searchNumbered(quint64 number)
 {
-	for (Search* search : m_searches)
+	if (!number) return nullptr;
+
+	for (Search* search : std::as_const(m_searches))
 	{
-		if (search->token == token) return search;
-	}
-
-	return nullptr;
-}
-
-Qdc::SearchView::Search* Qdc::SearchView::searchMatching(const QString& filename)
-{
-	const QString name = filename.toLower();
-
-	for (auto n = m_searches.crbegin(); n != m_searches.crend(); ++n)
-	{
-		Search* search = *n;
-
-		bool matches = !search->words.isEmpty();
-
-		for (const QString& word : search->words)
-		{
-			if (!name.contains(word))
-			{
-				matches = false;
-				break;
-			}
-		}
-
-		if (matches) return search;
+		if (search->search == number) return search;
 	}
 
 	return nullptr;

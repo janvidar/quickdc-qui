@@ -325,14 +325,8 @@ struct SearchHit {
 	/** The hub it arrived on, in canonical form, as ChatMessage::hubUrl is. */
 	QString hubUrl;
 
-	/**
-	 * Which search this answers.
-	 *
-	 * Empty on NMDC, which has nowhere to put one - so a hit without a token is
-	 * not an error, and has to be matched to a search by what it contains
-	 * instead.
-	 */
-	QString token;
+	/** The core's number for the search this answers; SearchBridge::searchSent() gives it. */
+	quint64 search = 0;
 
 	/** The name as the peer gave it, which for ADC is a path within their share. */
 	QString name;

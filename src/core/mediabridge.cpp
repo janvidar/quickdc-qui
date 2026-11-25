@@ -81,11 +81,44 @@ void Qdc::MediaBridge::attach(const QString& path, Offer offer)
 	m_asked.insert(path);
 }
 
+quint64 Qdc::MediaBridge::attachPasted(const QByteArray& data, const QString& suffix)
+{
+	static quint64 requests = 0;
+
+	const QuickDC::Api::Commands::AttachPasted command{
+		++requests, data.toStdString(), suffix.toStdString()};
+	if (!m_thread || !m_thread->submit(command)) return 0;
+
+	m_pasting.insert(command.request);
+	return command.request;
+}
+
+void Qdc::MediaBridge::fetch(const QString& tth, const QString& name, quint64 size)
+{
+	if (m_thread && !tth.isEmpty())
+		m_thread->submit(QuickDC::Api::Commands::FetchAttachment{0, tth.toStdString(), name.toStdString(), size});
+}
+
+void Qdc::MediaBridge::setFetchOn(const QString& hubUrl, std::optional<bool> fetch)
+{
+	using Choice = QuickDC::Api::Commands::SetChatMediaFetch::Choice;
+	const Choice choice = !fetch ? Choice::Follow : *fetch ? Choice::Always : Choice::Never;
+	if (m_thread) m_thread->submit(QuickDC::Api::Commands::SetChatMediaFetch{hubUrl.toStdString(), choice});
+}
+
 void Qdc::MediaBridge::onCoreEvent(const QuickDC::Api::Event& event)
 {
 	using namespace QuickDC::Api::Events;
 
-	if (const auto* ready = event.as<AttachmentReady>())
+	if (const auto* kept = event.as<PastedKept>())
+	{
+		if (!m_pasting.remove(kept->request)) return;
+
+		const QString path = QString::fromStdString(kept->path);
+		if (!path.isEmpty()) m_asked.insert(path);
+		emit pasted(kept->request, path, QString::fromStdString(kept->reason));
+	}
+	else if (const auto* ready = event.as<AttachmentReady>())
 	{
 		const QString path = QString::fromStdString(ready->path);
 		const QString tth = QString::fromStdString(ready->tth);

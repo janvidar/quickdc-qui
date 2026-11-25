@@ -255,7 +255,7 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
       output, `wait`/`expect`, exit status, `--home`; hubs, chat and settings.
 - [x] F2. Offline scenarios on loopback: join a local hub, chat, private message,
       search, file list, download (active, passive, TLS), as ctest tests.
-- [ ] F3. (batch a done 2026-11-25: connection mode, share folders, favourites/recent/completed) Core policy out of the GUI, each step covered by a CLI scenario before
+- [ ] F3. (batch a done 2026-11-25: connection mode, share folders, favourites/recent/completed; batch b done 2026-11-25: search attribution, picture policy) Core policy out of the GUI, each step covered by a CLI scenario before
       the GUI is switched to it: search results matched to their search in the
       core; picture auto-fetch policy and limits; the board store, fetching ahead
       and withdrawn posts; the public hub directory (merge, cache); favourites,
@@ -311,9 +311,9 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
 - ~~Every sink is told every event, and Qt queues a copy per connected
   bridge~~ - done 2026-11-24: an event with a hub goes to that hub's
   `HubRoute` only (see Log).
-- ~~Search tokens are numbered per SearchBridge from 1~~ - already settled
-  in B5: `SearchBridge::start()` numbers from one process-wide counter, and
-  a result carries its token back to the search that asked. Nothing to move.
+- ~~Search tokens are numbered per SearchBridge from 1~~ - settled in B5 by a
+  process-wide counter, and gone in F3b: the core numbers each search and
+  draws its wire token, so no front end invents either.
 
 - ~~libdrop-cpp `droptest` bounds assertion~~ and ~~samurai `autotest` load
   sensitivity~~ - both fixed 2026-11-24, both samurai bugs (see Log); neither
@@ -568,3 +568,53 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   core built from explicit files would write its file lists to ~/.quickdc
   whenever hashing fell idle (hashing an attachment is enough); they now go
   beside its configuration. 1399 green; sanitizer build 1352 green.
+- 2026-11-25: F3b done: search results matched to their search, and the picture
+  policy, in the core. Api: `Search` carries the caller's `request` instead of a
+  token; the core numbers the search, draws its wire token, and answers
+  `SearchSent{request, search, hubsAsked}`; `SearchResult` names its `search`
+  and is not told at all when it answers none; `ForgetSearch` ends one (closing
+  a tab sends it). `Share::SearchManager`, unused until now, is rewritten as the
+  attribution: by token, else - NMDC - the newest search whose words the name
+  holds and none of whose exclusions it does (the exclusions are new; the GUI
+  matched words only), at most 64 live. The GUI's token counter and its name
+  matching are gone; it files a result by its number. Pictures:
+  `core/chat/chatmedia.*` reads the magnets a markdown message links to (links,
+  images, autolinks; not in code spans or blocks - a scanner to the renderer's
+  rules, since the GUI's markdown parser is Qt's) and decides by [Chat media]
+  and the hub's own session group (`hubSettingsGroup()`, now also the GUI's
+  `settingsUrl()`); a rich message's pictures are announced as
+  `ChatMedia{hub, tth, name, size, state Queued|Ready|Skipped, why
+  Off|Unsized|TooLarge|Refused, path}` - Ready at once where the file is
+  attached or downloaded here, else queued with the sender as a known source and
+  a source search, Ready again on verification and offered again by its hash.
+  `FetchAttachment` fetches whatever the policy says (a clicked magnet),
+  `SetChatMediaFetch{hubUrl, Follow|Always|Never}` writes the hub's choice,
+  `AttachPasted{request, data, suffix}` keeps pasted bytes under
+  `<home>/media` (answered by `PastedKept`, then AttachmentReady), and the core
+  sweeps old pasted pictures at start. The settings and stored keys are the ones
+  the GUI wrote, so no migration; the settings move to the core's schema. A core
+  built from files keeps its media and default downloads beside its
+  configuration (`Core::homeDirectory`). The GUI lost fetchMediaIn, reseed,
+  fetchesMediaOn, the policy cache, the sweep, the paste folder and its
+  attachmentsIn; it renders `ChatMedia` Ready paths and still reads the hub's
+  choice to tick the menu. qdc: `search ... as NAME` remembers the core's number,
+  `search-forget`, `attach`, `paste`, `chat-md` (with `$NAME`), `media-fetch`,
+  `media-policy`; scenarios search-attributed (two cores, three searches in
+  flight) and chat-media (fetched and byte-identical, already here, over the
+  limit, offered not shown, inside code, off on the hub then fetched by hand,
+  pasted), each 78 runs without a failure. Found while stressing: the first cut
+  gave the sender's SID as the known source, the queue keys sources by CID, so
+  the peer became two sources and the two connections fetched the leaf data in
+  turn for ever (one run in three); the CID is given now. That the queue lets
+  one peer be two sources and then never gets past the leaves is left as found.
+  The smoke driver gained a `search` scenario on the public hub. 1415 green;
+  sanitizer build 1368 green.
+- 2026-11-25: a transfer bug found by the chat-media scenario failing one run in
+  24: `adc_connect_token()` dropped a leading "TO" from any CTM/RCM/NAT/RNT token
+  as if it were the ADC 0.12 field label, so one token in 1024 (ours are random
+  base32) was read short, the peer dialled back quoting it, nobody recognised
+  it, and the transfer sat idle until the request timed out after 120 s. Taken
+  whole now; test `hubsession_a_connect_token_starting_with_to_is_kept_whole`
+  failed before. Still open: a peer connection with an unknown token stays open
+  and idle instead of closing; the queue can still hold one peer under two keys
+  (SID vs CID, or a hub URL written differently) - not this bug, but a hazard.

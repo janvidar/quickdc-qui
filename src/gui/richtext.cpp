@@ -1103,40 +1103,6 @@ Qdc::RichText::Attachment Qdc::RichText::readMagnet(const QUrl& url)
 	return file;
 }
 
-namespace {
-
-void collect_attachments(const Node& node, QList<Qdc::RichText::Attachment>* found)
-{
-	if (node.kind == Kind::Link || node.kind == Kind::Image)
-	{
-		Qdc::RichText::Attachment file =
-			Qdc::RichText::readMagnet(QUrl(node.destination, QUrl::StrictMode));
-
-		if (file.isValid())
-		{
-			file.inlineMedia = node.kind == Kind::Image;
-			found->append(file);
-		}
-	}
-
-	for (const Node& child : node.children) collect_attachments(child, found);
-}
-
-}
-
-QList<Qdc::RichText::Attachment> Qdc::RichText::attachmentsIn(const QString& markdown)
-{
-	/*
-	 * Walked rather than searched for: the same tree the renderer draws from, so what is
-	 * decided about a message and what is drawn from it cannot disagree. A magnet inside
-	 * a code span is not a link, and a pattern over the text would think it was.
-	 */
-	QList<Attachment> found;
-	collect_attachments(Markdown::parse(markdown), &found);
-
-	return found;
-}
-
 QString Qdc::RichText::writeMagnet(const Attachment& file)
 {
 	if (!file.isValid()) return QString();

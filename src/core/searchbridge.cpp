@@ -102,16 +102,15 @@ Qdc::SearchCategory Qdc::SearchBridge::categoryOf(const QString& filename)
 	return SearchCategory::Any;
 }
 
-QString Qdc::SearchBridge::start(const SearchQuery& query)
+quint64 Qdc::SearchBridge::start(const SearchQuery& query)
 {
-	if (!m_thread || !m_thread->isCoreRunning()) return QString();
+	if (!m_thread || !m_thread->isCoreRunning()) return 0;
 
-	/* Unique across bridges, since every bridge hears every SearchSent and result. */
-	static quint64 tokens = 0;
-	const QString token = QString::number(++tokens);
+	/* Unique across bridges, since every bridge hears every SearchSent. */
+	static quint64 requests = 0;
 
 	QuickDC::Api::Commands::Search command;
-	command.token = token.toStdString();
+	command.request = ++requests;
 	command.sizePolicy = convert(query.sizePolicy);
 	command.size = query.size;
 
@@ -128,10 +127,15 @@ QString Qdc::SearchBridge::start(const SearchQuery& query)
 	for (const QString& ext : extensionsFor(query.category))
 		command.extensions.push_back(ext.toStdString());
 
-	if (!m_thread->submit(command)) return QString();
+	if (!m_thread->submit(command)) return 0;
 
-	m_sent.insert(token);
-	return token;
+	m_sent.insert(command.request);
+	return command.request;
+}
+
+void Qdc::SearchBridge::forget(quint64 search)
+{
+	if (m_thread && search) m_thread->submit(QuickDC::Api::Commands::ForgetSearch{search});
 }
 
 void Qdc::SearchBridge::onCoreEvent(const QuickDC::Api::Event& event)
@@ -139,6 +143,5 @@ void Qdc::SearchBridge::onCoreEvent(const QuickDC::Api::Event& event)
 	const auto* sent = event.as<QuickDC::Api::Events::SearchSent>();
 	if (!sent) return;
 
-	const QString token = QString::fromStdString(sent->token);
-	if (m_sent.remove(token)) emit searchSent(token, sent->hubsAsked);
+	if (m_sent.remove(sent->request)) emit searchSent(sent->request, sent->search, sent->hubsAsked);
 }

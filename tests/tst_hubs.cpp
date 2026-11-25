@@ -4,6 +4,7 @@
 
 #include <core/boardbridge.h>
 #include <core/configbridge.h>
+#include <core/mediabridge.h>
 #include <core/corethread.h>
 #include <core/favourites.h>
 #include <core/filelistbridge.h>
@@ -130,7 +131,6 @@ private slots:
 	void aPastedPictureIsOfferedLikeAChosenFile();
 	void aPastedPictureIsWrittenDownWhereItCanBeServed();
 	void aDroppedFileIsOfferedRatherThanNamed();
-	void oldPastedPicturesAreSweptAway();
 	void composerFlattensFormattingWhereItCannotBeSent();
 	void aPastedPageArrivesAsPlainTextWhereFormattingCannotBeSent();
 
@@ -148,8 +148,8 @@ private slots:
 	void nothingCanBeSentUntilTheHubHasLoggedUsIn();
 	void formattingIsOnlyOfferedWhereItCanBeSent();
 	void aClickedHubLinkOpensTheHubItself();
-	void picturesAreFetchedOnlyWhereThatWasAskedFor();
-	void aFileFetchedByHashIsOfferedAgain();
+	void aClickedPictureIsTheCoresToFetch();
+	void aHubsOwnPictureChoiceIsWrittenByTheCore();
 	void anArrivingMessageDoesNotWaitForTheCore();
 	void theAttachButtonAsksForAFile();
 	void everyControlLooksDisabledWhenItIs();
@@ -2250,30 +2250,24 @@ void TestHubs::aPastedPictureIsWrittenDownWhereItCanBeServed()
 	QVERIFY(shot.save(&sink, "PNG"));
 	sink.close();
 
-	/*
-	 * Pasted pictures are kept beside the rest of QuickDC's own files, so the home
-	 * directory is pointed at the temporary one for the length of this test rather than
-	 * writing into the home of whoever is running it.
-	 */
-	const QString folder = m_dir.path() + QStringLiteral("/.quickdc/media");
+	/* The core keeps them among its media, beside its own configuration here. */
+	const QString folder = m_dir.path() + QStringLiteral("/media");
 
-	{
-		HomeRedirect home(m_dir.path());
-		emit pane->imagePasted(png, QStringLiteral("png"));
-	}
+	emit pane->imagePasted(png, QStringLiteral("png"));
 
 	/*
 	 * A hash names a file and a peer asks for a file, so the clipboard's bytes have to
 	 * land on disk before anything can be offered - and stay there for as long as the
 	 * link in the message might be followed.
 	 */
-	const QStringList written = QDir(folder).entryList({QStringLiteral("pasted-*.png")},
-	                                                   QDir::Files);
+	const auto written = [&folder] {
+		return QDir(folder).entryList({QStringLiteral("pasted-*.png")}, QDir::Files);
+	};
 
-	QCOMPARE(written.size(), 1);
+	QTRY_COMPARE_WITH_TIMEOUT(written().size(), 1, 10000);
 
 	/* Written whole, and not re-encoded on the way through. */
-	QFile kept(folder + QLatin1Char('/') + written.first());
+	QFile kept(folder + QLatin1Char('/') + written().first());
 	QVERIFY(kept.open(QIODevice::ReadOnly));
 	QCOMPARE(kept.readAll(), png);
 	kept.close();
@@ -2330,79 +2324,6 @@ void TestHubs::aDroppedFileIsOfferedRatherThanNamed()
 
 	QCOMPARE(dropped.count(), 1);
 	QCOMPARE(edit->toPlainText(), QStringLiteral("https://example.org/page"));
-}
-
-void TestHubs::oldPastedPicturesAreSweptAway()
-{
-	/* The home directory is pointed at the temporary one, as the paste test does. */
-	HomeRedirect home(m_dir.path());
-
-	const QString folder = m_dir.path() + QStringLiteral("/.quickdc/media");
-	QVERIFY(QDir().mkpath(folder));
-
-	const auto write = [&folder](const QString& name, int daysOld) {
-		const QString path = folder + QLatin1Char('/') + name;
-
-		QFile made(path);
-		if (!made.open(QIODevice::WriteOnly)) return QString();
-		made.write("picture");
-		made.close();
-
-		/*
-		 * Aged by hand in a second pass, and after the write: closing flushes, and the
-		 * flush sets the modification time back to now - which is the only thing saying
-		 * how old a picture is.
-		 */
-		QFile aged(path);
-		if (!aged.open(QIODevice::ReadWrite)) return QString();
-
-		aged.setFileTime(QDateTime::currentDateTime().addDays(-daysOld),
-		                 QFileDevice::FileModificationTime);
-		aged.close();
-
-		return path;
-	};
-
-	const QString old = write(QStringLiteral("pasted-20240101-120000.png"), 200);
-	const QString recent = write(QStringLiteral("pasted-20260101-120000.png"), 5);
-	const QString other = write(QStringLiteral("something-else.png"), 400);
-
-	QVERIFY(!old.isEmpty() && !recent.isEmpty() && !other.isEmpty());
-
-	Qdc::ConfigBridge config(m_thread);
-	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
-	                 QStringLiteral("Keep pasted for days"), 180);
-	config.save(Qdc::ConfigStore::Application);
-
-
-	{
-		/* Swept when the view is built, which is when the application starts. */
-		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-		Q_UNUSED(hubs);
-	}
-
-	QVERIFY2(!QFile::exists(old), "a picture older than the limit was kept");
-	QVERIFY2(QFile::exists(recent), "a recent picture was thrown away");
-
-	/*
-	 * And only what this client wrote. The folder is QuickDC's, but deleting anything
-	 * that happens to be in it would be somebody else's file gone.
-	 */
-	QVERIFY2(QFile::exists(other), "a file this client did not write was removed");
-
-	/* Zero keeps everything, however old. */
-	const QString again = write(QStringLiteral("pasted-20240101-130000.png"), 500);
-
-	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
-	                 QStringLiteral("Keep pasted for days"), 0);
-	config.save(Qdc::ConfigStore::Application);
-
-	{
-		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-		Q_UNUSED(hubs);
-	}
-
-	QVERIFY2(QFile::exists(again), "everything should be kept when there is no limit");
 }
 
 void TestHubs::composerFlattensFormattingWhereItCannotBeSent()
@@ -4798,220 +4719,72 @@ void TestHubs::loopback()
 	QCOMPARE(sawDirect, 1);
 }
 
-void TestHubs::picturesAreFetchedOnlyWhereThatWasAskedFor()
+/* Whether to fetch a picture is the core's to decide; one clicked is fetched whatever it decided. */
+void TestHubs::aClickedPictureIsTheCoresToFetch()
 {
-	Qdc::ConfigBridge config(m_thread);
-	Qdc::TransferBridge transfers(m_thread, this);
-
-	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, &transfers, &config);
-
-	const QString hubUrl = QStringLiteral("adc://192.0.2.1:412");
-	QVERIFY(hubs.openHub(hubUrl));
-
-	const QString tth = QStringLiteral("VN6TQGXQ7HYQ5ARWZ2LNFVQ7YQKGXQ7HYQ5ARWZ");
-
-	const auto sendPicture = [&](quint64 size) {
-		Qdc::RichText::Attachment picture;
-		picture.tth = tth;
-		picture.name = QStringLiteral("photo.png");
-		picture.size = size;
-
-		Qdc::ChatMessage message;
-		message.hubUrl = hubs.currentPane()->hub()->url();
-		message.from = user(QStringLiteral("alice"));
-		message.received = QDateTime::currentDateTime();
-		message.richText = true;
-		message.text = QStringLiteral("![a photo](%1)")
-			.arg(Qdc::RichText::writeMagnet(picture));
-
-		emit hubs.currentPane()->hub()->chatReceived(message);
-	};
-
-	/*
-	 * Asked for and waited for, because the bridge reports the figures it was last given
-	 * rather than reading the core when asked - which is what keeps a view from stalling
-	 * on the core's thread.
-	 */
-	const auto queued = [&transfers] {
-		QSignalSpy fresh(&transfers, &Qdc::TransferBridge::snapshotChanged);
-		transfers.refresh();
-		fresh.wait(5000);
-
-		return transfers.queueSnapshot().size();
-	};
-
-	/*
-	 * Off by default. Fetching means asking a stranger's client for a file the moment
-	 * their message arrives, so it does not happen because nobody said anything.
-	 */
-	config.setBool(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
-	               QStringLiteral("Fetch automatically"), false);
-	config.save(Qdc::ConfigStore::Application);
-
-	const int before = queued();
-	sendPicture(1024);
-	QCOMPARE(queued(), before);
-
-	/* Turned on generally, a small picture is fetched. */
-	config.setBool(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
-	               QStringLiteral("Fetch automatically"), true);
-	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
-	                 QStringLiteral("Maximum size"), 2048);
-	config.save(Qdc::ConfigStore::Application);
-
-	sendPicture(1024);
-	QCOMPARE(queued(), before + 1);
-
-	/* One over the limit is left for a person to decide about. */
-	sendPicture(4096);
-	QCOMPARE(queued(), before + 1);
-
-	/* A size the sender did not give cannot be checked, so it is not fetched either. */
-	Qdc::RichText::Attachment sizeless;
-	sizeless.tth = QStringLiteral("QKGXQ7HYQ5ARWZ2LNFVQ7YVN6TQGXQ7HYQ5ARWZ");
-	sizeless.name = QStringLiteral("mystery.png");
-
-	Qdc::ChatMessage vague;
-	vague.hubUrl = hubUrl;
-	vague.from = user(QStringLiteral("alice"));
-	vague.received = QDateTime::currentDateTime();
-	vague.richText = true;
-	vague.text = QStringLiteral("![?](magnet:?xt=urn:tree:tiger:%1&dn=mystery.png)")
-		.arg(sizeless.tth);
-
-	emit hubs.currentPane()->hub()->chatReceived(vague);
-	QCOMPARE(queued(), before + 1);
-
-	/* This hub says no, whatever the general setting is. */
-	config.setBool(Qdc::ConfigStore::Session, hubs.currentPane()->hub()->url(),
-	               QStringLiteral("Fetch automatically"), false);
-	config.save(Qdc::ConfigStore::Session);
-
-	Qdc::RichText::Attachment second;
-	second.tth = QStringLiteral("F6ED42THAKQCOCNHJOUCMOEOX4GOCT25D5WM7SY");
-	second.name = QStringLiteral("another.png");
-	second.size = 1024;
-
-	Qdc::ChatMessage refused;
-	refused.hubUrl = hubs.currentPane()->hub()->url();
-	refused.from = user(QStringLiteral("alice"));
-	refused.received = QDateTime::currentDateTime();
-	refused.richText = true;
-	refused.text = QStringLiteral("![no](%1)").arg(Qdc::RichText::writeMagnet(second));
-
-	emit hubs.currentPane()->hub()->chatReceived(refused);
-	QCOMPARE(queued(), before + 1);
-
-	/* And a file that was offered rather than shown is never fetched by itself. */
-	config.remove(Qdc::ConfigStore::Session, hubs.currentPane()->hub()->url(),
-	              QStringLiteral("Fetch automatically"));
-	config.save(Qdc::ConfigStore::Session);
-
-	Qdc::ChatMessage offered = refused;
-	offered.text = QStringLiteral("[another.png](%1)")
-		.arg(Qdc::RichText::writeMagnet(second));
-
-	emit hubs.currentPane()->hub()->chatReceived(offered);
-	QCOMPARE(queued(), before + 1);
-}
-
-void TestHubs::aFileFetchedByHashIsOfferedAgain()
-{
-	/* Held for the whole case: the share writes under "~/.quickdc", and it writes
-	   when the hash arrives rather than when the file is handed over. */
-	HomeRedirect home(m_dir.path());
-
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::TransferBridge transfers(m_thread, this);
 
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, &transfers, &config);
 	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.1:412")));
 
-	config.setBool(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
-	               QStringLiteral("Fetch automatically"), true);
-	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Chat media"),
-	                 QStringLiteral("Maximum size"), 4096);
-	config.save(Qdc::ConfigStore::Application);
-
-	/*
-	 * Read through a bridge built for the question. A share writes [Attachments] on
-	 * the core's own configuration when the hash arrives, and a ConfigBridge mirrors
-	 * the configuration when it is constructed - so the one above cannot see it.
-	 */
-	const auto offers = [this] {
-		Qdc::ConfigBridge seen(m_thread);
-
-		return seen.getNumber(Qdc::ConfigStore::Application,
-		                      QStringLiteral("Attachments"),
-		                      QStringLiteral("Total"));
-	};
-
-	const auto queued = [&transfers] {
+	const auto queued = [&transfers](const QString& tth) {
 		QSignalSpy fresh(&transfers, &Qdc::TransferBridge::snapshotChanged);
 		transfers.refresh();
 		fresh.wait(5000);
 
-		return transfers.queueSnapshot().size();
+		for (const Qdc::QueueEntry& one : transfers.queueSnapshot())
+			if (one.tth == tth) return one.filename;
+		return QString();
 	};
 
-	/* Whatever earlier cases in this process left behind. */
-	const int before = offers();
-	const int waiting = queued();
-
-	const QString asked = QStringLiteral("D5WM7SYF6ED42THAKQCOCNHJOUCMOEOX4GOCT25");
-
 	Qdc::RichText::Attachment picture;
-	picture.tth = asked;
-	picture.name = QStringLiteral("seeded.png");
-	picture.size = 1024;
+	picture.tth = QStringLiteral("D5WM7SYF6ED42THAKQCOCNHJOUCMOEOX4GOCT25");
+	picture.name = QStringLiteral("clicked.png");
+	picture.size = 64 * 1024 * 1024;
+	picture.inlineMedia = true;
 
+	/* An arriving message is the core's: the view queues nothing of its own for it. */
 	Qdc::ChatMessage message;
 	message.hubUrl = hubs.currentPane()->hub()->url();
 	message.from = user(QStringLiteral("alice"));
 	message.received = QDateTime::currentDateTime();
 	message.richText = true;
-	message.text = QStringLiteral("![a photo](%1)")
-		.arg(Qdc::RichText::writeMagnet(picture));
-
+	message.text = QStringLiteral("![a photo](%1)").arg(Qdc::RichText::writeMagnet(picture));
 	emit hubs.currentPane()->hub()->chatReceived(message);
+	QVERIFY(queued(picture.tth).isEmpty());
 
-	/* Asked for, which is the precondition the rest of this rests on. */
-	QCOMPARE(queued(), waiting + 1);
+	/* Far over any limit, and still fetched, because somebody asked. */
+	emit hubs.currentPane()->linkActivated(QUrl(Qdc::RichText::writeMagnet(picture)));
+	QTRY_VERIFY_WITH_TIMEOUT(!queued(picture.tth).isEmpty(), 10000);
 
-	/* A real file, because offering one hashes it. */
-	const QString arrived = m_dir.path() + QStringLiteral("/seeded.png");
+	const QString target = queued(picture.tth);
+	QVERIFY(target.endsWith(QStringLiteral("/clicked.png")));
+	transfers.removeFromQueue(target);
+	QTRY_VERIFY_WITH_TIMEOUT(queued(picture.tth).isEmpty(), 5000);
+}
 
-	QImage made(8, 8, QImage::Format_RGB32);
-	made.fill(Qt::cyan);
-	QVERIFY(made.save(arrived));
+void TestHubs::aHubsOwnPictureChoiceIsWrittenByTheCore()
+{
+	Qdc::MediaBridge media(m_thread);
+	const QString hub = QStringLiteral("adc://192.0.2.9:412");
+	const QString key = QStringLiteral("Fetch automatically");
 
-	emit transfers.downloadCompleted(arrived, 1024, asked);
+	const auto stored = [this, &hub, &key]() -> std::optional<bool> {
+		Qdc::ConfigBridge seen(m_thread);
+		if (!seen.contains(Qdc::ConfigStore::Session, hub, key)) return std::nullopt;
+		return seen.getBool(Qdc::ConfigStore::Session, hub, key);
+	};
 
-	QTRY_COMPARE_WITH_TIMEOUT(offers(), before + 1, 10000);
+	media.setFetchOn(hub, false);
+	QTRY_COMPARE_WITH_TIMEOUT(stored(), std::optional<bool>(false), 5000);
 
-	Qdc::ConfigBridge seen(m_thread);
+	media.setFetchOn(hub, true);
+	QTRY_COMPARE_WITH_TIMEOUT(stored(), std::optional<bool>(true), 5000);
 
-	const QString entry = seen.getString(Qdc::ConfigStore::Application,
-	                                     QStringLiteral("Attachments"),
-	                                     QStringLiteral("File %1").arg(before));
-
-	/* "<tth> <path>": the hash is the file's own, which is the point - the queue
-	   checked the bytes against the magnet's before any of this. */
-	QVERIFY(entry.endsWith(arrived));
-
-	/*
-	 * And nothing else. A film chosen from a file list or a search hit is shared or
-	 * not according to what the user shares, and is not offered behind their back
-	 * for having passed through the download queue.
-	 */
-	const QString unasked = m_dir.path() + QStringLiteral("/unasked.png");
-	QVERIFY(made.save(unasked));
-
-	emit transfers.downloadCompleted(unasked, 1024,
-		QStringLiteral("GOCT25D5WM7SYF6ED42THAKQCOCNHJOUCMOEOX4"));
-
-	QTest::qWait(300);
-	QCOMPARE(offers(), before + 1);
+	/* Following the general setting is having no opinion, which is no value at all. */
+	media.setFetchOn(hub, std::nullopt);
+	QTRY_COMPARE_WITH_TIMEOUT(stored(), std::optional<bool>(), 5000);
 }
 
 void TestHubs::anArrivingMessageDoesNotWaitForTheCore()

@@ -458,12 +458,8 @@ private:
 	void attachFile(QWidget* pane);
 
 	/**
-	 * Write a pasted picture down and offer it, as if it had been chosen from disk.
-	 *
-	 * A file is what can be offered - the hash names a file, and a peer asks for one -
-	 * so the clipboard's bytes have to land somewhere first. They go beside the other
-	 * things QuickDC keeps, under a name that says where they came from, and stay there
-	 * for as long as the link in the message might be followed.
+	 * Hand a pasted picture to the core, which keeps it among its media and offers it,
+	 * and put it in the message once it is offered.
 	 */
 	void offerPastedImage(QWidget* pane, const QByteArray& data, const QString& suffix);
 
@@ -484,6 +480,9 @@ private:
 	 */
 	void offerFile(const QPointer<QWidget>& pane, const QString& path,
 	               bool asMedia);
+
+	/** Put 'path' in the message once the core says it is offered, or say why not. */
+	void awaitOffer(const QPointer<QWidget>& pane, const QString& path, bool asMedia);
 
 	/**
 	 * Say something to whoever asked for a file, wherever they asked from.
@@ -514,34 +513,10 @@ private:
 	RichText::LocalMedia localMediaFor(const QString& tth) const;
 
 	/**
-	 * Fetch the pictures in an incoming message, where that has been asked for.
-	 *
-	 * Off unless somebody turned it on, because fetching means asking a stranger's
-	 * client for a file the moment their message arrives - so it is a decision per hub,
-	 * with a default for hubs nothing has been said about. A picture bigger than the
-	 * configured limit is left as a chip to click.
-	 */
-	void fetchMediaIn(const ChatMessage& message);
-
-	/**
-	 * Offer a file that arrived by hash, so the next reader has somewhere to ask.
-	 *
-	 * A magnet in a message or a post names a file nobody can search for by name, so
-	 * its only sources are the people who have fetched it - and until one of them
-	 * offers it again, its author is the single point of failure for every reader
-	 * after the first. Offered by hash alone: it joins no file list and no search by
-	 * name matches it, exactly as a file the user attached here does.
-	 */
-	void reseed(const QString& filename, const QString& tth);
-
-	/** Whether pictures are fetched without asking on the hub at 'hubUrl'. */
-	bool fetchesMediaOn(const QString& hubUrl) const;
-
-	/**
 	 * Offer the choices that belong to one hub rather than to all of them.
 	 *
-	 * Reached by asking a hub in the list for its menu. Only one thing is decided here
-	 * so far - whether pictures sent on this hub are fetched without asking - and it can
+	 * Reached by asking a hub in the list for its menu: whether pictures sent on this hub
+	 * are fetched without asking, and what it does with boards, each of which can
 	 * either follow the general setting or answer for itself.
 	 */
 	void showHubMenu(const QPoint& at);
@@ -555,21 +530,8 @@ private:
 	 */
 	void showDmMenu(QTreeWidgetItem* item, const QPoint& globalPos);
 
-	/** The largest picture that may be fetched without asking, in bytes. */
-	quint64 mediaSizeLimit() const;
-
-	/**
-	 * Read the settings that every arriving message would otherwise consult.
-	 *
-	 * Held in hand because a configuration read is a blocking trip to the core thread:
-	 * asking on the message path stopped the interface for as long as the core's current
-	 * turn took, once per message. Called when something writes the settings, not when
-	 * they are wanted.
-	 */
-	void reloadMediaPolicy();
-
-	/** Remember what one hub has decided for itself, if anything. */
-	void loadHubMediaPolicy(const QString& hubUrl);
+	/** Read the download directory when something writes it, not when it is wanted. */
+	void reloadDownloadDirectory();
 
 	/** The same for the boards: read once when something writes the settings. */
 	void reloadBoardPolicy();
@@ -630,23 +592,12 @@ private:
 	 *
 	 * Written into the hub's own group in the session store, where an absent value is
 	 * how a hub says it has no opinion - so "follow the general setting" removes the
-	 * key rather than writing false.
+	 * key rather than writing false. Or, given 'decide', handed to it to have the core
+	 * write: the answer, or none for following the general setting.
 	 */
 	void addHubChoice(QMenu& menu, const QString& title, const QString& hubUrl,
-	                  const QString& key, const std::function<void()>& applied);
-
-	/**
-	 * Throw away pasted pictures nobody is likely to ask for any more.
-	 *
-	 * A pasted picture is kept because a link to it in an old message may still be
-	 * followed, so the folder only ever grows. There is no way to know when the last
-	 * message naming one has scrolled out of somebody's history - nothing keeps
-	 * scrollback across restarts - so age is the only measure available.
-	 *
-	 * The core drops the matching entry by itself the next time it starts: an attachment
-	 * whose file has gone cannot be confirmed, so it is forgotten.
-	 */
-	void sweepPastedMedia();
+	                  const QString& key, const std::function<void()>& applied,
+	                  const std::function<void(std::optional<bool>)>& decide = {});
 
 	void showPane(ChatPane* pane);
 
@@ -698,24 +649,17 @@ private:
 	 */
 	bool m_restoring = false;
 
-	/** Hashes queued because a message or a post named one, waiting to finish; see
-	    reseed(). */
-	QSet<QString> m_byHash;
-
 	/** Hashes and offers a file somebody attached to a message. Made here, because
 	    attaching is not a per hub thing even though it is asked for in a
 	    conversation - and at construction, because it also answers "is this picture
 	    already ours", which is asked long before anything is attached. */
 	MediaBridge* m_media = nullptr;
 
-	/* The settings an arriving message needs, kept in hand; see reloadMediaPolicy(). */
-	bool m_fetchMedia = false;
-	quint64 m_mediaLimit = 0;
-	int m_mediaKeepDays = 0;
+	/* See reloadDownloadDirectory(). */
 	QString m_downloadDir;
 
-	/** Hubs that have decided for themselves, by address. Absent means no opinion. */
-	QHash<QString, bool> m_hubFetchMedia;
+	/** Where the core said a picture a message showed is, by hash. */
+	QHash<QString, QString> m_mediaHere;
 
 	/**
 	 * The boards, the documents, and the cursor each subscription resumes from.

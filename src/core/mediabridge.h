@@ -6,11 +6,13 @@
 #define HAVE_QUICKDC_QUI_MEDIABRIDGE_H
 
 
+#include <QByteArray>
 #include <QHash>
 #include <QSet>
 #include <QObject>
 #include <QString>
 
+#include <optional>
 
 namespace QuickDC { namespace Api { struct Event; } }
 
@@ -102,6 +104,19 @@ public:
 	 */
 	QString pathFor(const QString& tth) const;
 
+	/**
+	 * Have the core keep pasted bytes among its media and offer them. Answered by
+	 * pasted() with the number returned, then attached() or attachFailed() for the
+	 * path; 0 where there is no core to ask.
+	 */
+	quint64 attachPasted(const QByteArray& data, const QString& suffix);
+
+	/** Fetch the file a message named, whatever the picture policy says. */
+	void fetch(const QString& tth, const QString& name, quint64 size);
+
+	/** Whether pictures on the hub at 'hubUrl' are fetched unasked; none follows the general setting. */
+	void setFetchOn(const QString& hubUrl, std::optional<bool> fetch);
+
 signals:
 	/** @param size the file's length, which the message carries so a reader knows the
 	                cost before asking for it. */
@@ -109,6 +124,9 @@ signals:
 
 	/** @param reason for a person to read. */
 	void attachFailed(const QString& path, const QString& reason);
+
+	/** Where attachPasted()'s bytes were kept, or, with an empty path, why they were not. */
+	void pasted(quint64 request, const QString& path, const QString& reason);
 
 private:
 	/** Read what the core remembers offering, once, at construction. */
@@ -120,6 +138,9 @@ private:
 
 	/** Paths attach() asked for and has not yet heard about. */
 	QSet<QString> m_asked;
+
+	/** What attachPasted() asked for and has not yet heard where it was kept. */
+	QSet<quint64> m_pasting;
 
 	/** What this client offered, by hash, so a click on one's own file finds it. */
 	QHash<QString, QString> m_offered;

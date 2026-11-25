@@ -63,7 +63,6 @@ namespace S = Qdc::Settings;
  * in the tree's menu are written. Read once and kept in hand, because a post or a
  * picture arriving is no time to be reading a preference file.
  */
-const QString CHAT_MEDIA = S::groupOf(S::ChatMediaFetch);
 const QString MEDIA_FETCH = S::keyOf(S::ChatMediaFetch);
 const QString DOWNLOADS_GROUP = S::groupOf(S::DownloadDirectory);
 const QString BOARDS_GROUP = S::groupOf(S::BoardPrefetch);
@@ -115,12 +114,6 @@ constexpr int SECONDS_IN_A_DAY = 24 * 60 * 60;
  * are things to tell somebody about and leave alone.
  */
 constexpr int BOARD_GONE = 71;
-
-/** Where a pasted picture is kept; see HubsView::offerPastedImage(). */
-QString pasted_media_folder()
-{
-	return QDir::homePath() + QStringLiteral("/.quickdc/media");
-}
 
 /**
  * Where a post written here is kept.
@@ -442,9 +435,8 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	 */
 	m_media = new MediaBridge(m_thread, m_config, this);
 
-	reloadMediaPolicy();
+	reloadDownloadDirectory();
 	reloadBoardPolicy();
-	sweepPastedMedia();
 
 	/*
 	 * The change rather than the save, and the group it happened in rather than any
@@ -458,8 +450,7 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 		        [this](ConfigStore store, const QString& group, const QString&) {
 			if (store == ConfigStore::Application)
 			{
-				if (group == CHAT_MEDIA || group == DOWNLOADS_GROUP)
-					reloadMediaPolicy();
+				if (group == DOWNLOADS_GROUP) reloadDownloadDirectory();
 
 				if (group == BOARDS_GROUP) reloadBoardPolicy();
 
@@ -483,7 +474,6 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 			}
 
 			/* A session group is named after the hub it belongs to. */
-			loadHubMediaPolicy(group);
 			applyBoardPolicy(group);
 		});
 	}
@@ -491,14 +481,6 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(m_tree, &QTreeWidget::customContextMenuRequested,
 	        this, &HubsView::showHubMenu);
-
-	if (m_transfers)
-	{
-		connect(m_transfers, &TransferBridge::downloadCompleted, this,
-		        [this](const QString& filename, quint64, const QString& tth) {
-			reseed(filename, tth);
-		});
-	}
 
 	/*
 	 * A download finishing can change what a message looks like: a picture nobody had
@@ -655,8 +637,6 @@ bool Qdc::HubsView::openHub(const QString& url)
 	m_entries.append(entry);
 	adopt(entry->pane, entry->item);
 
-	loadHubMediaPolicy(bridge->url());
-
 	/*
 	 * Once per hub, and before anything the hub says can arrive: every entry it
 	 * reports is written down through this and every descriptor is recorded, which is
@@ -725,6 +705,14 @@ bool Qdc::HubsView::openHub(const QString& url)
 	connect(bridge, &HubBridge::chatReceived, this,
 	        [this, bridge](const ChatMessage& message) {
 		if (Entry* found = entryFor(bridge)) route(*found, message);
+	});
+
+	connect(bridge, &HubBridge::chatMediaReady, this,
+	        [this](const QString& tth, const QString& path) {
+		if (m_mediaHere.value(tth) == path) return;
+
+		m_mediaHere.insert(tth, path);
+		for (ChatPane* pane : std::as_const(m_panes)) pane->mediaChanged();
 	});
 
 	connect(bridge, &HubBridge::systemError, this,
@@ -1157,8 +1145,6 @@ Qdc::ChatPane* Qdc::HubsView::currentPane() const
 
 void Qdc::HubsView::route(Entry& entry, const ChatMessage& message)
 {
-	fetchMediaIn(message);
-
 	if (!message.privateMessage)
 	{
 		entry.pane->post(message);
@@ -2200,69 +2186,29 @@ void Qdc::HubsView::offerDroppedFiles(QWidget* pane, const QStringList& paths)
 	}
 }
 
-void Qdc::HubsView::sweepPastedMedia()
-{
-	if (m_mediaKeepDays <= 0) return;
-
-	const QDir folder(pasted_media_folder());
-	if (!folder.exists()) return;
-
-	const QDateTime cutoff =
-		QDateTime::currentDateTime().addDays(-m_mediaKeepDays);
-
-	/*
-	 * Only what this client wrote there, matched by the name it gives them: the folder is
-	 * QuickDC's, but deleting whatever happens to be in it would be somebody else's file
-	 * gone.
-	 */
-	const QFileInfoList kept = folder.entryInfoList({QStringLiteral("pasted-*")},
-	                                                QDir::Files);
-
-	for (const QFileInfo& one : kept)
-	{
-		if (one.lastModified() >= cutoff) continue;
-
-		if (!QFile::remove(one.absoluteFilePath()))
-			qWarning() << "a pasted picture could not be removed:" << one.fileName();
-	}
-}
-
 void Qdc::HubsView::offerPastedImage(QWidget* pane, const QByteArray& data,
                                     const QString& suffix)
 {
-	if (!pane || data.isEmpty()) return;
+	if (!pane || data.isEmpty() || !m_media) return;
 
-	const QString folder = pasted_media_folder();
+	/* The core says where it kept them before it says they are offered. */
+	const QPointer<QWidget> waiting(pane);
+	const quint64 request = m_media->attachPasted(data, suffix);
 
-	if (!QDir().mkpath(folder))
-	{
-		tellPane(pane, tr("A pasted picture could not be kept: '%1' cannot be "
-		                  "created.").arg(folder));
-		return;
-	}
+	QObject* pending = new QObject(this);
+	connect(m_media, &MediaBridge::pasted, pending,
+	        [this, waiting, request, pending](quint64 answered, const QString& path,
+	                                          const QString& reason) {
+		if (answered != request) return;
 
-	/*
-	 * Named for when it was pasted, because the clipboard says nothing about where a
-	 * picture came from. Seconds are enough to tell two apart, and a name that already
-	 * exists is a picture pasted twice in the same second - which is the same picture
-	 * often enough that reusing the name is the friendlier answer.
-	 */
-	const QString name = QStringLiteral("pasted-%1.%2")
-		.arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss")),
-		     suffix);
+		pending->deleteLater();
+		if (!waiting) return;
 
-	const QString path = folder + QLatin1Char('/') + name;
-
-	QFile kept(path);
-	if (!kept.open(QIODevice::WriteOnly) || kept.write(data) != data.size())
-	{
-		tellPane(pane, tr("A pasted picture could not be written to '%1'.").arg(path));
-		return;
-	}
-
-	kept.close();
-
-	offerFile(QPointer<QWidget>(pane), path, true);
+		if (path.isEmpty())
+			tellPane(waiting.data(), reason);
+		else
+			awaitOffer(waiting, path, true);
+	});
 }
 
 void Qdc::HubsView::offerFile(const QPointer<QWidget>& pane, const QString& path,
@@ -2270,6 +2216,13 @@ void Qdc::HubsView::offerFile(const QPointer<QWidget>& pane, const QString& path
 {
 	if (path.isEmpty() || !m_media) return;
 
+	awaitOffer(pane, path, asMedia);
+	m_media->attach(path);
+}
+
+void Qdc::HubsView::awaitOffer(const QPointer<QWidget>& pane, const QString& path,
+                               bool asMedia)
+{
 	/*
 	 * Hashing reads the whole file, so the answer comes back later. The connections are
 	 * made for this one file and taken down with it: several may be waiting at once, and
@@ -2312,8 +2265,6 @@ void Qdc::HubsView::offerFile(const QPointer<QWidget>& pane, const QString& path
 		if (pane) tellPane(pane.data(), reason);
 		pending->deleteLater();
 	});
-
-	m_media->attach(path);
 }
 
 void Qdc::HubsView::followLink(const QUrl& url)
@@ -2354,15 +2305,8 @@ void Qdc::HubsView::followLink(const QUrl& url)
 			return;
 		}
 
-		/*
-		 * Into the download directory under the name the sender gave, which readMagnet()
-		 * has already reduced to a name. The queue finds somebody who has the hash the
-		 * same way it does for a file chosen from a file list.
-		 */
-		const QString target = downloadDirectory() + QLatin1Char('/') + file.name;
-
-		m_byHash.insert(file.tth);
-		m_transfers->enqueue(target, file.tth, file.size);
+		/* The core fetches it into the download directory and offers it again once here. */
+		if (m_media) m_media->fetch(file.tth, file.name, file.size);
 		return;
 	}
 
@@ -2558,56 +2502,13 @@ void Qdc::HubsView::refreshBoardItem(QTreeWidgetItem* item, BoardPane* pane)
 	item->setData(NameColumn, LockRole, QVariant());
 }
 
-bool Qdc::HubsView::fetchesMediaOn(const QString& hubUrl) const
-{
-	/* A hub that has decided for itself answers for itself; the rest follow the general
-	   setting. Both are already in hand - see reloadMediaPolicy(). */
-	return m_hubFetchMedia.value(hubUrl, m_fetchMedia);
-}
-
-quint64 Qdc::HubsView::mediaSizeLimit() const
-{
-	return m_mediaLimit;
-}
-
-void Qdc::HubsView::reloadMediaPolicy()
+void Qdc::HubsView::reloadDownloadDirectory()
 {
 	if (!m_config) return;
-
-	m_fetchMedia = m_config->read(S::ChatMediaFetch);
-	m_mediaLimit = static_cast<quint64>(qMax(0, m_config->read(S::ChatMediaLimit)));
 
 	const QString configured = m_config->read(S::DownloadDirectory).trimmed();
 	m_downloadDir = configured.isEmpty() ? QString::fromUtf8(S::DownloadDirectory.fallback)
 	                                     : configured;
-
-	m_mediaKeepDays = qMax(0, m_config->read(S::ChatMediaKeepDays));
-
-	/* What each open hub decided, so a message needs no reading at all. */
-	for (const Entry* entry : m_entries)
-		if (entry->bridge) loadHubMediaPolicy(entry->bridge->url());
-}
-
-void Qdc::HubsView::loadHubMediaPolicy(const QString& url)
-{
-	if (!m_config || url.isEmpty()) return;
-
-	/*
-	 * Cached under the canonical form, because that is what a message carries when
-	 * fetchesMediaOn() comes to look it up - ChatMessage::hubUrl is the core's own
-	 * canonical URL. Stored under the address as given, the entry for a hub opened
-	 * with a keyprint in its address was never found again.
-	 */
-	const QString hubUrl = HubBridge::settingsUrl(url);
-
-	if (!m_config->contains(ConfigStore::Session, hubUrl, MEDIA_FETCH))
-	{
-		m_hubFetchMedia.remove(hubUrl);
-		return;
-	}
-
-	m_hubFetchMedia.insert(hubUrl,
-		m_config->getBool(ConfigStore::Session, hubUrl, MEDIA_FETCH));
 }
 
 bool Qdc::HubsView::prefetchesOn(const QString& hubUrl) const
@@ -2780,8 +2681,10 @@ void Qdc::HubsView::showHubMenu(const QPoint& at)
 
 	QMenu menu(this);
 
-	addHubChoice(menu, tr("Fetch pictures on this hub"), hubUrl, MEDIA_FETCH,
-	             [this, hubUrl] { loadHubMediaPolicy(hubUrl); });
+	addHubChoice(menu, tr("Fetch pictures on this hub"), hubUrl, MEDIA_FETCH, {},
+	             [this, hubUrl](std::optional<bool> fetch) {
+		if (m_media) m_media->setFetchOn(hubUrl, fetch);
+	});
 
 	menu.addSeparator();
 
@@ -2804,7 +2707,8 @@ void Qdc::HubsView::showHubMenu(const QPoint& at)
 
 void Qdc::HubsView::addHubChoice(QMenu& menu, const QString& title,
                                  const QString& hubUrl, const QString& key,
-                                 const std::function<void()>& applied)
+                                 const std::function<void()>& applied,
+                                 const std::function<void(std::optional<bool>)>& decide)
 {
 	if (!m_config) return;
 
@@ -2823,7 +2727,13 @@ void Qdc::HubsView::addHubChoice(QMenu& menu, const QString& title,
 		choices->addAction(action);
 
 		connect(action, &QAction::triggered, this, [this, hubUrl, key, answer, opinion,
-		                                            applied] {
+		                                            applied, decide] {
+			if (decide)
+			{
+				decide(opinion ? std::optional<bool>(answer) : std::nullopt);
+				return;
+			}
+
 			/*
 			 * Nothing written is what "follow the general setting" means: an absent
 			 * value is how a hub says it has no opinion, so removing it is not the
@@ -2835,7 +2745,7 @@ void Qdc::HubsView::addHubChoice(QMenu& menu, const QString& title,
 				m_config->remove(ConfigStore::Session, hubUrl, key);
 
 			m_config->save(ConfigStore::Session);
-			applied();
+			if (applied) applied();
 		});
 	};
 
@@ -2972,61 +2882,15 @@ void Qdc::HubsView::showDmMenu(QTreeWidgetItem* item, const QPoint& globalPos)
 	}
 }
 
-void Qdc::HubsView::fetchMediaIn(const ChatMessage& message)
-{
-	if (!message.richText || !m_transfers) return;
-	if (!fetchesMediaOn(message.hubUrl)) return;
-
-	const quint64 limit = mediaSizeLimit();
-
-	for (const RichText::Attachment& file : RichText::attachmentsIn(message.text))
-	{
-		/* Only what the sender meant to be shown; a file offered is for a person to
-		   decide about. */
-		if (!file.inlineMedia) continue;
-
-		/* Already here, so it is drawn as it is. */
-		if (!localFileFor(file.tth).isEmpty()) continue;
-
-		/*
-		 * A size the sender did not give is a size nobody can check, so it is not
-		 * fetched without asking either.
-		 */
-		if (file.size == 0 || (limit > 0 && file.size > limit)) continue;
-
-		const QString target = downloadDirectory() + QLatin1Char('/') + file.name;
-
-		m_byHash.insert(file.tth);
-		m_transfers->enqueue(target, file.tth, file.size);
-	}
-}
-
-void Qdc::HubsView::reseed(const QString& filename, const QString& tth)
-{
-	if (!m_media || tth.isEmpty() || filename.isEmpty()) return;
-
-	/* Only what a message or a post named: everything else here was asked for by
-	   name, and is shared or not according to what the user shares. */
-	if (!m_byHash.remove(tth)) return;
-
-	/*
-	 * attach() hashes the file again rather than being told the hash the queue just
-	 * verified, which is not waste - see the note in PostStore::serve().
-	 *
-	 * Nothing listens for the outcome. A file that cannot be offered is still a file
-	 * that arrived, and the reader has what they asked for either way.
-	 */
-	m_media->attach(filename);
-}
-
 QString Qdc::HubsView::localFileFor(const QString& tth) const
 {
 	if (tth.isEmpty()) return QString();
 
 	QString path;
 
-	/* Offered from here, which covers a click on one's own attachment. */
+	/* Offered from here, which covers a click on one's own attachment, or fetched for a message. */
 	if (m_media) path = m_media->pathFor(tth);
+	if (path.isEmpty()) path = m_mediaHere.value(tth);
 
 	if (path.isEmpty() && m_completed)
 	{
@@ -3053,7 +2917,7 @@ QString Qdc::HubsView::localFileFor(const QString& tth) const
 
 QString Qdc::HubsView::downloadDirectory() const
 {
-	/* Read when the settings change rather than per download; see reloadMediaPolicy(). */
+	/* Read when the settings change rather than per download; see reloadDownloadDirectory(). */
 	return m_downloadDir.isEmpty() ? QStringLiteral("~/.quickdc/downloads")
 	                               : m_downloadDir;
 }

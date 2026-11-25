@@ -28,8 +28,10 @@ namespace Qdc {
  *
  * Parsing is separate from rendering on purpose. This produces a tree and knows nothing
  * about colours, indents, magnet URIs or which schemes may be followed - richtext.cpp
- * decides all of that from the tree, and the tree is also what attachmentsIn() walks. A
- * parser that also drew things would have to be tested through a QTextDocument.
+ * decides all of that from the tree. Which magnets a message names, for deciding whether
+ * to fetch them, the core reads for itself (core/chat/chatmedia.h), to the same rules for
+ * links, images and code. A parser that also drew things would have to be tested through
+ * a QTextDocument.
  */
 namespace Markdown {
 

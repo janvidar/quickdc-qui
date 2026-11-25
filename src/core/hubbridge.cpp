@@ -160,7 +160,6 @@ Qdc::SearchHit convert(const QuickDC::Api::SearchHit& found)
 {
 	Qdc::SearchHit hit;
 	hit.hubUrl    = from(found.hubUrl);
-	hit.token     = from(found.token);
 	hit.name      = from(found.name);
 	hit.tth       = from(found.tth);
 	hit.size      = found.size;
@@ -199,28 +198,6 @@ Qdc::BoardEntry convert(const QuickDC::BoardEntry& entry)
 	copied.timestamp  = entry.timestamp;
 	copied.removed    = entry.removed;
 	return copied;
-}
-
-/**
- * Where the authority ends: at the path, the query or the fragment, or at the end of
- * the string when there is none of them.
- *
- * @param from the first character after the "://".
- */
-qsizetype authority_end(const QString& url, qsizetype from)
-{
-	for (qsizetype n = from; n < url.size(); ++n)
-	{
-		const QChar at = url.at(n);
-
-		if (at == QLatin1Char('/') || at == QLatin1Char('?')
-		    || at == QLatin1Char('#'))
-		{
-			return n;
-		}
-	}
-
-	return url.size();
 }
 
 QString normalise_url(const QString& url)
@@ -415,7 +392,16 @@ void Qdc::HubBridge::handle(const QuickDC::Api::Events::UsersCleared&)
 template<>
 void Qdc::HubBridge::handle(const QuickDC::Api::Events::SearchResult& e)
 {
-	collect(convert(e.hit));
+	SearchHit hit = convert(e.hit);
+	hit.search = e.search;
+	collect(hit);
+}
+
+template<>
+void Qdc::HubBridge::handle(const QuickDC::Api::Events::ChatMedia& e)
+{
+	if (e.state == QuickDC::Api::Events::ChatMedia::State::Ready)
+		emit chatMediaReady(from(e.tth), from(e.path));
 }
 
 template<>
@@ -470,12 +456,7 @@ QString Qdc::HubBridge::normalisedUrl(const QString& url)
 
 QString Qdc::HubBridge::settingsUrl(const QString& url)
 {
-	const QString normalised = normalise_url(url);
-
-	const qsizetype scheme = normalised.indexOf(QStringLiteral("://"));
-	if (scheme < 0) return normalised;
-
-	return normalised.left(authority_end(normalised, scheme + 3));
+	return QString::fromStdString(QuickDC::hubSettingsGroup(url.toStdString()));
 }
 
 QString Qdc::HubBridge::url() const

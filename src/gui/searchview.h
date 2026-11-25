@@ -40,10 +40,9 @@ class TransferBridge;
  * more. Two searches can therefore be usefully open at the same time, and a tab is
  * what keeps their answers apart.
  *
- * What keeps them apart underneath is the token. It goes out with the request, comes
- * back on every ADC reply, and each tab keeps the one it was opened with. NMDC has
- * nowhere to carry a token, so a reply without one is placed by what it contains
- * instead; see routing in addHit().
+ * What keeps them apart is the core: it numbers each search, decides which one a
+ * reply answers, and drops one that answers none. Each tab keeps the number its
+ * search was given, and closing it tells the core to forget the search.
  *
  * Replies are not asked for here. They arrive on whichever hub they came in on and
  * are handed to addHit() by the window, which is the only thing that can see both
@@ -70,17 +69,11 @@ public:
 	Glyph glyph() const override;
 
 public slots:
-	/**
-	 * File one reply under the search it answers.
-	 *
-	 * Dropped, and deliberately, when it belongs to no open tab: a search whose tab
-	 * has been closed is one nobody is waiting for, and peers go on answering it for
-	 * a while afterwards.
-	 */
+	/** File one reply under the search the core says it answers, if its tab is open. */
 	void addHit(const Qdc::SearchHit& hit);
 
 	/**
-	 * The replies that arrived together, sorted into the searches they answer.
+	 * The replies that arrived together, filed under the searches they answer.
 	 *
 	 * One insertion and one summary per search per batch, rather than per reply:
 	 * the model transaction and the count under the results are what a burst of
@@ -92,15 +85,14 @@ public slots:
 	void focusQuery();
 
 private:
-	/** One search: its tab, its answers, and the token that identifies it. */
+	/** One search: its tab, its answers, and the numbers that identify it. */
 	struct Search {
-		QString token;
+		quint64 request = 0;
 
-		/** As typed, for the tab's label and for placing an untokened reply. */
+		/** The core's number for it, once searchSent() has said; 0 until then. */
+		quint64 search = 0;
+
 		QString terms;
-
-		/** The words of 'terms' that a name has to carry, lower cased. */
-		QStringList words;
 
 		QWidget* page = nullptr;
 		QTreeView* tree = nullptr;
@@ -121,16 +113,7 @@ private:
 	/** Update the line under a tab's table: hubs asked, files, peers. */
 	void refreshSummary(Search& search);
 
-	Search* searchForToken(const QString& token);
-
-	/**
-	 * The tab an untokened reply belongs to, newest first, or null.
-	 *
-	 * Newest first because a reply arriving now is far more likely to answer the
-	 * search just started than one from ten minutes ago, and a name matching both
-	 * is genuinely ambiguous - there is nothing in the reply to settle it with.
-	 */
-	Search* searchMatching(const QString& filename);
+	Search* searchNumbered(quint64 search);
 
 	Search* currentSearch();
 
