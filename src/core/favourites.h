@@ -8,76 +8,49 @@
 #include <QObject>
 #include <QStringList>
 
+namespace QuickDC { namespace Api { struct Event; } }
+
 namespace Qdc {
 
-class ConfigBridge;
+class CoreThread;
 
 /**
- * The hubs worth keeping.
+ * The hubs worth keeping, as the core says they are.
  *
- * The core has no notion of a favourite - nothing reads one, nothing connects to
- * one - so this is entirely a user interface concept stored in the core's own
- * configuration for want of anywhere better. It goes in as
- *
- *     [Favourites]
- *     Total=2
- *     Hub 0=adcs://hub.example.org:412
- *     Hub 1=dchub://other.example.org:411
- *
- * which is the shape the core already uses for [Shares], so a hand-edited file
- * stays predictable. Nothing in the core will act on any of it.
- *
- * Held in memory and written through, because the list is short and every caller
- * wants the whole thing.
- *
- * Addresses go in canonical, as RecentHubs stores them, and a list written before
- * that was true is rewritten on the way in. It has to be: a public hub list names a
- * hub however its publisher spelled it, and the header star names the same hub the
- * way the connection did, so without this a hub kept from the list and the same hub
- * kept from its own header are two favourites and neither knows about the other.
+ * The core keeps the list - canonical addresses, in the order they were added -
+ * and stores it; this holds the last list it announced, answers questions about
+ * it without asking, and asks the core for changes, which show once it has said
+ * so through changed().
  */
 class Favourites final : public QObject {
 	Q_OBJECT
 
 public:
-	/** Loads immediately; the list is a handful of strings. */
-	explicit Favourites(ConfigBridge* config, QObject* parent = nullptr);
+	explicit Favourites(CoreThread* thread, QObject* parent = nullptr);
 
 	/** In the order stored, which is the order they were added. Canonical. */
 	QStringList urls() const;
 
-	/** However @a url is spelled; see the note above the class. */
+	/** However @a url is spelled. */
 	bool contains(const QString& url) const;
 
-	/**
-	 * Adding one that is already there does nothing, so a caller need not check.
-	 * @return true if the list changed.
-	 */
-	bool add(const QString& url);
-	bool remove(const QString& url);
+	void add(const QString& url);
+	void remove(const QString& url);
 
-	/** @return the state after the toggle: true if it is now a favourite. */
-	bool toggle(const QString& url);
+	/** Add it if it is not kept, and let it go if it is. */
+	void toggle(const QString& url);
+
+	/** Take what the core announced; public so that a test can stand in for it. */
+	void take(const QuickDC::Api::Event& event);
 
 signals:
-	/** Any change, already persisted. */
+	/** The core said the list changed. */
 	void changed();
 
 private:
-	/**
-	 * Rewrite the whole group.
-	 *
-	 * Every key is removed before the current list is written, because the group
-	 * is numbered - shortening the list otherwise leaves the tail entries behind
-	 * and Total no longer agrees with what is there.
-	 */
-	void store();
 
-	ConfigBridge* m_config;
+	CoreThread* m_thread;
 	QStringList m_urls;
-
-	/** How many numbered keys are in the file; see Completed for the reasoning. */
-	int m_storedCount = 0;
 };
 
 }

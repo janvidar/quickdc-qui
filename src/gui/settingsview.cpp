@@ -11,7 +11,6 @@
 
 #include <core/configbridge.h>
 #include <core/dropbridge.h>
-#include <core/networkmode.h>
 #include <core/shares.h>
 
 #include <QCheckBox>
@@ -220,11 +219,11 @@ QWidget* Qdc::SettingsView::buildConnection()
 	 * the first two both intend it, and differ only in who chooses the plumbing.
 	 */
 	m_mode->addItem(tr("Automatic — set this up and check it for me"),
-	                networkModeToken(NetworkMode::Automatic));
+	                static_cast<int>(NetworkMode::Automatic));
 	m_mode->addItem(tr("Advanced — I will choose the port and forwarding"),
-	                networkModeToken(NetworkMode::Advanced));
+	                static_cast<int>(NetworkMode::Advanced));
 	m_mode->addItem(tr("Passive — I only connect out"),
-	                networkModeToken(NetworkMode::Passive));
+	                static_cast<int>(NetworkMode::Passive));
 
 	m_port->setRange(1, 65535);
 	m_port->setObjectName(QStringLiteral("connectionPort"));
@@ -265,18 +264,19 @@ QWidget* Qdc::SettingsView::buildConnection()
 	 * What automatic does on the user's behalf, said because it does it without asking
 	 * again: a server outside is contacted and has a connection made back here, which
 	 * is a disclosure the mode makes on every start rather than a field somebody filled
-	 * in. The name is the core's own default and not a copy of it, so that a page saying
-	 * who is asked cannot come to name somebody else.
+	 * in. The name is the one the core says it asks, so that a page saying who is asked
+	 * cannot come to name somebody else.
 	 */
 	QFormLayout* automatic = new QFormLayout(m_automaticFields);
 	automatic->setContentsMargins(0, 0, 0, 0);
 
-	automatic->addRow(makeNote(tr(
-		"Automatic chooses the port, asks the router to forward it, and checks the "
-		"result against %1. That check tells %1 the address this machine connects from "
-		"and the port it listens on, and has it connect back to prove the answer; "
-		"Advanced is where a different server, or none at all, is named.")
-		.arg(defaultReachabilityServer())));
+	m_automaticNote = makeNote(QString());
+	automatic->addRow(m_automaticNote);
+	describeAutomatic();
+
+	if (m_config)
+		connect(m_config, &ConfigBridge::connectionModeChanged,
+		        this, &SettingsView::describeAutomatic);
 
 	QFormLayout* advanced = new QFormLayout(m_advancedFields);
 	advanced->setContentsMargins(0, 0, 0, 0);
@@ -366,10 +366,22 @@ QWidget* Qdc::SettingsView::buildConnection()
 	return page;
 }
 
+void Qdc::SettingsView::describeAutomatic()
+{
+	const QString server = m_config ? m_config->connectionMode().reachabilityServer
+	                                : QString();
+
+	m_automaticNote->setText(tr(
+		"Automatic chooses the port, asks the router to forward it, and checks the "
+		"result against %1. That check tells %1 the address this machine connects from "
+		"and the port it listens on, and has it connect back to prove the answer; "
+		"Advanced is where a different server, or none at all, is named.")
+		.arg(server));
+}
+
 void Qdc::SettingsView::applyConnectionMode()
 {
-	const NetworkMode mode = networkModeFromToken(m_mode->currentData().toString(),
-	                                              NetworkMode::Advanced);
+	const NetworkMode mode = static_cast<NetworkMode>(m_mode->currentData().toInt());
 
 	const bool advanced = mode == NetworkMode::Advanced;
 	const bool passive = mode == NetworkMode::Passive;
@@ -643,11 +655,24 @@ QWidget* Qdc::SettingsView::buildSharing()
 
 	/*
 	 * Said rather than left to be discovered: somebody who adds a folder and then
-	 * looks for it on the hub will think the share is broken.
+	 * looks for it on the hub straight away will think the share is broken.
 	 */
 	column->addWidget(makeNote(tr(
-		"Shared folders are read when QuickDC starts, so a change here takes "
-		"effect the next time it is started.")));
+		"A change here is shared at once. The files in a folder just added can be "
+		"found by others as soon as they have been hashed, which for a large folder "
+		"takes a while.")));
+
+	if (m_shares)
+	{
+		connect(m_shares, &Shares::changed, this, &SettingsView::refreshShareList);
+		connect(m_shares, &Shares::refused, this, [this](const QString& path, ShareRefusal why) {
+			if (why == ShareRefusal::Other) return;
+
+			QMessageBox::information(this, tr("Share a folder"), why == ShareRefusal::NotAFolder
+				? tr("'%1' is not a folder that can be shared.").arg(path)
+				: tr("'%1' is already shared, or is inside a folder that is.").arg(path));
+		});
+	}
 
 	return page;
 }
@@ -822,30 +847,17 @@ void Qdc::SettingsView::load()
 	const QString cid = m_config->read(S::ClientId);
 	m_clientId->setText(cid.isEmpty() ? tr("assigned on first connection") : cid);
 
-	/*
-	 * The stored mode, or the reading that imposes nothing where the file has none.
-	 * A store the core has already opened always has one; this answers for the case
-	 * where it has not, which is a page built against a configuration of its own.
-	 */
-	const NetworkMode mode = networkModeFromToken(m_config->read(S::ConnectionMode),
-		m_config->read(S::ActiveMode) ? NetworkMode::Advanced : NetworkMode::Passive);
+	/* As the core says it is in force, rather than as the keys under it read. */
+	const ConnectionMode connection = m_config->connectionMode();
 
-	m_mode->setCurrentIndex(qMax(0, m_mode->findData(networkModeToken(mode))));
+	m_mode->setCurrentIndex(qMax(0, m_mode->findData(static_cast<int>(connection.mode))));
 
 	m_port->setValue(m_config->read(S::Port));
 	m_bind->setText(m_config->read(S::Bind));
 	m_address->setText(m_config->read(S::Address));
 
-	/*
-	 * Carried rather than shown. Every mode measures against the same server and the
-	 * page offers no way to change it, but a name somebody put in the file by hand -
-	 * a server of their own - has to survive a save, so what was read is what is
-	 * handed back to the derivation.
-	 */
-	m_storedServer = m_config->read(S::ReachabilityServer).trimmed();
-
-	m_forceActive->setChecked(m_config->read(S::ForceActiveMode));
-	m_useUpnp->setChecked(m_config->read(S::UseUpnp));
+	m_forceActive->setChecked(connection.forceActive);
+	m_useUpnp->setChecked(connection.useUpnp);
 
 	m_slots->setValue(m_config->read(S::Slots));
 	m_maxDownloads->setValue(m_config->read(S::MaxDownloads));
@@ -915,27 +927,13 @@ bool Qdc::SettingsView::save()
 	m_config->write(S::Email, m_email->text().trimmed());
 
 	/*
-	 * The mode, and then everything it decides.
-	 *
-	 * Derived rather than read off the switches, because in two of the three modes
-	 * those switches are not on screen: saving whatever they happen to hold would
-	 * write a state nobody chose. Advanced is the mode that answers with them, so it
-	 * is the only one where they are read - which is also what makes the answer to
-	 * "what did I set the port to" survive a trip through automatic.
+	 * The mode, and the switches advanced leaves to the user; the core writes
+	 * everything the mode decides, and in the other two modes the switches are not
+	 * on screen and it decides them.
 	 */
-	const NetworkMode mode = networkModeFromToken(
-		m_mode->currentData().toString(), NetworkMode::Advanced);
+	const NetworkMode mode = static_cast<NetworkMode>(m_mode->currentData().toInt());
 
-	const NetworkModeKeys keys = networkModeKeys(mode,
-		m_useUpnp->isChecked(),
-		m_forceActive->isChecked(),
-		m_storedServer);
-
-	m_config->write(S::ConnectionMode, networkModeToken(mode));
-	m_config->write(S::ActiveMode, keys.activeMode);
-	m_config->write(S::ReachabilityServer, keys.reachabilityServer);
-	m_config->write(S::ForceActiveMode, keys.forceActive);
-	m_config->write(S::UseUpnp, keys.useUpnp);
+	m_config->setConnectionMode(mode, m_useUpnp->isChecked(), m_forceActive->isChecked());
 
 	/*
 	 * The plumbing only where somebody is choosing it. The port is not merely bound
@@ -1051,23 +1049,12 @@ void Qdc::SettingsView::addShare()
 {
 	if (!m_shares) return;
 
+	/*
+	 * Applied at once rather than on Save: the folders are the core's own list, and
+	 * a half-applied one is not a useful state to be in.
+	 */
 	chooseDirectory(tr("Share a folder"), QDir::homePath(),
-	                [this](const QString& chosen) {
-		/*
-		 * The shares list writes itself through immediately rather than waiting for
-		 * Save, because it is its own store and a half-applied folder list is not a
-		 * useful state to be in.
-		 */
-		if (!m_shares->add(chosen))
-		{
-			QMessageBox::information(this, tr("Share a folder"),
-				tr("'%1' is already shared, or is inside a folder that is.")
-					.arg(chosen));
-			return;
-		}
-
-		refreshShareList();
-	});
+	                [this](const QString& chosen) { m_shares->add(chosen); });
 }
 
 void Qdc::SettingsView::removeSelectedShare()
@@ -1077,7 +1064,7 @@ void Qdc::SettingsView::removeSelectedShare()
 	const int row = m_shareList->currentRow();
 	if (row < 0) return;
 
-	if (m_shares->removeAt(row)) refreshShareList();
+	m_shares->removeAt(row);
 }
 
 void Qdc::SettingsView::renameSelectedShare()
@@ -1096,7 +1083,7 @@ void Qdc::SettingsView::renameSelectedShare()
 
 	if (!accepted) return;
 
-	if (m_shares->renameAt(row, name)) refreshShareList();
+	m_shares->renameAt(row, name);
 }
 
 void Qdc::SettingsView::chooseDirectory(const QString& title, const QString& start,

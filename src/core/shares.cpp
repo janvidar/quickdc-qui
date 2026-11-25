@@ -4,69 +4,33 @@
 
 #include "shares.h"
 
-#include "configbridge.h"
+#include "corechannel.h"
+#include "corethread.h"
 
-#include <QDir>
-#include <QFileInfo>
+#include <atomic>
 
 namespace {
 
-const QString GROUP = QStringLiteral("Shares");
+namespace Ev = QuickDC::Api::Events;
 
-/** The core spells it out in full; not "Total". */
-const QString TOTAL = QStringLiteral("Total shares");
-
-constexpr QChar SEPARATOR = u':';
-
-/** More than anyone shares, and a bound on a corrupt total. */
-constexpr int LIMIT = 1024;
-
-QString share_key(int index)
+std::string to_std(const QString& text)
 {
-	return QStringLiteral("Share %1").arg(index);
-}
-
-/** Trailing separators would make the stored pair ambiguous on reload. */
-QString clean_name(const QString& name)
-{
-	QString cleaned = name;
-	cleaned.remove(SEPARATOR);
-	return cleaned.trimmed();
+	const QByteArray utf8 = text.toUtf8();
+	return std::string(utf8.constData(), static_cast<size_t>(utf8.size()));
 }
 
 }
 
-Qdc::Shares::Shares(ConfigBridge* config, QObject* parent)
+Qdc::Shares::Shares(CoreThread* thread, QObject* parent)
 	: QObject(parent)
-	, m_config(config)
+	, m_thread(thread)
 {
-	if (!m_config) return;
+	if (!m_thread) return;
 
-	const int total = m_config->getNumber(ConfigStore::Application, GROUP, TOTAL, 0);
+	if (const Ev::ShareFolders* known = m_thread->channel()->latest<Ev::ShareFolders>())
+		adopt(*known);
 
-	for (int n = 0; n < qMin(total, LIMIT); ++n)
-	{
-		const QString line = m_config->getString(ConfigStore::Application, GROUP,
-		                                         share_key(n));
-		if (line.isEmpty()) continue;
-
-		/*
-		 * The first colon splits the pair, because the path may contain more of
-		 * them and the name may not.
-		 */
-		const qsizetype split = line.indexOf(SEPARATOR);
-		if (split <= 0) continue;
-
-		SharedFolder folder;
-		folder.name = line.left(split);
-		folder.path = line.mid(split + 1);
-
-		if (folder.name.isEmpty() || folder.path.isEmpty()) continue;
-
-		m_folders.append(folder);
-	}
-
-	m_storedCount = qMin(total, LIMIT);
+	connect(m_thread->channel(), &CoreChannel::received, this, &Shares::onCoreEvent);
 }
 
 QList<Qdc::SharedFolder> Qdc::Shares::folders() const
@@ -79,119 +43,62 @@ int Qdc::Shares::count() const
 	return static_cast<int>(m_folders.size());
 }
 
-bool Qdc::Shares::contains(const QString& path) const
+std::uint64_t Qdc::Shares::nextRequest()
 {
-	const QString wanted = QDir::cleanPath(path);
-
-	for (const SharedFolder& folder : m_folders)
-	{
-		const QString have = QDir::cleanPath(folder.path);
-
-		if (have == wanted) return true;
-
-		/*
-		 * A folder inside one already offered is already offered, and adding it
-		 * again would put every file in it into the list twice.
-		 */
-		if (wanted.startsWith(have + QLatin1Char('/'))) return true;
-	}
-
-	return false;
+	/* Every Shares hears every answer, so the numbers are unique across them. */
+	static std::atomic<std::uint64_t> requests{0};
+	const std::uint64_t request = ++requests;
+	m_asked.append(request);
+	return request;
 }
 
-bool Qdc::Shares::add(const QString& path, const QString& name)
+void Qdc::Shares::add(const QString& path, const QString& name)
 {
-	const QString cleaned = QDir::cleanPath(path.trimmed());
-	if (cleaned.isEmpty() || contains(cleaned)) return false;
-
-	SharedFolder folder;
-	folder.path = cleaned;
-	folder.name = clean_name(name);
-
-	if (folder.name.isEmpty())
-	{
-		folder.name = QFileInfo(cleaned).fileName();
-
-		/* A root directory has no base name; fall back to something usable. */
-		if (folder.name.isEmpty()) folder.name = QStringLiteral("share");
-	}
-
-	m_folders.append(folder);
-	store();
-	emit changed();
-
-	return true;
+	if (!m_thread) return;
+	m_thread->submit(QuickDC::Api::Commands::AddShareFolder{to_std(path), to_std(name), nextRequest()});
 }
 
-bool Qdc::Shares::removeAt(int index)
+void Qdc::Shares::removeAt(int index)
 {
-	if (index < 0 || index >= m_folders.size()) return false;
-
-	m_folders.removeAt(index);
-	store();
-	emit changed();
-
-	return true;
+	if (!m_thread || index < 0 || index >= m_folders.size()) return;
+	m_thread->submit(QuickDC::Api::Commands::RemoveShareFolder{
+		to_std(m_folders.at(index).path), nextRequest()});
 }
 
-bool Qdc::Shares::renameAt(int index, const QString& name)
+void Qdc::Shares::renameAt(int index, const QString& name)
 {
-	if (index < 0 || index >= m_folders.size()) return false;
-
-	const QString cleaned = clean_name(name);
-	if (cleaned.isEmpty() || cleaned == m_folders.at(index).name) return false;
-
-	m_folders[index].name = cleaned;
-	store();
-	emit changed();
-
-	return true;
+	if (!m_thread || index < 0 || index >= m_folders.size()) return;
+	m_thread->submit(QuickDC::Api::Commands::RenameShareFolder{
+		to_std(m_folders.at(index).path), to_std(name), nextRequest()});
 }
 
-void Qdc::Shares::setFolders(const QList<SharedFolder>& folders)
+void Qdc::Shares::adopt(const Ev::ShareFolders& told)
 {
 	m_folders.clear();
-
-	for (const SharedFolder& folder : folders)
-	{
-		if (folder.path.isEmpty()) continue;
-
-		SharedFolder cleaned;
-		cleaned.path = QDir::cleanPath(folder.path);
-		cleaned.name = clean_name(folder.name);
-
-		if (cleaned.name.isEmpty())
-			cleaned.name = QFileInfo(cleaned.path).fileName();
-
-		if (cleaned.name.isEmpty()) continue;
-
-		m_folders.append(cleaned);
-	}
-
-	store();
-	emit changed();
+	for (const QuickDC::Api::ShareFolder& folder : told.folders)
+		m_folders.append(SharedFolder{QString::fromStdString(folder.name),
+		                              QString::fromStdString(folder.path)});
 }
 
-void Qdc::Shares::store()
+void Qdc::Shares::onCoreEvent(const QuickDC::Api::Event& event)
 {
-	if (!m_config) return;
-
-	QStringList stale;
-	for (int n = 0; n < m_storedCount; ++n) stale.append(share_key(n));
-
-	QList<QPair<QString, QString>> values;
-	values.reserve(m_folders.size() + 1);
-
-	for (int n = 0; n < m_folders.size(); ++n)
+	if (const auto* told = event.as<Ev::ShareFolders>())
 	{
-		values.append({share_key(n),
-		               m_folders.at(n).name + SEPARATOR + m_folders.at(n).path});
+		m_asked.removeOne(told->request);
+		adopt(*told);
+		emit changed();
+		return;
 	}
 
-	values.append({TOTAL, QString::number(m_folders.size())});
+	const auto* refusal = event.as<Ev::ShareFolderRefused>();
+	if (!refusal || !m_asked.removeOne(refusal->request)) return;
 
-	m_config->replaceGroup(ConfigStore::Application, GROUP, stale, values);
-	m_config->save(ConfigStore::Application);
+	using Why = Ev::ShareFolderRefused::Why;
+	ShareRefusal why = ShareRefusal::Other;
+	if (refusal->why == Why::AlreadyShared || refusal->why == Why::InsideShared)
+		why = ShareRefusal::AlreadyShared;
+	else if (refusal->why == Why::NotADirectory)
+		why = ShareRefusal::NotAFolder;
 
-	m_storedCount = static_cast<int>(m_folders.size());
+	emit refused(QString::fromStdString(refusal->path), why);
 }

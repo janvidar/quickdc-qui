@@ -40,7 +40,6 @@ class Favourites;
 class FilelistBridge;
 class HubBridge;
 class HubPane;
-class RecentHubs;
 class TransferBridge;
 
 /**
@@ -76,15 +75,10 @@ public:
 	 * @param completed what has already been downloaded, so a file that is here
 	 *        already is opened rather than queued again. May be null.
 	 */
-	/**
-	 * @param recent where a hub being opened is recorded, so that it can be found
-	 *        again without having been bookmarked. May be null, and then nothing is
-	 *        remembered.
-	 */
 	HubsView(CoreThread* thread, Favourites* favourites,
 	         FilelistBridge* filelists, TransferBridge* transfers,
 	         ConfigBridge* config, Completed* completed = nullptr,
-	         RecentHubs* recent = nullptr, QWidget* parent = nullptr);
+	         QWidget* parent = nullptr);
 	~HubsView() override;
 
 	QString title() const override;
@@ -695,7 +689,6 @@ private:
 	TransferBridge* m_transfers;
 	ConfigBridge* m_config;
 	Completed* m_completed;
-	RecentHubs* m_recent;
 
 	/**
 	 * True while restoreSession() is opening what it read.

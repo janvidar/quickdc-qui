@@ -119,6 +119,16 @@ public:
 	 */
 	void save(ConfigStore store);
 
+	/** The connection mode in force, as the core last said. */
+	ConnectionMode connectionMode() const;
+
+	/**
+	 * Have the core put 'mode' in force and write the settings it decides;
+	 * 'useUpnp' and 'forceActive' count in advanced only. What it settles on
+	 * arrives through connectionModeChanged().
+	 */
+	void setConnectionMode(NetworkMode mode, bool useUpnp, bool forceActive);
+
 signals:
 	/** A store was written. */
 	void saved(Qdc::ConfigStore store);
@@ -133,6 +143,9 @@ signals:
 	 * it current without asking again and without waiting for a save.
 	 */
 	void changed(Qdc::ConfigStore store, const QString& group, const QString& key);
+
+	/** The core said what connection mode is in force; see connectionMode(). */
+	void connectionModeChanged();
 
 private:
 	void flush();

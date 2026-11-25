@@ -5,6 +5,8 @@
 #include "hubbridge.h"
 
 #include "corechannel.h"
+
+#include <api/huburl.h>
 #include "corethread.h"
 
 
@@ -223,31 +225,7 @@ qsizetype authority_end(const QString& url, qsizetype from)
 
 QString normalise_url(const QString& url)
 {
-	QString normalised = url.trimmed();
-	if (normalised.isEmpty()) return normalised;
-
-	qsizetype authority = normalised.indexOf(QStringLiteral("://"));
-	if (authority < 0)
-	{
-		normalised.prepend(QStringLiteral("dchub://"));
-		authority = normalised.indexOf(QStringLiteral("://"));
-	}
-	authority += 3;
-
-	const qsizetype end = authority_end(normalised, authority);
-
-	const QString host = normalised.mid(authority, end - authority);
-
-	/*
-	 * A colon inside brackets belongs to an IPv6 literal rather than a port, so
-	 * only one after the closing bracket counts. Both are -1 when there is
-	 * neither, which reads as "no port" and is right.
-	 */
-	if (host.lastIndexOf(QLatin1Char(':')) > host.lastIndexOf(QLatin1Char(']')))
-		return normalised;
-
-	normalised.insert(end, QStringLiteral(":411"));
-	return normalised;
+	return QString::fromStdString(QuickDC::canonicalHubUrl(url.toStdString()));
 }
 
 }

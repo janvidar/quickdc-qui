@@ -255,8 +255,67 @@ void Qdc::ConfigBridge::flush()
 	if (session) put(ConfigStore::Session);
 }
 
+namespace {
+
+Qdc::NetworkMode converted(QuickDC::NetworkMode mode)
+{
+	switch (mode)
+	{
+		case QuickDC::NetworkMode::Automatic: return Qdc::NetworkMode::Automatic;
+		case QuickDC::NetworkMode::Advanced:  return Qdc::NetworkMode::Advanced;
+		case QuickDC::NetworkMode::Passive:   return Qdc::NetworkMode::Passive;
+	}
+	return Qdc::NetworkMode::Advanced;
+}
+
+QuickDC::NetworkMode converted(Qdc::NetworkMode mode)
+{
+	switch (mode)
+	{
+		case Qdc::NetworkMode::Automatic: return QuickDC::NetworkMode::Automatic;
+		case Qdc::NetworkMode::Advanced:  return QuickDC::NetworkMode::Advanced;
+		case Qdc::NetworkMode::Passive:   return QuickDC::NetworkMode::Passive;
+	}
+	return QuickDC::NetworkMode::Advanced;
+}
+
+}
+
+Qdc::ConnectionMode Qdc::ConfigBridge::connectionMode() const
+{
+	ConnectionMode copied;
+
+	const auto* told = m_thread
+		? m_thread->channel()->latest<QuickDC::Api::Events::ConnectionMode>() : nullptr;
+	if (!told) return copied;
+
+	copied.mode = converted(told->mode);
+	copied.activeMode = told->activeMode;
+	copied.useUpnp = told->useUpnp;
+	copied.forceActive = told->forceActive;
+	copied.reachabilityServer = QString::fromStdString(told->reachabilityServer);
+	return copied;
+}
+
+void Qdc::ConfigBridge::setConnectionMode(NetworkMode mode, bool useUpnp, bool forceActive)
+{
+	if (!m_thread) return;
+
+	QuickDC::Api::Commands::SetConnectionMode command;
+	command.mode = converted(mode);
+	command.useUpnp = useUpnp;
+	command.forceActive = forceActive;
+	m_thread->submit(command);
+}
+
 void Qdc::ConfigBridge::onCoreEvent(const QuickDC::Api::Event& event)
 {
+	if (event.as<QuickDC::Api::Events::ConnectionMode>())
+	{
+		emit connectionModeChanged();
+		return;
+	}
+
 	const auto* saved_ = event.as<QuickDC::Api::Events::SettingsSaved>();
 	if (!saved_ || !m_saving.remove(saved_->request)) return;
 

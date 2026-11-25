@@ -9,78 +9,66 @@
 #include <QObject>
 #include <QString>
 
+#include "coretypes.h"
+
+#include <cstdint>
+
+namespace QuickDC { namespace Api { struct Event; namespace Events { struct ShareFolders; } } }
+
 namespace Qdc {
 
-class ConfigBridge;
+class CoreThread;
 
 /** One shared folder: what it is called on the hub, and where it really is. */
 struct SharedFolder {
-	/**
-	 * The name other users see. The core calls this the "fake" name, and it is
-	 * what appears at the top level of a file list rather than the real path -
-	 * which would otherwise tell everyone the layout of the disk.
-	 */
+	/** The name other users see, at the top of a file list in place of the path. */
 	QString name;
 
 	QString path;
 };
 
 /**
- * The folders offered to other users.
+ * The folders offered to other users, as the core says they are.
  *
- * Stored as the core reads them, in `[Shares]`:
- *
- *     Total shares=1
- *     Share 0=Music:/home/user/Music
- *
- * The colon is the separator, so it is the *first* one that splits the pair - a
- * Windows path contains one and the virtual name must not.
- *
- * Changes here are written to the configuration and take effect when the core next
- * starts. Share::Manager reads this list once in initialize() and keeps
- * addShare() and removeShare() protected, so there is nothing to call at runtime;
- * see TODO.md for what making it live would involve.
+ * The core keeps the list, decides what may join it and what it is called, stores
+ * it and shares a change at once; this holds the last list it announced and asks
+ * it for changes. What is asked for here shows once the core has said so, through
+ * changed(), and a change it would not make is told through refused() to the
+ * Shares that asked.
  */
 class Shares final : public QObject {
 	Q_OBJECT
 
 public:
-	explicit Shares(ConfigBridge* config, QObject* parent = nullptr);
+	explicit Shares(CoreThread* thread, QObject* parent = nullptr);
 
 	QList<SharedFolder> folders() const;
 	int count() const;
 
-	/**
-	 * Offer a folder.
-	 *
-	 * @param name what to call it; the folder's own base name is used if this is
-	 *        empty. A colon is stripped, since it is the stored separator.
-	 * @return false if the path is empty or already shared.
-	 */
-	bool add(const QString& path, const QString& name = QString());
+	/** @param name what to call it; empty for the folder's own name. */
+	void add(const QString& path, const QString& name = QString());
 
-	bool removeAt(int index);
+	void removeAt(int index);
 
 	/** Rename what a folder is called on the hub. The path is unchanged. */
-	bool renameAt(int index, const QString& name);
-
-	/** Whether this path, or a parent of it, is already offered. */
-	bool contains(const QString& path) const;
-
-	/** Replace the whole list, in order. */
-	void setFolders(const QList<SharedFolder>& folders);
+	void renameAt(int index, const QString& name);
 
 signals:
 	void changed();
 
-private:
-	void store();
+	/** A change asked for here was not made. */
+	void refused(const QString& path, Qdc::ShareRefusal why);
 
-	ConfigBridge* m_config;
+private:
+	void onCoreEvent(const QuickDC::Api::Event& event);
+	void adopt(const QuickDC::Api::Events::ShareFolders& told);
+	std::uint64_t nextRequest();
+
+	CoreThread* m_thread;
 	QList<SharedFolder> m_folders;
 
-	/** How many numbered keys are in the file; see Completed for the reasoning. */
-	int m_storedCount = 0;
+	/** Asked for here and not yet answered. */
+	QList<std::uint64_t> m_asked;
 };
 
 }

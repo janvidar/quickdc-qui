@@ -5,6 +5,7 @@
 #include <core/completed.h>
 #include <core/configbridge.h>
 #include <core/corethread.h>
+#include <core/testing.h>
 #include <core/transferbridge.h>
 #include <gui/fileactions.h>
 #include <gui/transfermodels.h>
@@ -50,9 +51,7 @@ private slots:
 	void aFileBeingTransferredIsNotAlsoWaiting();
 	void aReadingTakenAsAChunkEndsIsNotAnIdleTransfer();
 
-	void completedStoreRoundTrips();
-	void completedStoreDropsTheOldestPastItsLimit();
-	void completedStoreIgnoresAnImmediateRepeat();
+	void completedShowsWhatTheCoreRecorded();
 
 	void viewShowsQueueContents();
 	void theBadgeCountsFilesAndNotChunks();
@@ -818,134 +817,42 @@ void TestTransfers::completedModelMarksMissingFiles()
 	QVERIFY(QFile::remove(present));
 }
 
-void TestTransfers::completedStoreRoundTrips()
+/* The list is the core's; this holds what it said, and asks it to forget. */
+void TestTransfers::completedShowsWhatTheCoreRecorded()
 {
-	Qdc::ConfigBridge config(m_thread);
-
-	/* A path containing the separator, which the encoding has to survive. */
 	const QString awkward = scratch(QStringLiteral("odd|name.bin"));
 
-	{
-		Qdc::Completed completed(&config);
-		QVERIFY(completed.entries().isEmpty());
+	Qdc::CompletedDownload first;
+	first.filename = awkward;
+	first.size = 5678;
+	first.tth = QStringLiteral("AAA");
+	first.finished = QDateTime::fromSecsSinceEpoch(1700000100);
 
-		QSignalSpy changes(&completed, &Qdc::Completed::changed);
+	Qdc::CompletedDownload second;
+	second.filename = scratch(QStringLiteral("one.bin"));
+	second.size = 1234;
+	second.finished = QDateTime::fromSecsSinceEpoch(1700000000);
 
-		Qdc::CompletedDownload first;
-		first.filename = scratch(QStringLiteral("one.bin"));
-		first.size = 1234;
-		first.tth = QStringLiteral("AAA");
-		first.finished = QDateTime::fromSecsSinceEpoch(1700000000);
-		completed.add(first);
+	Qdc::Completed completed(m_thread);
+	QSignalSpy changes(&completed, &Qdc::Completed::changed);
 
-		Qdc::CompletedDownload second;
-		second.filename = awkward;
-		second.size = 5678;
-		second.finished = QDateTime::fromSecsSinceEpoch(1700000100);
-		completed.add(second);
-
-		QCOMPARE(changes.count(), 2);
-
-		/* Newest first. */
-		QCOMPARE(completed.entries().first().filename, awkward);
-	}
-
-	Qdc::Completed reloaded(&config);
-	QCOMPARE(reloaded.count(), 2);
-	QCOMPARE(reloaded.entries().first().filename, awkward);
-	QCOMPARE(reloaded.entries().first().size, 5678u);
-	QCOMPARE(reloaded.entries().last().tth, QStringLiteral("AAA"));
-	QCOMPARE(reloaded.entries().last().finished.toSecsSinceEpoch(), 1700000000);
-
-	QVERIFY(reloaded.remove(awkward));
-	QVERIFY(!reloaded.remove(awkward));
-	QCOMPARE(reloaded.count(), 1);
-
-	reloaded.clear();
-	QCOMPARE(reloaded.count(), 0);
-
-	/* And the clearing persisted, rather than leaving a numbered tail behind. */
-	Qdc::Completed empty(&config);
-	QCOMPARE(empty.count(), 0);
-}
-
-void TestTransfers::completedStoreDropsTheOldestPastItsLimit()
-{
-	Qdc::ConfigBridge config(m_thread);
-	Qdc::Completed completed(&config);
-	completed.clear();
-
-	const int limit = Qdc::Completed::limit();
-
-	for (int n = 0; n < limit + 5; ++n)
-	{
-		Qdc::CompletedDownload entry;
-		entry.filename = scratch(QStringLiteral("bulk-%1.bin").arg(n));
-		entry.size = static_cast<quint64>(n);
-		entry.finished = QDateTime::fromSecsSinceEpoch(1700000000 + n);
-		completed.add(entry);
-	}
-
-	QCOMPARE(completed.count(), limit);
-
-	/* The newest is kept and the oldest are the ones dropped. */
-	QCOMPARE(completed.entries().first().filename,
-	         scratch(QStringLiteral("bulk-%1.bin").arg(limit + 4)));
-
-	completed.clear();
-}
-
-void TestTransfers::completedStoreIgnoresAnImmediateRepeat()
-{
-	Qdc::ConfigBridge config(m_thread);
-	Qdc::Completed completed(&config);
-	completed.clear();
-
-	Qdc::CompletedDownload entry;
-	entry.filename = scratch(QStringLiteral("once.bin"));
-	entry.size = 10;
-
-	completed.add(entry);
-	completed.add(entry);
-	QCOMPARE(completed.count(), 1);
-
-	/*
-	 * Still one, even with something else in between: what is being suppressed is
-	 * the same completion reported twice, and a different file arriving does not
-	 * make the repeat any more real.
-	 */
-	Qdc::CompletedDownload other;
-	other.filename = scratch(QStringLiteral("other.bin"));
-	other.size = 20;
-	completed.add(other);
-	completed.add(entry);
+	Qdc::Testing::announce(completed, {first, second});
+	QCOMPARE(changes.count(), 1);
 	QCOMPARE(completed.count(), 2);
+	QCOMPARE(completed.entries().first().filename, awkward);
+	QCOMPARE(completed.entries().first().size, 5678u);
+	QCOMPARE(completed.entries().first().tth, QStringLiteral("AAA"));
+	QCOMPARE(completed.entries().last().finished.toSecsSinceEpoch(), 1700000000);
+	QCOMPARE(Qdc::Completed::limit(), 500);
 
-	/*
-	 * The same file downloaded again later is a genuine second entry, and both
-	 * have to be kept - so the suppression is on the timestamp, not the name.
-	 */
-	Qdc::CompletedDownload again = entry;
-	again.finished = QDateTime::currentDateTime().addSecs(-86400);
-	completed.add(again);
-	QCOMPARE(completed.count(), 3);
-
-	/* Ordered by the timestamp shown, so yesterday's copy is last. */
-	QCOMPARE(completed.entries().last().finished.toSecsSinceEpoch(),
-	         again.finished.toSecsSinceEpoch());
-
-	/* An entry with no filename is not a download. */
-	completed.add(Qdc::CompletedDownload());
-	QCOMPARE(completed.count(), 3);
-
-	completed.clear();
+	/* Held here and nowhere else: another bridge shows the core's own list. */
+	Qdc::Completed fresh(m_thread);
+	QCOMPARE(fresh.count(), 0);
 }
 
 void TestTransfers::viewShowsQueueContents()
 {
-	Qdc::ConfigBridge config(m_thread);
-	Qdc::Completed completed(&config);
-	completed.clear();
+	Qdc::Completed completed(m_thread);
 
 	/*
 	 * The tests above leave the queue empty, but the bridge reports the figures it was
@@ -972,7 +879,8 @@ void TestTransfers::viewShowsQueueContents()
 	Qdc::CompletedDownload entry;
 	entry.filename = target;
 	entry.size = 8192;
-	completed.add(entry);
+	entry.finished = QDateTime::currentDateTime();
+	Qdc::Testing::announce(completed, {entry});
 
 	QCOMPARE(view.completedRowCount(), 1);
 
@@ -981,15 +889,11 @@ void TestTransfers::viewShowsQueueContents()
 
 	m_transfers->removeFromQueue(target);
 	QTRY_COMPARE(view.queueRowCount(), 0);
-
-	completed.clear();
 }
 
 void TestTransfers::theBadgeCountsFilesAndNotChunks()
 {
-	Qdc::ConfigBridge config(m_thread);
-	Qdc::Completed completed(&config);
-	completed.clear();
+	Qdc::Completed completed(m_thread);
 
 	Qdc::TransfersView view(m_transfers, &completed);
 	QCOMPARE(view.badgeCount(), 0);

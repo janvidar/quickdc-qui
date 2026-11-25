@@ -240,19 +240,6 @@ Qdc::TransfersView::TransfersView(TransferBridge* transfers, Completed* complete
 		connect(m_transfers, &TransferBridge::transferStopped, this, ended);
 		connect(m_transfers, &TransferBridge::transferError, this, ended);
 
-		connect(m_transfers, &TransferBridge::downloadCompleted, this,
-		        [this](const QString& filename, quint64 size, const QString& tth) {
-			if (!m_completed) return;
-
-			CompletedDownload entry;
-			entry.filename = filename;
-			entry.size = size;
-			entry.tth = tth;
-			entry.finished = QDateTime::currentDateTime();
-
-			m_completed->add(entry);
-		});
-
 		/*
 		 * Nothing is seeded from the snapshot on purpose. Its rows stand for files
 		 * rather than for the core's transfers, so an ending - which names one

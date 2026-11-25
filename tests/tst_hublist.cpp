@@ -7,8 +7,10 @@
 #include <core/corethread.h>
 #include <core/favourites.h>
 #include <core/hubdirectory.h>
+#include <core/hubbridge.h>
 #include <core/hublistbridge.h>
 #include <core/recenthubs.h>
+#include <core/testing.h>
 #include <gui/homeview.h>
 #include <gui/hubbrowser.h>
 #include <gui/favouritedelegate.h>
@@ -62,11 +64,8 @@ private slots:
 	void initTestCase();
 	void cleanupTestCase();
 
-	void recentHubsRecordsAVisitOnce();
-	void recentHubsNormalisesWhatItIsGiven();
-	void recentHubsNamesAHubWithoutRevisitingIt();
-	void recentHubsDropsTheOldestPastItsLimit();
-	void recentHubsRoundTripsThroughTheConfiguration();
+	void recentHubsAreWhatTheCoreRecorded();
+	void favouritesAreWhatTheCoreKeeps();
 
 	void aDirectoryWithNoConfigurationWritesTheDefaults();
 	void aDirectoryReadsItsSourcesInOrder();
@@ -128,6 +127,12 @@ private:
 	void configureSources(const QStringList& urls);
 
 	QString cacheDir() const;
+
+	/** Let go of every hub the core keeps, and wait for 'kept' to hear it. */
+	void forgetFavourites(Qdc::Favourites& kept);
+
+	/** A visit, as the core records one: by opening the hub. */
+	void visit(const QString& url);
 
 	QTemporaryDir m_dir;
 	Qdc::CoreThread* m_thread = nullptr;
@@ -245,122 +250,79 @@ void TestHubList::cache(const Qdc::HubDirectory& directory, const QString& url,
 	QVERIFY(file.commit());
 }
 
-void TestHubList::recentHubsRecordsAVisitOnce()
+namespace {
+
+Qdc::RecentHub visited(const QString& url, const QString& name = QString(), qint64 at = 1769000000)
 {
-	Qdc::RecentHubs recent(nullptr);
+	Qdc::RecentHub hub;
+	hub.url = url;
+	hub.name = name;
+	hub.visited = QDateTime::fromSecsSinceEpoch(at);
+	return hub;
+}
+
+}
+
+void TestHubList::forgetFavourites(Qdc::Favourites& kept)
+{
+	for (const QString& url : kept.urls()) kept.remove(url);
+	QTRY_VERIFY(kept.urls().isEmpty());
+}
+
+void TestHubList::visit(const QString& url)
+{
+	Qdc::HubBridge opened(m_thread, url);
+	Qdc::RecentHubs recent(m_thread);
+	QTRY_VERIFY(recent.contains(url));
+}
+
+/* Opening a hub is a visit the core records, and the bridge shows; the rules are the core's. */
+void TestHubList::recentHubsAreWhatTheCoreRecorded()
+{
+	Qdc::RecentHubs recent(m_thread);
+	recent.clear();
+	QTRY_COMPARE(recent.count(), 0);
+
 	QSignalSpy changes(&recent, &Qdc::RecentHubs::changed);
 
-	recent.note(QStringLiteral("adcs://one.example.org:412"));
-	recent.note(QStringLiteral("dchub://two.example.org:411"));
+	visit(QStringLiteral("adcs://one.example.org:412"));
+	visit(QStringLiteral("two.example.org"));
+	QTRY_COMPARE(recent.count(), 2);
+	QVERIFY(changes.count() >= 2);
 
-	QCOMPARE(recent.count(), 2);
-	QCOMPARE(changes.count(), 2);
+	/* Newest first, and filed under the address the hub connection is keyed on. */
+	QCOMPARE(recent.entries().at(0).url, QStringLiteral("dchub://two.example.org:411"));
+	QVERIFY(recent.entries().at(0).visited.isValid());
+	QVERIFY(recent.contains(QStringLiteral("dchub://two.example.org")));
 
-	/* Newest first, so the second one is at the front. */
-	QCOMPARE(recent.entries().at(0).url,
-	         QStringLiteral("dchub://two.example.org:411"));
+	/* Stored as it was before the core kept it, so nobody's list is lost. */
+	QTRY_VERIFY(m_config->getString(Qdc::ConfigStore::Application, QStringLiteral("Recent hubs"),
+	                                QStringLiteral("Hub 0"))
+	            .endsWith(QStringLiteral("|dchub://two.example.org:411|")));
 
-	/* Visiting one again moves it rather than adding it. */
-	recent.note(QStringLiteral("adcs://one.example.org:412"));
-
-	QCOMPARE(recent.count(), 2);
-	QCOMPARE(recent.entries().at(0).url,
-	         QStringLiteral("adcs://one.example.org:412"));
-
-	QVERIFY(recent.remove(QStringLiteral("adcs://one.example.org:412")));
-	QVERIFY(!recent.remove(QStringLiteral("adcs://one.example.org:412")));
-	QCOMPARE(recent.count(), 1);
-
-	recent.clear();
-	QCOMPARE(recent.count(), 0);
-}
-
-void TestHubList::recentHubsNormalisesWhatItIsGiven()
-{
-	Qdc::RecentHubs recent(nullptr);
-
-	/*
-	 * The same hub written three ways. A shortcut back to somewhere would be worth
-	 * little if opening it by address and opening it from the list made two rows.
-	 */
-	recent.note(QStringLiteral("example.org"));
-	recent.note(QStringLiteral("dchub://example.org"));
-	recent.note(QStringLiteral("dchub://example.org:411"));
-
-	QCOMPARE(recent.count(), 1);
-	QCOMPARE(recent.entries().at(0).url, QStringLiteral("dchub://example.org:411"));
-
-	QVERIFY(recent.contains(QStringLiteral("example.org")));
-	QVERIFY(recent.remove(QStringLiteral("example.org")));
-}
-
-void TestHubList::recentHubsNamesAHubWithoutRevisitingIt()
-{
-	Qdc::RecentHubs recent(nullptr);
-
-	recent.note(QStringLiteral("dchub://first.example.org:411"));
-	recent.note(QStringLiteral("dchub://second.example.org:411"));
-
-	/* The hub that was visited first says what it is called, which arrives long
-	   after the connection was made and must not reorder anything. */
-	QVERIFY(recent.setName(QStringLiteral("dchub://first.example.org:411"),
-	                       QStringLiteral("The First Hub")));
-
-	QCOMPARE(recent.entries().at(0).url,
-	         QStringLiteral("dchub://second.example.org:411"));
-	QCOMPARE(recent.entries().at(1).name, QStringLiteral("The First Hub"));
-
-	QVERIFY(!recent.setName(QStringLiteral("dchub://absent.example.org:411"),
-	                        QStringLiteral("Nowhere")));
-
-	/* A visit with no name keeps the one that is known. */
-	recent.note(QStringLiteral("dchub://first.example.org:411"));
-	QCOMPARE(recent.entries().at(0).name, QStringLiteral("The First Hub"));
-}
-
-void TestHubList::recentHubsDropsTheOldestPastItsLimit()
-{
-	Qdc::RecentHubs recent(nullptr);
-
-	const int limit = Qdc::RecentHubs::limit();
-	QVERIFY(limit > 1);
-
-	for (int n = 0; n < limit + 5; ++n)
-		recent.note(QStringLiteral("dchub://hub%1.example.org:411").arg(n));
-
-	QCOMPARE(recent.count(), limit);
-
-	/* The newest survive, and the first few are what went. */
-	QCOMPARE(recent.entries().at(0).url,
-	         QStringLiteral("dchub://hub%1.example.org:411").arg(limit + 4));
-	QVERIFY(!recent.contains(QStringLiteral("dchub://hub0.example.org:411")));
-}
-
-void TestHubList::recentHubsRoundTripsThroughTheConfiguration()
-{
-	{
-		Qdc::RecentHubs recent(m_config);
-		recent.clear();
-
-		recent.note(QStringLiteral("dchub://stored.example.org:411"));
-		recent.note(QStringLiteral("adcs://named.example.org:412"),
-		            QStringLiteral("A | name with a separator"));
-	}
-
-	Qdc::RecentHubs reread(m_config);
+	Qdc::RecentHubs reread(m_thread);
 	QCOMPARE(reread.count(), 2);
 
-	const QList<Qdc::RecentHub> entries = reread.entries();
+	recent.remove(QStringLiteral("two.example.org"));
+	QTRY_COMPARE(recent.count(), 1);
+	QCOMPARE(recent.entries().at(0).url, QStringLiteral("adcs://one.example.org:412"));
 
-	QCOMPARE(entries.at(0).url, QStringLiteral("adcs://named.example.org:412"));
+	recent.clear();
+	QTRY_COMPARE(recent.count(), 0);
+	QCOMPARE(Qdc::RecentHubs::limit(), 32);
+}
 
-	/* The name is last on the line for exactly this reason. */
-	QCOMPARE(entries.at(0).name, QStringLiteral("A | name with a separator"));
-	QVERIFY(entries.at(0).visited.isValid());
+void TestHubList::favouritesAreWhatTheCoreKeeps()
+{
+	Qdc::Favourites kept(m_thread);
+	forgetFavourites(kept);
 
-	QCOMPARE(entries.at(1).url, QStringLiteral("dchub://stored.example.org:411"));
+	kept.add(QStringLiteral("example.org"));
+	QTRY_COMPARE(kept.urls(), QStringList{QStringLiteral("dchub://example.org:411")});
+	QVERIFY(kept.contains(QStringLiteral("dchub://example.org")));
 
-	reread.clear();
+	kept.toggle(QStringLiteral("example.org"));
+	QTRY_VERIFY(kept.urls().isEmpty());
 }
 
 void TestHubList::aDirectoryWithNoConfigurationWritesTheDefaults()
@@ -677,7 +639,7 @@ void TestHubList::theBrowserListsWhatTheDirectoryHolds()
 
 	Qdc::Favourites favourites(nullptr);
 	Qdc::RecentHubs recent(nullptr);
-	recent.note(two.address, QStringLiteral("Music"));
+	Qdc::Testing::announce(recent, {visited(two.address, QStringLiteral("Music"))});
 
 	Qdc::HubBrowser browser(&filled, &favourites, &recent);
 
@@ -744,7 +706,7 @@ void TestHubList::theBrowserStaysOnTheTabItIsShowing()
 
 	/* Already kept before the browser is built, which is the ordinary case: the
 	   stores are read at startup and the window is put together afterwards. */
-	QVERIFY(favourites.add(QStringLiteral("dchub://early.example.org:411")));
+	Qdc::Testing::announce(favourites, {QStringLiteral("dchub://early.example.org:411")});
 
 	Qdc::HubBrowser browser(nullptr, &favourites, &recent);
 	browser.show();
@@ -752,11 +714,12 @@ void TestHubList::theBrowserStaysOnTheTabItIsShowing()
 
 	QCOMPARE(browser.currentTab(), Qdc::HubBrowser::PublicTab);
 
-	QVERIFY(favourites.add(QStringLiteral("dchub://late.example.org:411")));
+	Qdc::Testing::announce(favourites, {QStringLiteral("dchub://early.example.org:411"),
+	                                    QStringLiteral("dchub://late.example.org:411")});
 	QCOMPARE(browser.favouriteCount(), 2);
 	QCOMPARE(browser.currentTab(), Qdc::HubBrowser::PublicTab);
 
-	recent.note(QStringLiteral("dchub://later.example.org:411"));
+	Qdc::Testing::announce(recent, {visited(QStringLiteral("dchub://later.example.org:411"))});
 	QCOMPARE(browser.recentCount(), 1);
 	QCOMPARE(browser.currentTab(), Qdc::HubBrowser::PublicTab);
 
@@ -767,7 +730,7 @@ void TestHubList::theBrowserStaysOnTheTabItIsShowing()
 	 * one are only hidden once it has been laid out.
 	 */
 	Qdc::Favourites kept(nullptr);
-	QVERIFY(kept.add(QStringLiteral("adcs://kept.example.org:412")));
+	Qdc::Testing::announce(kept, {QStringLiteral("adcs://kept.example.org:412")});
 
 	Qdc::RecentHubs visited(nullptr);
 
@@ -822,7 +785,8 @@ void TestHubList::theBrowserBookmarksAndUnbookmarks()
 	cache(seed, url, {hub});
 
 	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-	Qdc::Favourites favourites(nullptr);
+	Qdc::Favourites favourites(m_thread);
+	forgetFavourites(favourites);
 
 	Qdc::HubBrowser browser(&directory, &favourites, nullptr);
 
@@ -839,21 +803,24 @@ void TestHubList::theBrowserBookmarksAndUnbookmarks()
 	QCOMPARE(bookmark->text(), QStringLiteral("Bookmark"));
 
 	bookmark->click();
-	QVERIFY(favourites.contains(hub.address));
+	QTRY_VERIFY(favourites.contains(hub.address));
 	QCOMPARE(bookmark->text(), QStringLiteral("Unbookmark"));
 	QCOMPARE(browser.favouriteCount(), 1);
 
 	bookmark->click();
-	QVERIFY(!favourites.contains(hub.address));
+	QTRY_VERIFY(!favourites.contains(hub.address));
 	QCOMPARE(bookmark->text(), QStringLiteral("Bookmark"));
 	QCOMPARE(browser.favouriteCount(), 0);
 }
 
 void TestHubList::theBrowserForgetsARecentHub()
 {
-	Qdc::RecentHubs recent(nullptr);
-	recent.note(QStringLiteral("dchub://kept.example.org:411"));
-	recent.note(QStringLiteral("dchub://unwanted.example.org:411"));
+	Qdc::RecentHubs recent(m_thread);
+	recent.clear();
+	QTRY_COMPARE(recent.count(), 0);
+	visit(QStringLiteral("dchub://kept.example.org:411"));
+	visit(QStringLiteral("dchub://unwanted.example.org:411"));
+	QTRY_COMPARE(recent.count(), 2);
 
 	Qdc::HubBrowser browser(nullptr, nullptr, &recent);
 	browser.showTab(Qdc::HubBrowser::VisitedTab);
@@ -872,7 +839,7 @@ void TestHubList::theBrowserForgetsARecentHub()
 	QVERIFY(forget->isEnabled());
 	forget->click();
 
-	QCOMPARE(browser.recentCount(), 1);
+	QTRY_COMPARE(browser.recentCount(), 1);
 	QVERIFY(!recent.contains(QStringLiteral("dchub://unwanted.example.org:411")));
 	QVERIFY(recent.contains(QStringLiteral("dchub://kept.example.org:411")));
 
@@ -881,7 +848,7 @@ void TestHubList::theBrowserForgetsARecentHub()
 	QVERIFY(clear);
 	clear->click();
 
-	QCOMPARE(browser.recentCount(), 0);
+	QTRY_COMPARE(browser.recentCount(), 0);
 	QCOMPARE(recent.count(), 0);
 }
 
@@ -904,7 +871,8 @@ void TestHubList::theStarColumnKeepsAPublicHub()
 	cache(seed, url, {hub});
 
 	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-	Qdc::Favourites favourites(nullptr);
+	Qdc::Favourites favourites(m_thread);
+	forgetFavourites(favourites);
 
 	Qdc::HubBrowser browser(&directory, &favourites, nullptr);
 	browser.showTab(Qdc::HubBrowser::PublicTab);
@@ -925,7 +893,7 @@ void TestHubList::theStarColumnKeepsAPublicHub()
 	QTest::mouseClick(table->viewport(), Qt::LeftButton, {},
 	                  table->visualRect(star).center());
 
-	QVERIFY(favourites.contains(hub.address));
+	QTRY_VERIFY(favourites.contains(hub.address));
 	QCOMPARE(favourites.urls().at(0),
 	         QStringLiteral("adcs://starrable.example.org:411"));
 
@@ -936,7 +904,7 @@ void TestHubList::theStarColumnKeepsAPublicHub()
 	QTest::mouseClick(table->viewport(), Qt::LeftButton, {},
 	                  table->visualRect(star).center());
 
-	QVERIFY(!favourites.contains(hub.address));
+	QTRY_VERIFY(!favourites.contains(hub.address));
 	QVERIFY(!star.data(Qdc::HubListModel::FavouriteRole).toBool());
 }
 
@@ -984,10 +952,11 @@ void TestHubList::theVisitedListShowsAndTogglesTheStar()
 	constexpr int FavouriteRole = Qt::UserRole + 2;
 
 	Qdc::RecentHubs recent(nullptr);
-	recent.note(QStringLiteral("dchub://visited.example.org:411"),
-	            QStringLiteral("Visited"));
+	Qdc::Testing::announce(recent, {visited(QStringLiteral("dchub://visited.example.org:411"),
+	                                        QStringLiteral("Visited"))});
 
-	Qdc::Favourites favourites(nullptr);
+	Qdc::Favourites favourites(m_thread);
+	forgetFavourites(favourites);
 
 	Qdc::HubBrowser browser(nullptr, &favourites, &recent);
 	browser.showTab(Qdc::HubBrowser::VisitedTab);
@@ -1006,7 +975,8 @@ void TestHubList::theVisitedListShowsAndTogglesTheStar()
 	 * Keeping it elsewhere lights the star here without the list being rebuilt - so
 	 * the row that was current still is, and nothing has been re-dated.
 	 */
-	QVERIFY(favourites.add(QStringLiteral("dchub://visited.example.org:411")));
+	favourites.add(QStringLiteral("dchub://visited.example.org:411"));
+	QTRY_VERIFY(favourites.contains(QStringLiteral("dchub://visited.example.org:411")));
 
 	QCOMPARE(list->count(), 1);
 	QCOMPARE(list->currentRow(), 0);
@@ -1017,14 +987,18 @@ void TestHubList::theVisitedListShowsAndTogglesTheStar()
 	QTest::mouseClick(list->viewport(), Qt::LeftButton, {},
 	                  QPoint(row.left() + 10, row.center().y()));
 
-	QVERIFY(!favourites.contains(QStringLiteral("dchub://visited.example.org:411")));
+	QTRY_VERIFY(!favourites.contains(QStringLiteral("dchub://visited.example.org:411")));
 
 	/* A click on the words is a selection and nothing more. */
-	QVERIFY(favourites.add(QStringLiteral("dchub://visited.example.org:411")));
+	favourites.add(QStringLiteral("dchub://visited.example.org:411"));
+	QTRY_VERIFY(favourites.contains(QStringLiteral("dchub://visited.example.org:411")));
 	QTest::mouseClick(list->viewport(), Qt::LeftButton, {},
 	                  QPoint(row.right() - 4, row.center().y()));
 
+	Qdc::Testing::runOnCore(m_thread, [] {});
+	QCoreApplication::processEvents();
 	QVERIFY(favourites.contains(QStringLiteral("dchub://visited.example.org:411")));
+	forgetFavourites(favourites);
 }
 
 void TestHubList::theExplanationRowHasNoStar()
@@ -1161,8 +1135,8 @@ void TestHubList::theStatusLineDrawsWhatASourceSaidAsText()
 void TestHubList::aVisitedRowIsPlainWhereItsTooltipIsMarkup()
 {
 	Qdc::RecentHubs recent(nullptr);
-	recent.note(QStringLiteral("dchub://visited.example.org:411"),
-	            QStringLiteral("<b>Best</b> Hub"));
+	Qdc::Testing::announce(recent, {visited(QStringLiteral("dchub://visited.example.org:411"),
+	                                        QStringLiteral("<b>Best</b> Hub"))});
 
 	Qdc::HubBrowser browser(nullptr, nullptr, &recent);
 
@@ -1236,8 +1210,9 @@ void TestHubList::aFinishedDownloadShowsItsWholePathAsText()
 		+ QString(200, QLatin1Char('m'))
 		+ QStringLiteral("/films & <b>arguments</b>.iso");
 	entry.size = 1024;
+	entry.finished = QDateTime::fromSecsSinceEpoch(1769000000);
 
-	completed.add(entry);
+	Qdc::Testing::announce(completed, {entry});
 
 	Qdc::HomeView home(nullptr, nullptr, nullptr, nullptr, &completed, nullptr);
 	QCOMPARE(home.completedCount(), 1);

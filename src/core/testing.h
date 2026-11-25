@@ -14,13 +14,21 @@
  * fails the build for a source under src/ that names this namespace.
  */
 
+#include <QList>
+#include <QStringList>
+
 #include <functional>
 
 namespace QuickDC { class Core; }
 
 namespace Qdc {
 
+class Completed;
 class CoreThread;
+class Favourites;
+class RecentHubs;
+struct CompletedDownload;
+struct RecentHub;
 
 namespace Testing {
 
@@ -32,6 +40,14 @@ void post(CoreThread* thread, std::function<void()> job);
 
 /** The core, from inside a job; null anywhere else. */
 QuickDC::Core* core(CoreThread* thread);
+
+/*
+ * Have a bridge hold a list as though the core had announced it, for a test of
+ * what is drawn from one that needs no core behind it.
+ */
+void announce(Favourites& kept, const QStringList& urls);
+void announce(RecentHubs& recent, const QList<RecentHub>& hubs);
+void announce(Completed& completed, const QList<CompletedDownload>& downloads);
 
 }
 }

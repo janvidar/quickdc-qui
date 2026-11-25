@@ -109,7 +109,6 @@ private slots:
 
 	void favouritesRoundTripThroughTheStore();
 	void favouritesNormaliseWhatTheyAreGiven();
-	void favouritesMigrateWhatWasWrittenBefore();
 	void favouritesShrinkWithoutLeavingATail();
 	void anOpenHubIsRecordedAndFollowsTheFavouritesStore();
 
@@ -1419,38 +1418,46 @@ void TestHubs::chatModelReadsARichMessageAsProse()
 	         QStringLiteral("alice: **really** try `make` [here](https://example.org)"));
 }
 
+namespace {
+
+void forgetFavourites(Qdc::Favourites& kept)
+{
+	for (const QString& url : kept.urls()) kept.remove(url);
+	QTRY_VERIFY(kept.urls().isEmpty());
+}
+
+}
+
+/* The core keeps the list; the bridge shows what it said and asks it for changes. */
 void TestHubs::favouritesRoundTripThroughTheStore()
 {
-	Qdc::ConfigBridge config(m_thread);
-
 	const QString hub = QStringLiteral("adcs://hub.example.org:412");
 	const QString other = QStringLiteral("dchub://other.example.org:411");
 
 	{
-		Qdc::Favourites favourites(&config);
-		QVERIFY(favourites.urls().isEmpty());
+		Qdc::Favourites favourites(m_thread);
+		forgetFavourites(favourites);
 
 		QSignalSpy changes(&favourites, &Qdc::Favourites::changed);
 
-		QVERIFY(favourites.add(hub));
-		QVERIFY(favourites.contains(hub));
+		favourites.add(hub);
+		QTRY_VERIFY(favourites.contains(hub));
 		QCOMPARE(changes.count(), 1);
 
 		/* Adding one that is already there is not a change. */
-		QVERIFY(!favourites.add(hub));
-		QCOMPARE(changes.count(), 1);
+		favourites.add(hub);
+		favourites.add(other);
+		QTRY_COMPARE(favourites.urls().size(), 2);
+		QCOMPARE(changes.count(), 2);
 
-		QVERIFY(favourites.add(other));
-		QCOMPARE(favourites.urls().size(), 2);
-
-		QVERIFY(!favourites.toggle(hub));
-		QVERIFY(!favourites.contains(hub));
-		QVERIFY(favourites.toggle(hub));
-		QVERIFY(favourites.contains(hub));
+		favourites.toggle(hub);
+		QTRY_VERIFY(!favourites.contains(hub));
+		favourites.toggle(hub);
+		QTRY_VERIFY(favourites.contains(hub));
 	}
 
-	/* A second store reads back what the first wrote. */
-	Qdc::Favourites reloaded(&config);
+	/* A second one shows what the core kept. */
+	Qdc::Favourites reloaded(m_thread);
 	QVERIFY(reloaded.contains(hub));
 	QVERIFY(reloaded.contains(other));
 	QCOMPARE(reloaded.urls().size(), 2);
@@ -1459,48 +1466,45 @@ void TestHubs::favouritesRoundTripThroughTheStore()
 void TestHubs::favouritesShrinkWithoutLeavingATail()
 {
 	Qdc::ConfigBridge config(m_thread);
-	Qdc::Favourites favourites(&config);
-
-	/* Start from whatever the previous test left behind. */
-	for (const QString& url : favourites.urls()) favourites.remove(url);
-	QVERIFY(favourites.urls().isEmpty());
+	Qdc::Favourites favourites(m_thread);
+	forgetFavourites(favourites);
 
 	for (int n = 0; n < 4; ++n)
 		favourites.add(QStringLiteral("dchub://h%1.example.org:411").arg(n));
 
-	QCOMPARE(favourites.urls().size(), 4);
+	QTRY_COMPARE(favourites.urls().size(), 4);
 
 	favourites.remove(QStringLiteral("dchub://h0.example.org:411"));
 	favourites.remove(QStringLiteral("dchub://h1.example.org:411"));
+	QTRY_COMPARE(favourites.urls().size(), 2);
 
-	/*
-	 * The group is numbered, so a shorter list has to clear the keys the longer
-	 * one used. Without that, reloading finds the old entries still there.
-	 */
-	Qdc::Favourites reloaded(&config);
-	QCOMPARE(reloaded.urls().size(), 2);
-	QVERIFY(!reloaded.contains(QStringLiteral("dchub://h0.example.org:411")));
-	QVERIFY(reloaded.contains(QStringLiteral("dchub://h2.example.org:411")));
+	/* The group is numbered, so a shorter list leaves none of the longer one behind. */
+	QTRY_VERIFY(!config.contains(Qdc::ConfigStore::Application, QStringLiteral("Favourites"),
+	                             QStringLiteral("Hub 2")));
+	QCOMPARE(config.getString(Qdc::ConfigStore::Application, QStringLiteral("Favourites"),
+	                          QStringLiteral("Hub 0")),
+	         QStringLiteral("dchub://h2.example.org:411"));
+	forgetFavourites(favourites);
 }
 
 void TestHubs::anOpenHubIsRecordedAndFollowsTheFavouritesStore()
 {
 	Qdc::ConfigBridge config(m_thread);
-	Qdc::Favourites favourites(&config);
-	for (const QString& url : favourites.urls()) favourites.remove(url);
+	Qdc::Favourites favourites(m_thread);
+	forgetFavourites(favourites);
 
-	Qdc::RecentHubs recent(&config);
+	Qdc::RecentHubs recent(m_thread);
 	recent.clear();
+	QTRY_COMPARE(recent.count(), 0);
 
-	Qdc::HubsView hubs(m_thread, &favourites, m_filelists, nullptr, &config, nullptr,
-	                   &recent);
+	Qdc::HubsView hubs(m_thread, &favourites, m_filelists, nullptr, &config, nullptr);
 
 	const QString hub = QStringLiteral("adc://192.0.2.1:412");
 	QVERIFY(hubs.openHub(hub));
 
 	/* Recorded as it is opened, so a hub that never answers can still be found
 	   again. Nothing here connects to anything. */
-	QVERIFY(recent.contains(hub));
+	QTRY_VERIFY(recent.contains(hub));
 
 	Qdc::ChatPane* pane = hubs.currentPane();
 	QVERIFY(pane);
@@ -1510,13 +1514,14 @@ void TestHubs::anOpenHubIsRecordedAndFollowsTheFavouritesStore()
 	 * The star follows the store, not only the click on the star: the same hub can be
 	 * unbookmarked from the list on the Home view while this conversation is open.
 	 */
-	QVERIFY(favourites.add(hub));
-	QVERIFY(pane->header()->isFavourite());
+	favourites.add(hub);
+	QTRY_VERIFY(pane->header()->isFavourite());
 
-	QVERIFY(favourites.remove(hub));
-	QVERIFY(!pane->header()->isFavourite());
+	favourites.remove(hub);
+	QTRY_VERIFY(!pane->header()->isFavourite());
 
 	recent.clear();
+	QTRY_COMPARE(recent.count(), 0);
 }
 
 namespace {
@@ -2944,67 +2949,24 @@ void TestHubs::hubPasswordIsAskedForOnce()
 
 void TestHubs::favouritesNormaliseWhatTheyAreGiven()
 {
-	Qdc::ConfigBridge config(m_thread);
-	Qdc::Favourites favourites(&config);
-	for (const QString& url : favourites.urls()) favourites.remove(url);
+	Qdc::Favourites favourites(m_thread);
+	forgetFavourites(favourites);
 
 	/*
 	 * A public hub list names a hub however its publisher spelled it, and the header
 	 * star names it the way the connection did. One favourite either way, or a hub
 	 * kept from the list would read as unkept everywhere else.
 	 */
-	QVERIFY(favourites.add(QStringLiteral("example.org")));
-	QCOMPARE(favourites.urls().at(0),
-	         QStringLiteral("dchub://example.org:411"));
+	favourites.add(QStringLiteral("example.org"));
+	QTRY_COMPARE(favourites.urls().size(), 1);
+	QCOMPARE(favourites.urls().at(0), QStringLiteral("dchub://example.org:411"));
 
 	QVERIFY(favourites.contains(QStringLiteral("example.org")));
 	QVERIFY(favourites.contains(QStringLiteral("dchub://example.org:411")));
 
-	/* The same hub, so not a second one. */
-	QVERIFY(!favourites.add(QStringLiteral("dchub://example.org:411")));
-	QCOMPARE(favourites.urls().size(), 1);
-
 	/* And it comes off under either spelling. */
-	QVERIFY(favourites.remove(QStringLiteral("example.org")));
-	QVERIFY(favourites.urls().isEmpty());
-}
-
-void TestHubs::favouritesMigrateWhatWasWrittenBefore()
-{
-	using Qdc::ConfigStore;
-
-	Qdc::ConfigBridge config(m_thread);
-
-	/* A group as it would have been written before addresses were canonical. */
-	config.replaceGroup(ConfigStore::Application, QStringLiteral("Favourites"),
-		{QStringLiteral("Hub 0"), QStringLiteral("Hub 1"), QStringLiteral("Hub 2")},
-		{{QStringLiteral("Hub 0"), QStringLiteral("example.org")},
-		 {QStringLiteral("Hub 1"), QStringLiteral("dchub://example.org:411")},
-		 {QStringLiteral("Total"), QStringLiteral("2")}});
-
-	{
-		Qdc::Favourites favourites(&config);
-
-		/* Two spellings of one hub collapse into the one they both mean. */
-		QCOMPARE(favourites.urls().size(), 1);
-		QCOMPARE(favourites.urls().at(0),
-		         QStringLiteral("dchub://example.org:411"));
-	}
-
-	/*
-	 * Written back rather than only corrected in memory, or the same list would be
-	 * migrated again on every start and the file would keep disagreeing with it.
-	 */
-	QCOMPARE(config.getString(ConfigStore::Application,
-	                          QStringLiteral("Favourites"), QStringLiteral("Hub 0")),
-	         QStringLiteral("dchub://example.org:411"));
-
-	QCOMPARE(config.getNumber(ConfigStore::Application,
-	                          QStringLiteral("Favourites"), QStringLiteral("Total")),
-	         1);
-
-	Qdc::Favourites cleanup(&config);
-	for (const QString& url : cleanup.urls()) cleanup.remove(url);
+	favourites.remove(QStringLiteral("example.org"));
+	QTRY_VERIFY(favourites.urls().isEmpty());
 }
 
 void TestHubs::aPastedPageArrivesAsPlainTextWhereFormattingCannotBeSent()

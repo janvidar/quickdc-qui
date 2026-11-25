@@ -250,8 +250,9 @@ void TestShell::windowSurvivesRepeatedConstruction()
 void TestShell::homeListsFavouritesAndAsksTheWindowToOpenThem()
 {
 	Qdc::ConfigBridge config(m_thread);
-	Qdc::Favourites favourites(&config);
+	Qdc::Favourites favourites(m_thread);
 	favourites.remove(QStringLiteral("dchub://home.example.org:411"));
+	QTRY_VERIFY(!favourites.contains(QStringLiteral("dchub://home.example.org:411")));
 
 	Qdc::HomeView home(&config, &favourites, nullptr, nullptr, nullptr, nullptr);
 	QCOMPARE(home.favouriteCount(), favourites.urls().size());
@@ -263,7 +264,8 @@ void TestShell::homeListsFavouritesAndAsksTheWindowToOpenThem()
 
 	/* A favourite added to the store appears without Home being told directly. */
 	const QString hub = QStringLiteral("dchub://home.example.org:411");
-	QVERIFY(favourites.add(hub));
+	favourites.add(hub);
+	QTRY_VERIFY(favourites.contains(hub));
 
 	const int before = home.favouriteCount();
 	QVERIFY(before > 0);
@@ -301,7 +303,7 @@ void TestShell::homeListsFavouritesAndAsksTheWindowToOpenThem()
 	QVERIFY(unbookmark);
 	unbookmark->click();
 
-	QVERIFY(!favourites.contains(hub));
+	QTRY_VERIFY(!favourites.contains(hub));
 	QCOMPARE(home.favouriteCount(), before - 1);
 }
 

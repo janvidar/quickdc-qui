@@ -10,9 +10,11 @@
 #include <QObject>
 #include <QString>
 
+namespace QuickDC { namespace Api { struct Event; } }
+
 namespace Qdc {
 
-class ConfigBridge;
+class CoreThread;
 
 /** One finished download, as remembered. */
 struct CompletedDownload {
@@ -23,69 +25,41 @@ struct CompletedDownload {
 };
 
 /**
- * What has finished downloading.
+ * What has finished downloading, as the core says.
  *
- * The core keeps no history: a QueueFile is deleted the moment its download is
- * verified, and nothing anywhere records that it existed. So the list is kept
- * here, appended to whenever TransferBridge reports a completion, and stored in
- * the core's configuration for want of anywhere better - the same arrangement as
- * Favourites, and equally invisible to the core.
- *
- * Stored as
- *
- *     [Completed]
- *     Total=1
- *     Entry 0=1769000000|734003200|MWXFLX…|/home/user/downloads/film.mkv
- *
- * one line per download: when it finished, how big it was, its hash, and where it
- * went. The path is last and is not escaped, because a path may contain the
- * separator and nothing else may - so the line is split into at most four parts
- * and whatever remains is the path.
- *
- * Newest first, and bounded: a history that grew without limit would eventually
- * be slower to load than it is worth.
+ * The core records each download as it is verified, orders and bounds the list
+ * and stores it; this holds what it last announced and asks it to forget.
  */
 class Completed final : public QObject {
 	Q_OBJECT
 
 public:
-	explicit Completed(ConfigBridge* config, QObject* parent = nullptr);
+	explicit Completed(CoreThread* thread, QObject* parent = nullptr);
 
 	/** Newest first. */
 	QList<CompletedDownload> entries() const;
 
 	int count() const;
 
-	/**
-	 * Remember a download. A repeat of the newest entry is ignored, so a
-	 * completion reported twice does not appear twice.
-	 */
-	void add(const CompletedDownload& entry);
-
 	/** Forget one, by the filename it went to. Does not touch the file. */
-	bool remove(const QString& filename);
+	void remove(const QString& filename);
 
 	void clear();
 
-	/** How many are kept before the oldest are dropped. */
+	/** How many the core keeps before the oldest are dropped. */
 	static int limit();
 
+	/** Take what the core announced; public so that a test can stand in for it. */
+	void take(const QuickDC::Api::Event& event);
+
 signals:
+	/** The core said the list changed. */
 	void changed();
 
 private:
-	void store();
 
-	ConfigBridge* m_config;
+	CoreThread* m_thread;
 	QList<CompletedDownload> m_entries;
-
-	/**
-	 * How many numbered keys are in the file.
-	 *
-	 * Tracked rather than read back, so that rewriting the group does not need a
-	 * round trip just to find out which keys to clear.
-	 */
-	int m_storedCount = 0;
 };
 
 }

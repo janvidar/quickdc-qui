@@ -12,7 +12,6 @@
  * family, since one run answers for one family and the page shows both at once.
  */
 #include <core/dropbridge.h>
-#include <core/networkmode.h>
 
 #include <functional>
 
@@ -142,6 +141,9 @@ private:
 	 */
 	void applyConnectionMode();
 
+	/** The note naming who a check asks, from what the core says is in force. */
+	void describeAutomatic();
+
 	/** Mark the form dirty and enable Save. Connected to every field. */
 	void markModified();
 
@@ -224,16 +226,8 @@ private:
 	 */
 	ReachabilityPanel* m_reachability;
 
-	/**
-	 * The name of the server measured against, carried but never shown.
-	 *
-	 * Every mode measures against the same one and the page offers no way to change
-	 * it, so there is no field for it. It is still read and written, because a name
-	 * somebody put in the file by hand - a server of their own - must survive a save
-	 * of this page rather than being replaced by the default the derivation would
-	 * otherwise supply.
-	 */
-	QString m_storedServer;
+	/** What automatic does on the user's behalf, naming the server the core asks. */
+	QLabel* m_automaticNote = nullptr;
 
 	/*
 	 * Announce active mode whatever was measured, which the core reads before it looks

@@ -268,7 +268,7 @@ void Qdc::HomeView::refreshGreeting()
 		: tr("Welcome back, %1").arg(nickname));
 
 	const QString description = m_config->read(S::Description).trimmed();
-	const bool active = m_config->read(S::ActiveMode);
+	const bool active = m_config->connectionMode().activeMode;
 
 	QStringList parts;
 	if (!description.isEmpty()) parts << description;

@@ -17,9 +17,12 @@
 #include <QString>
 #include <QStringList>
 
+#include <cstddef>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <optional>
+#include <vector>
 
 namespace Qdc {
 
@@ -77,8 +80,25 @@ public:
 	HubRoute* route(QuickDC::Api::HubHandle hub);
 	void releaseRoute(QuickDC::Api::HubHandle hub);
 
-	/** Hand over the stores as they stood. Any thread; the core's, in practice. */
-	void offerSnapshot(QuickDC::Api::SettingsSnapshot snapshot);
+	/**
+	 * Hand over the stores as they stood, and the state the core announces as it
+	 * stood with them (Core::state()). Any thread; the core's, in practice.
+	 */
+	void offerSnapshot(QuickDC::Api::SettingsSnapshot snapshot,
+	                   std::vector<QuickDC::Api::Event> state = {});
+
+	/**
+	 * The last of the core's announcements of type T - the connection mode, the
+	 * share folders and the like, whole each time - or null where there was none.
+	 * This object's thread only.
+	 */
+	template<typename T>
+	const T* latest()
+	{
+		adoptSnapshot();
+		const auto found = m_state.find(QuickDC::Api::Event::Variant(T{}).index());
+		return found == m_state.end() ? nullptr : found->second.as<T>();
+	}
 
 	/** The value, or null. This object's thread only, as is everything below. */
 	const QString* setting(ConfigStore store, const QString& group, const QString& key);
@@ -123,6 +143,10 @@ private:
 
 	std::mutex m_offered;
 	std::optional<QuickDC::Api::SettingsSnapshot> m_snapshot;
+	std::vector<QuickDC::Api::Event> m_offeredState;
+
+	/** By the event's index in the variant. */
+	std::map<std::size_t, QuickDC::Api::Event> m_state;
 
 	QHash<QuickDC::Api::HubHandle, HubRoute*> m_routes;
 };

@@ -6,6 +6,7 @@
 #include <core/corethread.h>
 #include <core/dropbridge.h>
 #include <core/shares.h>
+#include <core/testing.h>
 #include <gui/reachabilitypanel.h>
 #include <gui/settingsview.h>
 
@@ -94,6 +95,11 @@ private slots:
 private:
 	QString scratch(const QString& name) const;
 
+	/** Let the core carry out what was asked of it, and its answers arrive here. */
+	void settle();
+
+	void clearShares(Qdc::Shares& shares);
+
 	/** A field by object name, so the form's internals stay private. */
 	template<typename T>
 	T* field(Qdc::SettingsView& view, const QString& label) const;
@@ -106,6 +112,13 @@ private:
 QString TestSettings::scratch(const QString& name) const
 {
 	return QDir(m_dir.path()).filePath(name);
+}
+
+void TestSettings::settle()
+{
+	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] {}));
+	QCoreApplication::sendPostedEvents();
+	QCoreApplication::processEvents();
 }
 
 void TestSettings::initTestCase()
@@ -129,6 +142,17 @@ void TestSettings::cleanupTestCase()
 	if (m_thread) m_thread->shutdown();
 }
 
+/** Take every folder out of the share, and wait for the core to say so. */
+void TestSettings::clearShares(Qdc::Shares& shares)
+{
+	while (shares.count() > 0)
+	{
+		const int before = shares.count();
+		shares.removeAt(0);
+		QTRY_COMPARE(shares.count(), before - 1);
+	}
+}
+
 void TestSettings::sharesRoundTripThroughTheStore()
 {
 	const QString music = scratch(QStringLiteral("Music"));
@@ -137,19 +161,19 @@ void TestSettings::sharesRoundTripThroughTheStore()
 	QVERIFY(QDir().mkpath(video));
 
 	{
-		Qdc::Shares shares(m_config);
+		Qdc::Shares shares(m_thread);
 		QVERIFY(shares.folders().isEmpty());
 
 		QSignalSpy changes(&shares, &Qdc::Shares::changed);
 
-		QVERIFY(shares.add(music));
-		QVERIFY(shares.add(video, QStringLiteral("Films")));
-		QCOMPARE(changes.count(), 2);
+		shares.add(music);
+		shares.add(video, QStringLiteral("Films"));
+		QTRY_COMPARE(changes.count(), 2);
 		QCOMPARE(shares.count(), 2);
 	}
 
-	/* A second store reads back what the first wrote, in order. */
-	Qdc::Shares reloaded(m_config);
+	/* A second one reads back what the first asked for, in order. */
+	Qdc::Shares reloaded(m_thread);
 	QCOMPARE(reloaded.count(), 2);
 	QCOMPARE(reloaded.folders().at(0).path, music);
 	QCOMPARE(reloaded.folders().at(0).name, QStringLiteral("Music"));
@@ -157,30 +181,23 @@ void TestSettings::sharesRoundTripThroughTheStore()
 	QCOMPARE(reloaded.folders().at(1).name, QStringLiteral("Films"));
 
 	/*
-	 * Stored exactly as the core parses it: the virtual name, a colon, the real
-	 * path. Checked against the raw value, because the core's own reader splits on
-	 * that colon and would silently read a different pair if the format drifted.
+	 * Stored as it always was: the virtual name, a colon, the real path - so a
+	 * list from before the core kept it reads the same.
 	 */
-	const QString raw = m_config->getString(Qdc::ConfigStore::Application,
-		QStringLiteral("Shares"), QStringLiteral("Share 1"));
-	QCOMPARE(raw, QStringLiteral("Films:") + video);
+	QTRY_COMPARE(m_config->getString(Qdc::ConfigStore::Application,
+		QStringLiteral("Shares"), QStringLiteral("Share 1")), QStringLiteral("Films:") + video);
 
 	QCOMPARE(m_config->getNumber(Qdc::ConfigStore::Application,
 		QStringLiteral("Shares"), QStringLiteral("Total shares")), 2);
 
-	QVERIFY(reloaded.renameAt(1, QStringLiteral("Movies")));
-	QCOMPARE(reloaded.folders().at(1).name, QStringLiteral("Movies"));
+	reloaded.renameAt(1, QStringLiteral("Movies"));
+	QTRY_COMPARE(reloaded.folders().at(1).name, QStringLiteral("Movies"));
 
-	/* Renaming to the same thing, or out of range, is not a change. */
-	QVERIFY(!reloaded.renameAt(1, QStringLiteral("Movies")));
-	QVERIFY(!reloaded.renameAt(9, QStringLiteral("Nope")));
+	reloaded.removeAt(0);
+	QTRY_COMPARE(reloaded.count(), 1);
+	QCOMPARE(reloaded.folders().at(0).path, video);
 
-	QVERIFY(reloaded.removeAt(0));
-	QVERIFY(!reloaded.removeAt(9));
-	QCOMPARE(reloaded.count(), 1);
-
-	reloaded.setFolders({});
-	QCOMPARE(reloaded.count(), 0);
+	clearShares(reloaded);
 }
 
 void TestSettings::sharesRejectDuplicatesAndDescendants()
@@ -189,34 +206,37 @@ void TestSettings::sharesRejectDuplicatesAndDescendants()
 	const QString child = scratch(QStringLiteral("Library/Records"));
 	QVERIFY(QDir().mkpath(child));
 
-	Qdc::Shares shares(m_config);
-	shares.setFolders({});
+	Qdc::Shares shares(m_thread);
+	clearShares(shares);
 
-	QVERIFY(shares.add(parent));
+	QSignalSpy refused(&shares, &Qdc::Shares::refused);
 
-	/* The same folder twice. */
-	QVERIFY(!shares.add(parent));
+	shares.add(parent);
+	QTRY_COMPARE(shares.count(), 1);
 
-	/* A trailing separator names the same folder. */
-	QVERIFY(!shares.add(parent + QLatin1Char('/')));
-
-	/*
-	 * And a folder inside one already offered is already offered - adding it would
-	 * put every file in it into the file list twice.
-	 */
-	QVERIFY(!shares.add(child));
+	/* The same folder twice, a trailing separator naming the same folder, and one
+	   inside it - which would put every file in it into the file list twice. */
+	shares.add(parent);
+	shares.add(parent + QLatin1Char('/'));
+	shares.add(child);
+	QTRY_COMPARE(refused.count(), 3);
+	for (const QList<QVariant>& one : refused)
+		QCOMPARE(one.at(1).value<Qdc::ShareRefusal>(), Qdc::ShareRefusal::AlreadyShared);
 	QCOMPARE(shares.count(), 1);
 
 	/* The other way round is allowed: the parent was not shared before. */
-	shares.setFolders({});
-	QVERIFY(shares.add(child));
-	QVERIFY(shares.add(parent));
+	clearShares(shares);
+	shares.add(child);
+	shares.add(parent);
+	QTRY_COMPARE(shares.count(), 2);
+
+	refused.clear();
+	shares.add(QString());
+	QTRY_COMPARE(refused.count(), 1);
+	QCOMPARE(refused.at(0).at(1).value<Qdc::ShareRefusal>(), Qdc::ShareRefusal::NotAFolder);
 	QCOMPARE(shares.count(), 2);
 
-	QVERIFY(!shares.add(QString()));
-	QCOMPARE(shares.count(), 2);
-
-	shares.setFolders({});
+	clearShares(shares);
 }
 
 void TestSettings::sharesNameDefaultsToTheFolderName()
@@ -224,13 +244,14 @@ void TestSettings::sharesNameDefaultsToTheFolderName()
 	const QString folder = scratch(QStringLiteral("Photographs"));
 	QVERIFY(QDir().mkpath(folder));
 
-	Qdc::Shares shares(m_config);
-	shares.setFolders({});
+	Qdc::Shares shares(m_thread);
+	clearShares(shares);
 
-	QVERIFY(shares.add(folder));
+	shares.add(folder);
+	QTRY_COMPARE(shares.count(), 1);
 	QCOMPARE(shares.folders().first().name, QStringLiteral("Photographs"));
 
-	shares.setFolders({});
+	clearShares(shares);
 }
 
 void TestSettings::sharesStripTheSeparatorFromNames()
@@ -238,50 +259,53 @@ void TestSettings::sharesStripTheSeparatorFromNames()
 	const QString folder = scratch(QStringLiteral("Odd"));
 	QVERIFY(QDir().mkpath(folder));
 
-	Qdc::Shares shares(m_config);
-	shares.setFolders({});
+	Qdc::Shares shares(m_thread);
+	clearShares(shares);
 
 	/*
 	 * A colon in the virtual name would be read back as the end of the name, so it
 	 * is removed rather than stored and mis-parsed.
 	 */
-	QVERIFY(shares.add(folder, QStringLiteral("a:b:c")));
+	shares.add(folder, QStringLiteral("a:b:c"));
+	QTRY_COMPARE(shares.count(), 1);
 	QCOMPARE(shares.folders().first().name, QStringLiteral("abc"));
 
-	Qdc::Shares reloaded(m_config);
+	Qdc::Shares reloaded(m_thread);
 	QCOMPARE(reloaded.folders().first().name, QStringLiteral("abc"));
 	QCOMPARE(reloaded.folders().first().path, folder);
 
-	reloaded.setFolders({});
+	clearShares(reloaded);
 }
 
 void TestSettings::sharesShrinkWithoutLeavingATail()
 {
-	Qdc::Shares shares(m_config);
-	shares.setFolders({});
+	Qdc::Shares shares(m_thread);
+	clearShares(shares);
 
-	QList<Qdc::SharedFolder> many;
 	for (int n = 0; n < 5; ++n)
 	{
-		Qdc::SharedFolder folder;
-		folder.name = QStringLiteral("share%1").arg(n);
-		folder.path = scratch(QStringLiteral("bulk%1").arg(n));
-		many.append(folder);
+		const QString path = scratch(QStringLiteral("bulk%1").arg(n));
+		QVERIFY(QDir().mkpath(path));
+		shares.add(path, QStringLiteral("share%1").arg(n));
 	}
+	QTRY_COMPARE(shares.count(), 5);
 
-	shares.setFolders(many);
-	QCOMPARE(shares.count(), 5);
-
-	shares.setFolders(many.mid(0, 2));
+	for (int left = 4; left >= 2; --left)
+	{
+		shares.removeAt(2);
+		QTRY_COMPARE(shares.count(), left);
+	}
 
 	/*
 	 * The group is numbered, so a shorter list has to clear the keys the longer one
 	 * used - otherwise reloading finds the old tail still there.
 	 */
-	Qdc::Shares reloaded(m_config);
-	QCOMPARE(reloaded.count(), 2);
+	QTRY_VERIFY(!m_config->contains(Qdc::ConfigStore::Application, QStringLiteral("Shares"),
+	                                QStringLiteral("Share 2")));
+	QCOMPARE(m_config->getNumber(Qdc::ConfigStore::Application, QStringLiteral("Shares"),
+	                             QStringLiteral("Total shares")), 2);
 
-	reloaded.setFolders({});
+	clearShares(shares);
 }
 
 void TestSettings::formLoadsTheStoredValues()
@@ -298,7 +322,8 @@ void TestSettings::formLoadsTheStoredValues()
 	                  QStringLiteral("Active mode"), false);
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	/* Loaded on construction, and not counted as the user having edited it. */
@@ -306,6 +331,7 @@ void TestSettings::formLoadsTheStoredValues()
 
 	/* Round-tripped through save() rather than read out of private fields. */
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getString(ConfigStore::Application, QStringLiteral("User"),
 	                             QStringLiteral("Nickname")),
@@ -331,9 +357,11 @@ void TestSettings::anUnsetFieldShowsWhatTheCoreUses()
 	m_config->remove(ConfigStore::Application, user, QStringLiteral("Description"));
 	m_config->remove(ConfigStore::Application, QStringLiteral("Local hub"), QStringLiteral("Max users"));
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getString(ConfigStore::Application, user, QStringLiteral("Nickname")),
 	         QStringLiteral("QuickDC"));
@@ -346,7 +374,7 @@ void TestSettings::anUnsetFieldShowsWhatTheCoreUses()
 void TestSettings::formDoesNotWaitForABusyCore()
 {
 	Qdc::ConfigBridge config(m_thread);
-	Qdc::Shares shares(&config);
+	Qdc::Shares shares(m_thread);
 
 	/*
 	 * The page used to be read a key at a time, each one a blocking job on the core
@@ -378,7 +406,8 @@ void TestSettings::formWritesWhatTheCoreReads()
 {
 	using Qdc::ConfigStore;
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	/*
@@ -397,6 +426,7 @@ void TestSettings::formWritesWhatTheCoreReads()
 
 	QSignalSpy saved(&view, &Qdc::SettingsView::saved);
 	QVERIFY(view.save());
+	settle();
 	QCOMPARE(saved.count(), 1);
 
 	/* Every key survives the round trip through the form. */
@@ -411,7 +441,8 @@ void TestSettings::formWritesWhatTheCoreReads()
 
 void TestSettings::formTracksBeingEdited()
 {
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QVERIFY(!view.isModified());
@@ -441,10 +472,12 @@ void TestSettings::formChunkSizeIsShownInKibibytes()
 	                    QStringLiteral("Chunk size"), 2 * 1024 * 1024);
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QVERIFY(view.save());
+	settle();
 
 	/*
 	 * Back in bytes, unchanged. A form that showed bytes as KiB and wrote them
@@ -459,9 +492,10 @@ void TestSettings::formAddsAFolderWithQtsOwnChooser()
 	const QString folder = scratch(QStringLiteral("Clicked"));
 	QVERIFY(QDir().mkpath(folder));
 
-	Qdc::Shares shares(m_config);
-	shares.setFolders({});
+	Qdc::Shares shares(m_thread);
+	clearShares(shares);
 
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QPushButton* add = nullptr;
@@ -543,7 +577,7 @@ void TestSettings::formAddsAFolderWithQtsOwnChooser()
 	QCOMPARE(shares.folders().first().path, folder);
 	QCOMPARE(shares.folders().first().name, QStringLiteral("Clicked"));
 
-	shares.setFolders({});
+	clearShares(shares);
 }
 
 /**
@@ -565,10 +599,12 @@ void TestSettings::activeModeIsNotForcedUntilItIsAskedFor()
 	m_config->remove(ConfigStore::Application, group, key);
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, true), false);
 }
@@ -597,7 +633,8 @@ void TestSettings::forcedActiveModeSurvivesTheForm()
 	                    QStringLiteral("advanced"));
 	m_config->setBool(ConfigStore::Application, group, key, true);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	view.load();
@@ -606,6 +643,7 @@ void TestSettings::forcedActiveModeSurvivesTheForm()
 	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), false);
 
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), true);
 
@@ -624,7 +662,8 @@ void TestSettings::forcedActiveModeSurvivesTheForm()
  */
 void TestSettings::theConnectionPageSaysWhatForcingActiveModeCosts()
 {
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QStringList said;
@@ -664,10 +703,12 @@ void TestSettings::theGatewayIsNotAskedForAMappingUntilItIsAskedFor()
 	m_config->remove(ConfigStore::Application, group, key);
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, true), false);
 }
@@ -694,7 +735,8 @@ void TestSettings::askingTheGatewayToForwardSurvivesTheForm()
 	                    QStringLiteral("advanced"));
 	m_config->setBool(ConfigStore::Application, group, key, true);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	view.load();
@@ -703,6 +745,7 @@ void TestSettings::askingTheGatewayToForwardSurvivesTheForm()
 	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), false);
 
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), true);
 
@@ -721,7 +764,8 @@ void TestSettings::askingTheGatewayToForwardSurvivesTheForm()
  */
 void TestSettings::theConnectionPageSaysWhatSearchingForAGatewayDiscloses()
 {
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QStringList said;
@@ -1026,15 +1070,20 @@ QString storedMode(Qdc::ConfigBridge* config)
 /** Put the form into 'mode' as though somebody had picked it from the list. */
 void chooseMode(Qdc::SettingsView& view, const QString& token)
 {
+	const Qdc::NetworkMode mode = token == QLatin1String("automatic") ? Qdc::NetworkMode::Automatic
+		: token == QLatin1String("passive") ? Qdc::NetworkMode::Passive
+		: Qdc::NetworkMode::Advanced;
+	const int value = static_cast<int>(mode);
+
 	QComboBox* combo = nullptr;
 
 	for (QComboBox* candidate : view.findChildren<QComboBox*>())
 	{
-		if (candidate->findData(token) >= 0) { combo = candidate; break; }
+		if (candidate->findData(value) >= 0 && candidate->count() == 3) { combo = candidate; break; }
 	}
 
 	QVERIFY(combo);
-	combo->setCurrentIndex(combo->findData(token));
+	combo->setCurrentIndex(combo->findData(value));
 }
 
 /**
@@ -1049,17 +1098,21 @@ void TestSettings::eachConnectionModeRoundTripsThroughTheForm()
 	                             QStringLiteral("advanced"),
 	                             QStringLiteral("passive")})
 	{
-		Qdc::Shares shares(m_config);
+		Qdc::Shares shares(m_thread);
+		settle();
 		Qdc::SettingsView view(m_config, &shares);
 
 		chooseMode(view, token);
 		QVERIFY(view.save());
+		settle();
 
 		QCOMPARE(storedMode(m_config), token);
 
 		/* And read back into the form it came from, not merely into the file. */
+		settle();
 		Qdc::SettingsView reopened(m_config, &shares);
 		QVERIFY(reopened.save());
+		settle();
 		QCOMPARE(storedMode(m_config), token);
 	}
 }
@@ -1087,11 +1140,13 @@ void TestSettings::automaticDecidesTheSettingsUnderIt()
 	                    QStringLiteral("Reachability server"), QString());
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	chooseMode(view, QStringLiteral("automatic"));
 	QVERIFY(view.save());
+	settle();
 
 	QVERIFY2(m_config->getBool(ConfigStore::Application, group,
 	                           QStringLiteral("UseUPnP"), false),
@@ -1128,11 +1183,13 @@ void TestSettings::passiveTurnsOffWhatItCannotUse()
 	                  QStringLiteral("Force active mode"), true);
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	chooseMode(view, QStringLiteral("passive"));
 	QVERIFY(view.save());
+	settle();
 
 	QVERIFY(!m_config->getBool(ConfigStore::Application, group,
 	                           QStringLiteral("Active mode"), true));
@@ -1164,11 +1221,13 @@ void TestSettings::aModeThatHidesThePortDoesNotRewriteIt()
 	m_config->save(ConfigStore::Application);
 
 	{
-		Qdc::Shares shares(m_config);
+		Qdc::Shares shares(m_thread);
+		settle();
 		Qdc::SettingsView view(m_config, &shares);
 
 		chooseMode(view, QStringLiteral("automatic"));
 		QVERIFY(view.save());
+		settle();
 	}
 
 	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
@@ -1179,11 +1238,13 @@ void TestSettings::aModeThatHidesThePortDoesNotRewriteIt()
 
 	/* And back in advanced it is the form's again. */
 	{
-		Qdc::Shares shares(m_config);
+		Qdc::Shares shares(m_thread);
+		settle();
 		Qdc::SettingsView view(m_config, &shares);
 
 		chooseMode(view, QStringLiteral("advanced"));
 		QVERIFY(view.save());
+		settle();
 	}
 
 	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
@@ -1256,7 +1317,8 @@ void TestSettings::aModeShowsOnlyThePlumbingItIsAbout()
 	                    QStringLiteral("Mode"), QStringLiteral("automatic"));
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	openConnectionTab(view);
@@ -1329,7 +1391,8 @@ void TestSettings::switchingTheModeRearrangesThePageWithoutASave()
 	                    QStringLiteral("Mode"), QStringLiteral("advanced"));
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	openConnectionTab(view);
@@ -1370,7 +1433,8 @@ void TestSettings::switchingTheModeRearrangesThePageWithoutASave()
  */
 void TestSettings::eachModeSaysInWordsWhatItDoesInstead()
 {
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	openConnectionTab(view);
@@ -1431,7 +1495,8 @@ void TestSettings::eachModeSaysInWordsWhatItDoesInstead()
  */
 void TestSettings::advancedSaysThePortAppliesWhenSaved()
 {
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	openConnectionTab(view);
@@ -1457,7 +1522,8 @@ void TestSettings::advancedSaysThePortAppliesWhenSaved()
  */
 void TestSettings::noModeOffersAFieldForTheReachabilityServer()
 {
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	openConnectionTab(view);
@@ -1504,11 +1570,13 @@ void TestSettings::aServerNamedByHandSurvivesTheForm()
 	                             QStringLiteral("advanced"),
 	                             QStringLiteral("passive")})
 	{
-		Qdc::Shares shares(m_config);
+		Qdc::Shares shares(m_thread);
+		settle();
 		Qdc::SettingsView view(m_config, &shares);
 
 		chooseMode(view, token);
 		QVERIFY(view.save());
+		settle();
 
 		QCOMPARE(m_config->getString(ConfigStore::Application, group, key),
 		         QStringLiteral("drop.example.org"));
@@ -1523,11 +1591,13 @@ void TestSettings::aServerNamedByHandSurvivesTheForm()
 	m_config->save(ConfigStore::Application);
 
 	{
-		Qdc::Shares shares(m_config);
+		Qdc::Shares shares(m_thread);
+		settle();
 		Qdc::SettingsView view(m_config, &shares);
 
 		chooseMode(view, QStringLiteral("automatic"));
 		QVERIFY(view.save());
+		settle();
 	}
 
 	QCOMPARE(m_config->getString(ConfigStore::Application, group, key),
@@ -1545,10 +1615,12 @@ void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()
 	                 QStringLiteral("Cache size"));
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QVERIFY(view.save());
+	settle();
 
 	/*
 	 * Off, and not as a preference: a post is fetched from whoever holds it, and until
@@ -1568,6 +1640,7 @@ void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()
 
 	view.load();
 	QVERIFY(view.save());
+	settle();
 
 	/*
 	 * Back in bytes, unchanged. A page that showed bytes as mebibytes and wrote them
@@ -1579,7 +1652,8 @@ void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()
 
 void TestSettings::theBoardsPageSaysThatReadingAPostMayBeSeen()
 {
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QStringList said;
@@ -1629,10 +1703,12 @@ void TestSettings::theLocalHubIsOffUntilItIsAskedFor()
 	m_config->remove(ConfigStore::Application, group, QStringLiteral("Enabled"));
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getBool(ConfigStore::Application, group,
 	                           QStringLiteral("Enabled"), true), false);
@@ -1667,10 +1743,12 @@ void TestSettings::theLocalHubKeepsItsFiguresInTheUnitsTheCoreReads()
 	m_config->remove(ConfigStore::Application, group, sendq);
 	m_config->save(ConfigStore::Application);
 
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getNumber(ConfigStore::Application, group, sendq), 48 * 1024);
 
@@ -1678,6 +1756,7 @@ void TestSettings::theLocalHubKeepsItsFiguresInTheUnitsTheCoreReads()
 
 	view.load();
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getNumber(ConfigStore::Application, group, sendq), 96 * 1024);
 
@@ -1686,6 +1765,7 @@ void TestSettings::theLocalHubKeepsItsFiguresInTheUnitsTheCoreReads()
 
 	view.load();
 	QVERIFY(view.save());
+	settle();
 
 	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
 	                             QStringLiteral("Max users")), 65536);
@@ -1703,7 +1783,8 @@ void TestSettings::theLocalHubKeepsItsFiguresInTheUnitsTheCoreReads()
  */
 void TestSettings::theLocalHubPageSaysWhatTurningItOnDoes()
 {
-	Qdc::Shares shares(m_config);
+	Qdc::Shares shares(m_thread);
+	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
 	QStringList said;

@@ -159,6 +159,16 @@ enum class PostState {
 };
 Q_ENUM_NS(PostState)
 
+/** Why the core would not make a change to the shared folders. */
+enum class ShareRefusal {
+	/** The folder is shared already, or is inside one that is. */
+	AlreadyShared,
+	NotAFolder,
+	/** No folder by that path is shared, or nothing is left of the name asked for. */
+	Other
+};
+Q_ENUM_NS(ShareRefusal)
+
 /** Which of the Core's two preference stores a setting belongs to. */
 enum class ConfigStore {
 	/** ~/.quickdc/quickdc.conf; the settings listed in api/config.h. */
@@ -168,6 +178,33 @@ enum class ConfigStore {
 	Session
 };
 Q_ENUM_NS(ConfigStore)
+
+/** How much of getting connected the core works out for itself; QuickDC::NetworkMode. */
+enum class NetworkMode {
+	/** Pick the port, ask the gateway to forward it, and measure the result. */
+	Automatic,
+
+	/** The plumbing is the user's to set, and they are shown whether it worked. */
+	Advanced,
+
+	/** Nothing is forwarded and nothing connects in. */
+	Passive
+};
+Q_ENUM_NS(NetworkMode)
+
+/** The connection mode in force and what the core decided from it. */
+struct ConnectionMode {
+	NetworkMode mode = NetworkMode::Advanced;
+
+	/** Whether peers are told they may connect here. */
+	bool activeMode = false;
+
+	bool useUpnp = false;
+	bool forceActive = false;
+
+	/** Who a check asks. */
+	QString reachabilityServer;
+};
 
 /**
  * A copy of a QuickDC::User, taken while the core still owns it.

@@ -75,20 +75,41 @@ void Qdc::CoreChannel::dispatchToHub(const QuickDC::Api::Event& event)
 	if (HubRoute* to = m_routes.value(*hub)) emit to->received(event);
 }
 
-void Qdc::CoreChannel::offerSnapshot(QuickDC::Api::SettingsSnapshot snapshot)
+namespace {
+
+/** One of the announcements that carry a whole piece of state, so the last one is it. */
+bool isState(const QuickDC::Api::Event& event)
+{
+	namespace Ev = QuickDC::Api::Events;
+	return event.as<Ev::ConnectionMode>() || event.as<Ev::ShareFolders>()
+		|| event.as<Ev::FavouriteHubs>() || event.as<Ev::RecentHubs>()
+		|| event.as<Ev::CompletedDownloads>();
+}
+
+}
+
+void Qdc::CoreChannel::offerSnapshot(QuickDC::Api::SettingsSnapshot snapshot,
+                                     std::vector<QuickDC::Api::Event> state)
 {
 	std::lock_guard<std::mutex> guard(m_offered);
 	m_snapshot = std::move(snapshot);
+	m_offeredState = std::move(state);
 }
 
 void Qdc::CoreChannel::adoptSnapshot()
 {
 	std::optional<QuickDC::Api::SettingsSnapshot> taken;
+	std::vector<QuickDC::Api::Event> state;
 	{
 		std::lock_guard<std::mutex> guard(m_offered);
 		taken.swap(m_snapshot);
+		state.swap(m_offeredState);
 	}
 	if (!taken) return;
+
+	m_state.clear();
+	for (QuickDC::Api::Event& event : state)
+		if (isState(event)) m_state[event.value.index()] = std::move(event);
 
 	const auto copy = [](const QuickDC::Api::SettingsGroups& from_, Store& into, std::uint64_t revision) {
 		into.groups.clear();
@@ -151,6 +172,12 @@ std::uint64_t Qdc::CoreChannel::writeAhead(ConfigStore store, const QString& gro
 void Qdc::CoreChannel::absorb(const QuickDC::Api::Event& event)
 {
 	adoptSnapshot();
+
+	if (isState(event))
+	{
+		m_state[event.value.index()] = event;
+		return;
+	}
 
 	if (const auto* written = event.as<QuickDC::Api::Events::SettingsWritten>())
 	{

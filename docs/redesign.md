@@ -255,7 +255,7 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
       output, `wait`/`expect`, exit status, `--home`; hubs, chat and settings.
 - [x] F2. Offline scenarios on loopback: join a local hub, chat, private message,
       search, file list, download (active, passive, TLS), as ctest tests.
-- [ ] F3. Core policy out of the GUI, each step covered by a CLI scenario before
+- [ ] F3. (batch a done 2026-11-25: connection mode, share folders, favourites/recent/completed) Core policy out of the GUI, each step covered by a CLI scenario before
       the GUI is switched to it: search results matched to their search in the
       core; picture auto-fetch policy and limits; the board store, fetching ahead
       and withdrawn posts; the public hub directory (merge, cache); favourites,
@@ -540,3 +540,31 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   carry no free slots; no event says which connection path a transfer took;
   NMDC's legacy $Get/$GetListLen still have the file list ownership pattern;
   the local hub has no TLS, so no adcs:// scenario.
+
+- 2026-11-25: F3a done: the connection-mode derivation, share folder management,
+  and favourites, recent hubs and completed downloads moved into the core.
+  Api: `SetConnectionMode` / `ConnectionMode` (the mode in force and what it
+  decides; the GUI mirror `src/core/networkmode.*` is gone and the page sends the
+  mode with advanced's two switches); `AddShareFolder` / `RemoveShareFolder` /
+  `RenameShareFolder` answered by `ShareFolders` + `ShareStatus` or
+  `ShareFolderRefused`; `AddFavouriteHub` / `RemoveFavouriteHub`,
+  `ForgetRecentHub` / `ClearRecentHubs`, `ForgetCompletedDownload` /
+  `ClearCompletedDownloads` answered by `FavouriteHubs`, `RecentHubs`,
+  `CompletedDownloads`; `ReportState` and `Core::state()` tell all five lists,
+  the latter taken with the settings snapshot so a bridge is seeded without
+  waiting; `Transfer::outbound` says which side dialled. The core records a visit
+  on OpenHub and the name from HubName, and a completion on verification; the
+  storage formats are the ones the GUI wrote, so no migration. Shares are live:
+  a folder added is scanned and hashed at once, one taken out leaves every table
+  and count at once and its files are freed when no upload reads them. The GUI
+  classes keep their names as bridges over the announcements. qdc: `mode`,
+  `state`, `share-add/remove/rename`, `favourite-add/remove`,
+  `recent-forget/clear`, `completed-forget/clear`, `expect-no`; scenarios
+  download-passive-stale-active, share-live, favourites, recent-hubs, completed,
+  each 78 runs (30 in a row, 2x24 in parallel) without a failure.
+  Fixed: a core in Mode passive with Active mode 1 still sent CTM and announced
+  itself active - every peer path read the raw key; they now ask
+  `networkModeKeysInForce()` (the plan uses it too), forced-active included. A
+  core built from explicit files would write its file lists to ~/.quickdc
+  whenever hashing fell idle (hashing an attachment is enough); they now go
+  beside its configuration. 1399 green; sanitizer build 1352 green.

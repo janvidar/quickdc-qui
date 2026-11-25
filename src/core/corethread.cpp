@@ -3,7 +3,10 @@
  */
 
 #include "corethread.h"
+#include "completed.h"
 #include "corechannel.h"
+#include "favourites.h"
+#include "recenthubs.h"
 
 #include <api/core.h>
 
@@ -335,7 +338,7 @@ void Qdc::CoreThread::run()
 
 	m_core->runUntilStopped([this] {
 		/* Before running is said, so a bridge built on hearing it has the settings. */
-		m_channel->offerSnapshot(m_core->settingsSnapshot());
+		m_channel->offerSnapshot(m_core->settingsSnapshot(), m_core->state());
 
 		{
 			std::lock_guard<std::mutex> guard(m_mutex);
@@ -380,4 +383,29 @@ void Qdc::Testing::post(CoreThread* thread, std::function<void()> job)
 QuickDC::Core* Qdc::Testing::core(CoreThread* thread)
 {
 	return thread ? thread->core() : nullptr;
+}
+
+void Qdc::Testing::announce(Favourites& kept, const QStringList& urls)
+{
+	QuickDC::Api::Events::FavouriteHubs told;
+	for (const QString& url : urls) told.urls.push_back(url.toStdString());
+	kept.take(told);
+}
+
+void Qdc::Testing::announce(RecentHubs& recent, const QList<RecentHub>& hubs)
+{
+	QuickDC::Api::Events::RecentHubs told;
+	for (const RecentHub& hub : hubs)
+		told.hubs.push_back({hub.url.toStdString(), hub.name.toStdString(),
+		                     static_cast<uint64_t>(hub.visited.toSecsSinceEpoch())});
+	recent.take(told);
+}
+
+void Qdc::Testing::announce(Completed& completed, const QList<CompletedDownload>& downloads)
+{
+	QuickDC::Api::Events::CompletedDownloads told;
+	for (const CompletedDownload& one : downloads)
+		told.downloads.push_back({one.filename.toStdString(), one.tth.toStdString(), one.size,
+		                          static_cast<uint64_t>(one.finished.toSecsSinceEpoch())});
+	completed.take(told);
 }

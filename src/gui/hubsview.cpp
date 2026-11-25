@@ -24,7 +24,6 @@
 #include <core/transferbridge.h>
 #include <core/hubbridge.h>
 #include <core/mediabridge.h>
-#include <core/recenthubs.h>
 
 #include <QDateTime>
 #include <QDebug>
@@ -376,7 +375,7 @@ QString decorate(const QString& title, int unread)
 Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
                         FilelistBridge* filelists, TransferBridge* transfers,
                         ConfigBridge* config, Completed* completed,
-                        RecentHubs* recent, QWidget* parent)
+                        QWidget* parent)
 	: View(parent)
 	, m_thread(thread)
 	, m_favourites(favourites)
@@ -384,7 +383,6 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	, m_transfers(transfers)
 	, m_config(config)
 	, m_completed(completed)
-	, m_recent(recent)
 	, m_split(new QSplitter(Qt::Horizontal, this))
 	, m_tree(new QTreeWidget(this))
 	, m_stack(new QStackedWidget(this))
@@ -819,14 +817,6 @@ bool Qdc::HubsView::openHub(const QString& url)
 	connect(bridge, &HubBridge::hubNameChanged, this, [this, bridge] {
 		if (Entry* found = entryFor(bridge))
 			refreshItem(found->item, found->pane);
-
-		/*
-		 * What the hub calls itself is worth remembering, and this is the only
-		 * moment it is known. Recorded as a name rather than as a visit, so the row
-		 * does not report having been visited whenever a hub gets round to sending
-		 * its topic.
-		 */
-		if (m_recent) m_recent->setName(bridge->url(), bridge->hubName());
 	});
 
 	/*
@@ -845,13 +835,6 @@ bool Qdc::HubsView::openHub(const QString& url)
 
 	/* The row's label is the hub's name once it has one, and the URL until then. */
 	refreshItem(entry->item, entry->pane);
-
-	/*
-	 * Recorded as it is opened rather than once the login succeeds: a hub that
-	 * refused the connection is one somebody may well want to find again to see why,
-	 * and by the time it has refused there is nothing left to record it from.
-	 */
-	if (m_recent) m_recent->note(bridge->url());
 
 	showPane(entry->pane);
 	bridge->connectToHub();
