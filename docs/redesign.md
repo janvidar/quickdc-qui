@@ -283,7 +283,7 @@ containers doing NAT with nftables, qdc in each client container.
       label, skipped where podman is missing.
 - [x] G3. NAT traversal: two passive clients behind NATs that drop unsolicited
       inbound, transfer through traversal; port-preserving vs symmetric NAT.
-- [ ] G4. UPnP against miniupnpd, a local reachability server inside the network
+- [x] G4. UPnP against miniupnpd, a local reachability server inside the network
       (from libdrop if it has one, else a small test server), and the "occupied"
       verdict seen with forwarding on.
 - [ ] G5. IPv6 (dual stack, v6 only, no v6 route) and impaired links (tc netem).
@@ -946,3 +946,44 @@ containers doing NAT with nftables, qdc in each client container.
   parallel runs, then 3x5 and 3x10 parallel; nothing left behind. One net
   failure in a 3x5 round, before logs were kept, was not seen again in the 45
   runs per test after it - unexplained.
+- 2026-11-25: G4 done: UPnP, a reachability server, and "occupied" explained. The
+  router image is Ubuntu 26.04 now, for `miniupnpd-nftables` (Alpine ships only the
+  iptables build, whose legacy xtables a rootless netns cannot load); `upnp=on` on a
+  router runs it on the lan with its chains in a table of its own (`ct status dnat`
+  lets mapped ports through the home filter). The reachability server is DROP's own,
+  `dropd` from the drop repository (libdrop-cpp has a client and responders, no
+  server): role `drop` runs it through `drop/drop.sh` (own CA, TLS for drop.test /
+  ipv4. / ipv6., STUN on 3478, 3 s probes), every container gets the names by
+  `--add-host` and every qdc trusts the CA by SSL_CERT_FILE; `$DROPD` names the
+  binary (CMake `QUICKDC_DROPD`, found as `dropd`), and a drop topology skips
+  without it. `also=x` puts a second core on a node's host, started first. qdc
+  gained `measure`. Scenarios: `cli_net_reach_upnp` (w on the wan open; b behind
+  symmetric NAT filtered; a maps through miniupnpd, measured open, b downloads from
+  it by dialling - byte-identical, traversal cannot work there; a port change while
+  b's check is out is measured on the new port; plain advanced releases the mapping
+  and a measures filtered) and `cli_net_reach_occupied`.
+  "Occupied" reproduced exactly (TCP occupied, UDP open): the smoke run's core starts
+  automatic on 1411, which the user's running QuickDC holds. TCP bind fails, but the
+  core still asked the gateway to forward 1411 to this host and measured 1411 - the
+  other QuickDC accepted the probe and, not being armed, did not answer; UDP was open
+  because the datagram socket (SO_REUSEADDR) had bound 1411 beside it and took its
+  datagrams. A second path gives the same verdict: when the gateway grants another
+  external port (another host has the one asked for), the check still probed the
+  internal number, i.e. that host. Fixed: the check tests only a port this core has
+  bound, and on IPv4 the one the gateway granted (`startDropCheck`); no mapping is
+  asked for a port not bound (`applyMapping`/`considerMapping`, the bound port rather
+  than the configured one); where TCP finds the port taken UDP no longer shares it
+  (`DCServer::listen`); a run in flight across a port change is cancelled so the new
+  port is measured instead of the old verdict being filed for it. Found on the way:
+  `PortForward::stop()` then `start()` (every port change with UPnP on) destroyed the
+  mapper with its deletions in flight, leaving the old mapping on the router for its
+  lease - the stopped mapper and gateway are now kept until replaced, their events
+  ignored; and migration step 3 ran on a fresh installation, resetting a server given
+  before the first start (so no preset could name one). The core does not release
+  mappings at shutdown (the lease covers it), unchanged. Also noted, not changed: in
+  advanced mode with Active mode on, a measured-passive client still advertises U4.
+  Unit cases: stop-then-start releases the old mappings, a taken port is not bound
+  for UDP, a fresh installation keeps its server - each failing without its fix; both
+  net scenarios fail on the previous core (occupied on 1411 and on 4111; the old
+  port's verdict). Each 5 in a row and 2 in parallel, nothing left behind. 1500
+  green; sanitizer tree 1446 (-LE net) green, no reports.
