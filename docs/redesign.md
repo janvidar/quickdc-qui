@@ -267,7 +267,7 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
 - [x] F5. A project skill for driving it from the AI loop: build, run a scenario,
       read the output.
 
-### Phase G - emulated networks
+### Phase G - emulated networks (done)
 
 Goal: test what loopback cannot - NAT traversal between two passive peers, UPnP
 port mapping against a gateway, reachability checks, IPv6 variants and bad links -
@@ -286,7 +286,7 @@ containers doing NAT with nftables, qdc in each client container.
 - [x] G4. UPnP against miniupnpd, a local reachability server inside the network
       (from libdrop if it has one, else a small test server), and the "occupied"
       verdict seen with forwarding on.
-- [ ] G5. IPv6 (dual stack, v6 only, no v6 route) and impaired links (tc netem).
+- [x] G5. IPv6 (dual stack, v6 only, no v6 route) and impaired links (tc netem).
 
 ## Decisions
 
@@ -987,3 +987,41 @@ containers doing NAT with nftables, qdc in each client container.
   net scenarios fail on the previous core (occupied on 1411 and on 4111; the old
   port's verdict). Each 5 in a row and 2 in parallel, nothing left behind. 1500
   green; sanitizer tree 1446 (-LE net) green, no reports.
+- 2026-11-25: G5 done; Phase G done. IPv6 and impaired links in the emulated
+  networks. `net NAME ipv6=on|only` makes dual-stack or IPv6-only networks with
+  2001:db8:N::/64 (wan) and 2001:db8:N:k::/64 (lans): the documentation prefix,
+  routed nowhere, and global for `isGlobalIPv6()` (which excludes only link-local,
+  ULA, loopback, mapped and multicast). Routers forward IPv6 without NAT and, with
+  NAT on IPv4, drop new inbound IPv6 unless `fw6=open`; wan hosts get routes to every
+  lan prefix; `${IP6_node}`; dropd gets `[stun.ipv6]` and `ipv6.drop.test`.
+  `link=` puts tc netem on both router interfaces; `cut=BYTES:SECONDS[:reboot]` drops
+  everything once BYTES have crossed, then restores (reboot also flushes conntrack;
+  the router image gained conntrack). Scenarios: `cli_net_ipv6_dual_stack` (a open
+  on v6, filtered on v4; b filtered on both; c on a v4-only lan never starts the v6
+  check; a and b transfer both ways over a hub reached by IPv6), `cli_net_ipv6_only`
+  (no IPv4 on a's lan: login, chat, both transfers), `cli_net_lossy_link` (150 ms RTT,
+  10 ms jitter, 2% loss each way: login, chat, 2 MB both ways, ~15 s),
+  `cli_net_link_cut` (40 s of 100% loss mid-transfer: TCP rides it out) and
+  `cli_net_router_restart` (20 s cut, conntrack forgotten: recovered by the stall
+  check and the queue's retry).
+  Found and fixed in the core: peer connections were IPv4 only - a CTM was dialled
+  at I4 alone (empty on a hub reached by IPv6, so nothing happened), I6 went out only
+  once a reachability server had reported the address, and search results were sent
+  only to U4. Now `addressToDial()` takes I6 where the peer claims TCP6 (or has no I4)
+  and this host can reach IPv6; `ownEndpoint6()` falls back to the hub connection's
+  own address where that is global IPv6 (nothing translates it); a result goes to U6
+  where there is no U4. A download whose path vanished stalled for ever: the receiver
+  sends nothing, so nothing failed - a download that receives nothing for
+  `QUICKDC_DOWNLOAD_STALL_SECONDS` (30) now drops its connection and the queue
+  retries. G4's leftover: a client measured passive in advanced mode (always active)
+  still advertised U4/UDP4, so active peers sent results into its NAT, and still sent
+  CTM, so peers dialled a filtered port. U4/U6 and UDP4/UDP6 now follow the UDP
+  verdict as TCP4/6 follow the TCP one (`reachableByDatagram()`), and a CTM is sent
+  only where `connectablePort()` finds a family the evidence does not rule out (else
+  RCM); reach-upnp.qdc no longer switches b to passive. Unit cases: a UDP port measured
+  unreachable is not published; a client measured unreachable sends RCM - each failing
+  without its fix; both IPv6 scenarios, router_restart and the unworked reach-upnp fail
+  on the previous core. Left: NAT traversal is IPv4 only (two IPv6 clients behind
+  closed firewalls cannot transfer); a CTM names the IPv4 external port even where the
+  peer then dials IPv6 (differs only when a gateway granted another port); NMDC has no
+  IPv6 peer path.
