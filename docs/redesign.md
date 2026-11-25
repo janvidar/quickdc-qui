@@ -274,7 +274,7 @@ port mapping against a gateway, reachability checks, IPv6 variants and bad links
 with rootless podman: a fake internet network, home networks behind router
 containers doing NAT with nftables, qdc in each client container.
 
-- [ ] G1. qdc across processes: a control socket so one script drives qdc
+- [x] G1. qdc across processes: a control socket so one script drives qdc
       processes in several containers (`@a` = the qdc in container a), same script
       language, waits on any of their events.
 - [ ] G2. Images (a base matching the host distribution with the build tree mounted
@@ -874,3 +874,22 @@ containers doing NAT with nftables, qdc in each client container.
   searches when it goes. hubsession.tcc removes its peer key pair. 1476 green;
   sanitizer build 1429 green; redirect, boards, download-tls, search,
   two-cores-chat, download-active 78 runs each without a failure.
+- 2026-11-25: G1 done: one script over several qdc processes. `qdc --serve
+  ENDPOINT [--core ..]` is an agent: it runs its cores for the one controller
+  that connects (PORT on loopback unless an address is given, HOST:PORT, or a
+  Unix socket path; port 0 picks one and `serving ENDPOINT` is printed), then
+  exits. `qdc --connect NAME=ENDPOINT ... script` is the controller. Both ways a
+  message is a line of JSON (remote.h). The split is where a verb runs, marked
+  in the command table (`Verb::script`): `wait`, `expect-no`, `sleep`, `echo`,
+  `help`, `quit`, `serve`, `expect-served` run in the controller over one
+  merged backlog (`Session` hears through a `Feed` instead of the `Runner`);
+  every other line, `${NAME}` expanded, goes to the agent of its core (an
+  unaddressed one to every agent), whose own `Session` runs it with a `Relay`
+  in place of stdout: events, failures, notes, a forgotten core on `restart`,
+  and `$NAME`s, which are kept in step both ways. The controller starts every
+  agent's cores after the presets, as one process does. Paths resolve on the
+  agent; agents on one host share a `--home`. An agent going away fails the
+  running line or wait at once. `tests/remote.sh` runs two-cores-chat and
+  download-active unchanged with a and b in separate agents, plus a refused
+  line (cited by number) and an agent killed mid-wait; 30 sequential and 2x24
+  parallel each, no failures. json.cpp gained a parser.
