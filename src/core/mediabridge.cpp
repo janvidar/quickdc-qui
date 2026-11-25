@@ -62,15 +62,12 @@ QString Qdc::MediaBridge::pathFor(const QString& tth) const
 	return m_offered.value(tth);
 }
 
-void Qdc::MediaBridge::attach(const QString& path, Offer offer)
+void Qdc::MediaBridge::attach(const QString& path)
 {
 	if (path.isEmpty()) return;
 
-	const bool post = offer == Offer::Post;
 	QuickDC::Api::Commands::AttachFile command;
 	command.path = path.toStdString();
-	command.remembered = !post;
-	command.freeSlot = post;
 
 	if (!m_thread || !m_thread->submit(command))
 	{

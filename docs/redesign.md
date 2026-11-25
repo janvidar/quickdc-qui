@@ -255,7 +255,7 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
       output, `wait`/`expect`, exit status, `--home`; hubs, chat and settings.
 - [x] F2. Offline scenarios on loopback: join a local hub, chat, private message,
       search, file list, download (active, passive, TLS), as ctest tests.
-- [ ] F3. (batch a done 2026-11-25: connection mode, share folders, favourites/recent/completed; batch b done 2026-11-25: search attribution, picture policy; batch c done 2026-11-25: the public hub directory) Core policy out of the GUI, each step covered by a CLI scenario before
+- [x] F3. (batch a 2026-11-25: connection mode, share folders, favourites/recent/completed; batch b: search attribution, picture policy; batch c: the public hub directory; batch d: bulletin boards) Core policy out of the GUI, each step covered by a CLI scenario before
       the GUI is switched to it: search results matched to their search in the
       core; picture auto-fetch policy and limits; the board store, fetching ahead
       and withdrawn posts; the public hub directory (merge, cache); favourites,
@@ -661,3 +661,75 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   the application would have been kept, and swept, in a directory literally
   named "~" under the working directory. The home is now resolved where it is
   set. 1430 green; sanitizer build 1383 green.
+- 2026-11-25: F3d done, and with it F3: bulletin board policy in the core.
+  `core/bbs/boardkeeper.*` holds what the GUI's BoardBridge and HubsView decided:
+  it follows every board a hub describes from the highest timestamp held, unless
+  somebody left it on that connection (forgotten when the session goes); a board
+  described with RM1 or refused with 71 is gone; entries are kept in the index and
+  told in batches (256, or 50 ms) since a replay is a whole board; a body is
+  fetched only on a reader asking, the rest of its thread with it where "Fetch a
+  thread ahead" holds for the hub (its session group, else [Boards]) - the thread
+  found by parents, falling back to the hub's thread where a parent is not held;
+  a held document is read off the disk without asking anybody; fetches are capped
+  by the declared size and 4 MiB, two at a time, 64 MiB a board an hour, searched
+  for on the hub they were read on, the author named after 20 s with nobody found,
+  given up after 5 minutes with nothing arriving or past the cap; a document is
+  verified (hash, header, author against the index's) and offered where "Offer what
+  I have read" holds (the hub's group, else [Boards] for favourites only), withheld
+  when that turns off; tombstones, the keep days and the cache size mark documents,
+  and a marked one goes once no upload reads it; a post is written by the core -
+  signed with its CID, subject on one line, the board's MS checked, kept under
+  `<home>/outbox`, offered for the session without a slot, submitted once hashed
+  and taken into the store when its entry comes back. The core owns one store per
+  home, opened when first needed; front ends hold no handles. The settings joined
+  the core's schema; the stores (`<home>/boards`, `posts`, `incoming`, `outbox`)
+  and keys are the ones the GUI used, so nothing migrates. Board fetches are left
+  out of TransfersSnapshot and are not completed downloads (F3a had recorded every
+  verified post as one).
+  Api removed: `BoardStoreHandle`, `BoardReadState`, `OpenBoardStore`,
+  `CloseBoardStore`, `StoreBoardEntries`, `DescribeBoard`, `QueryBoardState`,
+  `ResumeBoard`, `ServePosts`, `QueryPost`, `AdoptPost`, `EvictPosts`,
+  `ReleasePosts`, `SubmitPost`, `EnqueueForReading`, `AddFallbackSource`, and the
+  events `BoardDescribed`, `BoardEntryArrived`, `BoardEntriesStored`,
+  `BoardStateReported`, `BoardLoaded`, `BoardResumed`, `BoardReadChanged`,
+  `PostKnown`, `PostAdopted`, `PostsEvicted`. Added: `LoadBoard{hubUrl, board}`,
+  `ReadPost{hubUrl, board, tth, fetch}`, `MarkRead{hubUrl, board, tth}` (empty for
+  the whole board), `SetBoardPolicy{hubUrl, FetchAhead|Serve, Follow|Always|Never}`,
+  `WritePost{request, hub, board, parent, subject, body, richText}`;
+  `SubscribeBoard{hub, board, fromStart}` and `UnsubscribeBoard` are now "take it up
+  again" and "leave"; events `BoardEntries{hubUrl, board, entries, whole, unread,
+  read}`, `BoardState{hubUrl, board, described, descriptor, cursor, view,
+  subscribed, left, gone}`, `BoardRead`, `PostStatus{tth, state, why, size, post,
+  attributedTo}`, `PostSubmitted`, `PostRefused{request, why, size, limit,
+  reason}`. `BoardsAvailable`, `BoardRefused`, `RequestBoardEntry`, `WithdrawPost`
+  stay. The GUI's BoardBridge is a bridge over these (read state and post states
+  kept for painting, the core's reasons put into words); HubsView lost the policy,
+  the per-hub caches, the left/subscribed sets, the 71 rule, the composing and the
+  composed-post copies; TransferBridge lost hidePath, enqueueForReading and
+  addFallbackSource; MediaBridge lost the post offer. Which board rows were open
+  on a hub stays a window matter, kept in the session store as before.
+  qdc: `board-load`, `board-subscribe [from-start]`, `board-leave`, `board-read
+  [fetch]`, `board-mark-read`, `board-post` (a thread, or `reply <tth>`),
+  `board-withdraw`, `board-policy`. Scenario boards: three cores on c's hub - a
+  posts, b sees the entry and fetches nothing until it reads, fetches from a,
+  reads one reply without fetching ahead and then with it fetches the rest of the
+  thread, a withdraws a reply and b and c see it withdrawn, c reads a's post from
+  b after a has left, b reads its board back after a restart with its read state,
+  lets every document go at a one byte cache, and a board the hub has not got is
+  gone; 78 runs (30 in a row, 2x24 in parallel) without a failure. 17 keeper cases
+  (timeouts, the author grace, eviction by age and size, concurrency, the cap,
+  verification, attribution, serving, a written post's bytes) with the clock the
+  test's. The smoke driver gained `boards`: the two boards of
+  adcs://adcs.uhub.org:1511 shown, read-only.
+  Found: the local hub announced its configured boards from readConfiguration()
+  in its constructor before `processing` was given a value, so a hub with boards
+  made over used memory could read the flag as set and stay "inside a broadcast"
+  for good, deferring every quit and posted message (UBSan, first run of the
+  scenario under the sanitizer build); initialised at its declaration, with a
+  test that builds the hub over 0xff. A board fetched from the start also kept
+  showing a gap until its next descriptor; the core now says when a replay closes
+  one. Left as found: the Api still names a hub's boards both by session handle
+  (subscribing, writing, withdrawing) and by address (reading, which works with no
+  session); retry of a post given up on is the reader asking again. 1450 green;
+  sanitizer build 1403 green; the five smoke scenarios pass.
+

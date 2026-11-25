@@ -65,7 +65,6 @@ namespace S = Qdc::Settings;
  */
 const QString MEDIA_FETCH = S::keyOf(S::ChatMediaFetch);
 const QString DOWNLOADS_GROUP = S::groupOf(S::DownloadDirectory);
-const QString BOARDS_GROUP = S::groupOf(S::BoardPrefetch);
 const QString BOARD_PREFETCH = S::keyOf(S::BoardPrefetch);
 const QString BOARD_SERVE = S::keyOf(S::BoardServe);
 const QString USER_GROUP = S::groupOf(S::ClientId);
@@ -103,104 +102,6 @@ const QString BOARDS_ENTRY = QStringLiteral("Board ");
  * was appended, so reading more would be work thrown away.
  */
 constexpr int RESTORED_LINES = 4000;
-
-constexpr int SECONDS_IN_A_DAY = 24 * 60 * 60;
-
-/**
- * The refusal that says a board is not there.
- *
- * The one status code here worth acting on rather than reporting: a board that is gone
- * can be taken out of the interface, where a rate limit or a post that was too large
- * are things to tell somebody about and leave alone.
- */
-constexpr int BOARD_GONE = 71;
-
-/**
- * Where a post written here is kept.
- *
- * A post is a file and somebody has to be able to send it: until the first reader has
- * fetched it the author is its only source, so the document is written down before the
- * hub is told about it and stays there for as long as anybody may ask. Nothing here is
- * named after anything a hub chose.
- */
-QString composed_post_folder()
-{
-	return QDir::homePath() + QStringLiteral("/.quickdc/outbox");
-}
-
-/**
- * One parameter value, escaped as the ADC message grammar requires.
- *
- * The shortest form and nothing more, because the header of a post is inside its hash:
- * a value escaped any other way is a different post, and a reading client is required
- * to refuse a document that is not in the canonical form rather than repair it. A
- * carriage return has no escape and no place in a header, so it is dropped rather than
- * written as something that would be refused.
- */
-QString adc_value(const QString& text)
-{
-	QString escaped;
-	escaped.reserve(text.size());
-
-	for (const QChar one : text)
-	{
-		if (one == QLatin1Char('\\')) escaped += QStringLiteral("\\\\");
-		else if (one == QLatin1Char(' ')) escaped += QStringLiteral("\\s");
-		else if (one == QLatin1Char('\n')) escaped += QStringLiteral("\\n");
-		else if (one != QLatin1Char('\r')) escaped += one;
-	}
-
-	return escaped;
-}
-
-/**
- * The bytes of a post: one ADC message, a newline, and then the body raw.
- *
- * The parameters are written in the order the extension lists them, none of them twice
- * and none of them empty. Those rules are not tidiness: the hash is taken over every
- * byte of this, so two clients that agree on what a post says and disagree on how to
- * write it down have made two posts.
- *
- * Only the header is ADC and the first newline is where ADC stops. The body follows
- * exactly as it was typed: it may contain newlines and whatever else its format
- * admits.
- */
-QByteArray post_document(const QString& cid, const QString& parent,
-                         const QString& subject, const QString& body,
-                         bool richText, quint64 composed)
-{
-	QString header = QStringLiteral("IBB0 ID") + adc_value(cid);
-
-	if (!parent.isEmpty()) header += QStringLiteral(" PA") + adc_value(parent);
-	if (!subject.isEmpty()) header += QStringLiteral(" SJ") + adc_value(subject);
-
-	if (composed > 0) header += QStringLiteral(" DA") + QString::number(composed);
-
-	if (richText) header += QStringLiteral(" RT1");
-
-	QByteArray document = header.toUtf8();
-	document.append('\n');
-	document.append(body.toUtf8());
-
-	return document;
-}
-
-/** The roots drawn under one row of a board, that row included, depth first. */
-QStringList roots_under(const Qdc::BoardModel* model, const QModelIndex& row)
-{
-	QStringList roots;
-
-	if (row.isValid())
-	{
-		const QString tth = model->tthAt(row);
-		if (!tth.isEmpty()) roots.append(tth);
-	}
-
-	for (int n = 0; n < model->rowCount(row); ++n)
-		roots += roots_under(model, model->index(n, 0, row));
-
-	return roots;
-}
 
 constexpr int TREE_WIDTH = 220;
 constexpr int TREE_MINIMUM = 150;
@@ -436,7 +337,6 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	m_media = new MediaBridge(m_thread, m_config, this);
 
 	reloadDownloadDirectory();
-	reloadBoardPolicy();
 
 	/*
 	 * The change rather than the save, and the group it happened in rather than any
@@ -448,33 +348,25 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	{
 		connect(m_config, &ConfigBridge::changed, this,
 		        [this](ConfigStore store, const QString& group, const QString&) {
-			if (store == ConfigStore::Application)
+			if (store != ConfigStore::Application) return;
+
+			if (group == DOWNLOADS_GROUP) reloadDownloadDirectory();
+
+			if (group == LOCAL_HUB_GROUP || group == NETWORK_GROUP)
+				reloadLocalHub();
+
+			/*
+			 * Which posts are this user's own, which the identity page can change
+			 * with a board open in front of it.
+			 */
+			if (group == USER_GROUP)
 			{
-				if (group == DOWNLOADS_GROUP) reloadDownloadDirectory();
+				const QString cid = ownCid();
 
-				if (group == BOARDS_GROUP) reloadBoardPolicy();
-
-				if (group == LOCAL_HUB_GROUP || group == NETWORK_GROUP)
-					reloadLocalHub();
-
-				/*
-				 * Which posts are this user's own, which the identity page can change
-				 * with a board open in front of it.
-				 */
-				if (group == USER_GROUP)
-				{
-					const QString cid = ownCid();
-
-					for (const Entry* entry : m_entries)
-						for (BoardPane* pane : entry->boards)
-							pane->setOwnCid(cid);
-				}
-
-				return;
+				for (const Entry* entry : m_entries)
+					for (BoardPane* pane : entry->boards)
+						pane->setOwnCid(cid);
 			}
-
-			/* A session group is named after the hub it belongs to. */
-			applyBoardPolicy(group);
 		});
 	}
 
@@ -514,16 +406,7 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	{
 		connect(m_favourites, &Favourites::changed, this, [this] {
 			for (Entry* entry : m_entries)
-			{
 				entry->pane->setFavourite(m_favourites->contains(entry->bridge->url()));
-
-				/*
-				 * And whether posts read here are answered for, which follows the
-				 * same store: keeping a hub is what says it was joined rather than
-				 * visited, and that is what decides it where nothing else has.
-				 */
-				applyBoardPolicy(entry->bridge->url());
-			}
 		});
 	}
 
@@ -637,13 +520,8 @@ bool Qdc::HubsView::openHub(const QString& url)
 	m_entries.append(entry);
 	adopt(entry->pane, entry->item);
 
-	/*
-	 * Once per hub, and before anything the hub says can arrive: every entry it
-	 * reports is written down through this and every descriptor is recorded, which is
-	 * what a cursor and a gap are answered from later.
-	 */
-	bulletins()->follow(bridge);
-	applyBoardPolicy(bridge->url());
+	/* Before anything the hub says can arrive, so no board it describes is missed. */
+	bulletins();
 
 	/*
 	 * What was said here before, put back before the hub has a chance to say
@@ -729,48 +607,6 @@ bool Qdc::HubsView::openHub(const QString& url)
 	connect(bridge, &HubBridge::searchResultsReceived,
 	        this, &HubsView::searchResultsReceived);
 
-	connect(bridge, &HubBridge::boardDescribed, this,
-	        [this, bridge](const BoardInfo& board) {
-		if (Entry* found = entryFor(bridge)) describeBoard(*found, board);
-	});
-
-	/*
-	 * The hub answering for its boards, either way, and both answers are about this
-	 * connection only. Losing them cancels every subscription on it and is the only
-	 * thing that says so; gaining them is a session that holds none, so what somebody
-	 * had open is asked for again rather than assumed to be still arriving.
-	 */
-	connect(bridge, &HubBridge::bulletinSupportChanged, this,
-	        [this, bridge](bool supported) {
-		Entry* found = entryFor(bridge);
-		if (!found) return;
-
-		found->subscribed.clear();
-
-		/*
-		 * And what somebody had finished with, because that was about the boards this
-		 * connection was carrying. Being told again what a hub has is where its boards
-		 * come from, and holding a refusal from an hour ago against one of them would
-		 * make a board left once a board left for good.
-		 */
-		found->left.clear();
-
-		if (!supported) return;
-
-		/*
-		 * Every board this hub has said it has, and not only the ones somebody has
-		 * looked at: a subscription ends with the session, and what a board is for is
-		 * to be arriving before anybody opens it. The descriptors for a fresh session
-		 * arrive after this, and each of those subscribes as it lands; this is for the
-		 * boards already known when a hub takes the feature back and gives it again.
-		 */
-		for (auto at = found->boards.constBegin(); at != found->boards.constEnd(); ++at)
-		{
-			if (at.value() && at.value()->boardInfo().may(BoardPermission::Subscribe))
-				subscribeBoard(*found, at.key());
-		}
-	});
-
 	connect(bridge, &HubBridge::boardRefused, this,
 	        [this, bridge](int code, const QString& message, const QString& board,
 	                       const QString& tth) {
@@ -797,9 +633,6 @@ bool Qdc::HubsView::openHub(const QString& url)
 		}
 
 		for (BoardPane* pane : told) pane->reportRefusal(code, message, tth, board);
-
-		/* A board that is not there can be dropped from the interface, and is. */
-		if (code == BOARD_GONE && !board.isEmpty()) closeBoard(*found, board);
 	});
 
 	connect(bridge, &HubBridge::hubNameChanged, this, [this, bridge] {
@@ -1337,24 +1170,11 @@ Qdc::DmPane* Qdc::HubsView::openDm(Entry& entry, const UserInfo& user)
 	return pane;
 }
 
-void Qdc::HubsView::setBoardDirectory(const QString& directory)
-{
-	m_boardDirectory = directory;
-}
-
 Qdc::BoardBridge* Qdc::HubsView::bulletins()
 {
 	if (m_bulletins) return m_bulletins;
 
-	m_bulletins = new BoardBridge(m_thread, m_transfers, m_boardDirectory, this);
-
-	/*
-	 * What this client is willing to hold, and a sweep of what it holds already. Here
-	 * as well as when the settings change, because the bridge is built long after they
-	 * were read and a bound nobody applied is no bound at all.
-	 */
-	m_bulletins->setCacheBounds(m_postKeepSeconds, m_postCacheBytes);
-	m_bulletins->evictNow();
+	m_bulletins = new BoardBridge(m_thread, this);
 
 	/*
 	 * What a board shows is what the index kept, and not what arrived: a resumed
@@ -1364,8 +1184,6 @@ Qdc::BoardBridge* Qdc::HubsView::bulletins()
 	 */
 	const auto arrived = [this](const QString& hubKey, const QString& board,
 	                            const QVector<BoardEntry>& entries) {
-		for (const BoardEntry& entry : entries) keepComposed(hubKey, entry);
-
 		BoardPane* pane = boardPaneFor(hubKey, board);
 		if (!pane) return;
 
@@ -1379,15 +1197,32 @@ Qdc::BoardBridge* Qdc::HubsView::bulletins()
 	connect(m_bulletins, &BoardBridge::entriesLoaded, this, arrived);
 
 	connect(m_bulletins, &BoardBridge::boardStateReady, this,
-	        [this](const QString& hubKey, const QString& board, quint64,
-	               BoardBridge::View view) {
+	        [this](const QString& hubKey, const BoardInfo& board, bool described, quint64,
+	               BoardBridge::View view, bool left) {
+		for (Entry* entry : m_entries)
+		{
+			if (!entry->bridge || BoardBridge::hubKey(entry->bridge->url()) != hubKey) continue;
+			boardState(*entry, board, described, left);
+		}
+
 		/*
 		 * A hub replays no further back than it says it will, so a cursor older than
 		 * that leaves a hole nothing will close. The board is still worth reading and
 		 * is still shown; saying so is what keeps it from looking complete.
 		 */
-		if (BoardPane* pane = boardPaneFor(hubKey, board))
+		if (BoardPane* pane = boardPaneFor(hubKey, board.name))
 			pane->setGap(view == BoardBridge::View::Gap);
+	});
+
+	connect(m_bulletins, &BoardBridge::boardGone, this,
+	        [this](const QString& hubKey, const QString& board) {
+		for (Entry* entry : m_entries)
+			if (entry->bridge && BoardBridge::hubKey(entry->bridge->url()) == hubKey)
+				closeBoard(*entry, board);
+	});
+
+	connect(m_bulletins, &BoardBridge::postRefused, this, [this](const QString& reason) {
+		QMessageBox::information(this, tr("Post"), reason);
 	});
 
 	/*
@@ -1510,28 +1345,13 @@ QList<Qdc::BoardPane*> Qdc::HubsView::panesHolding(const QString& tth) const
 	return found;
 }
 
-void Qdc::HubsView::describeBoard(Entry& entry, const BoardInfo& board)
+void Qdc::HubsView::boardState(Entry& entry, const BoardInfo& board, bool described, bool left)
 {
 	if (board.name.isEmpty()) return;
 
-	if (board.removed)
-	{
-		closeBoard(entry, board.name);
-		return;
-	}
-
-	/*
-	 * A board somebody has left stays left while this connection lasts. A hub sends a
-	 * fresh descriptor whenever a field of the board changes, and the newest timestamp
-	 * and the post count are fields - so on a board anybody is posting to a descriptor
-	 * arrives every few seconds, and without this each one would put back the row that
-	 * had just been closed.
-	 */
-	if (entry.left.contains(board.name)) return;
-
+	/* A board somebody left on this connection is not put back by its next descriptor. */
 	BoardPane* pane = entry.boards.value(board.name, nullptr);
-	if (!pane) pane = openBoard(entry, board.name);
-
+	if (!pane && described && !left) pane = openBoard(entry, board.name);
 	if (!pane) return;
 
 	/*
@@ -1539,20 +1359,7 @@ void Qdc::HubsView::describeBoard(Entry& entry, const BoardInfo& board)
 	 * registration, on promotion, on a ban - so the pane is told again each time
 	 * rather than only the first time.
 	 */
-	pane->setBoard(board);
-
-	/*
-	 * And followed from the moment the hub says it is there, rather than when somebody
-	 * opens it: a board is a thing that arrives, and one that only fills in once it has
-	 * been looked at has nothing to show at the moment it is first looked at. What that
-	 * costs is a replay per board at login, which the hub bounds by refusing to go
-	 * further back than its own oldest timestamp - and after the first time each board
-	 * resumes from the cursor it left off at, so the cost is paid once.
-	 *
-	 * Only where the hub says this session may. A descriptor is not sent at all for a
-	 * board it may not subscribe to, so this is the belt to that braces.
-	 */
-	if (board.may(BoardPermission::Subscribe)) subscribeBoard(entry, board.name);
+	if (described) pane->setBoard(board);
 
 	refreshBoardItem(m_boardItems.value(pane, nullptr), pane);
 }
@@ -1588,38 +1395,10 @@ Qdc::BoardPane* Qdc::HubsView::openBoard(Entry& entry, const QString& board)
 	const QString hubKey = entry.bridge ? BoardBridge::hubKey(entry.bridge->url())
 	                                    : QString();
 
-	/*
-	 * A body is fetched on somebody asking for it and never on an entry arriving. The
-	 * request goes to whoever has the document, which at first is only its author - so
-	 * fetching one says "I have read this" to the person who wrote it, and on a quiet
-	 * board they can count the people it was said by.
-	 */
+	/* Asked for by somebody; the core decides whether the rest of the thread comes too. */
 	connect(pane, &BoardPane::bodyRequested, this,
 	        [this, pane, hubKey](const QString& tth) {
-		const BoardEntry wanted = pane->threads()->entryOf(tth);
-		if (wanted.tth.isEmpty()) return;
-
-		markRead(pane, tth);
-		bulletins()->fetch(hubKey, wanted);
-
-		/*
-		 * And the rest of the thread, where this hub has been told to. Off unless it
-		 * has been: the same disclosure, made for posts nobody has asked to see.
-		 */
-		if (!prefetchesOn(hubKey)) return;
-
-		QVector<BoardEntry> thread;
-
-		const QString root = pane->threads()->threadOf(tth);
-
-		for (const QString& one : roots_under(pane->threads(),
-		                                      pane->threads()->indexOf(root)))
-		{
-			const BoardEntry held = pane->threads()->entryOf(one);
-			if (!held.tth.isEmpty() && held.tth != tth) thread.append(held);
-		}
-
-		if (!thread.isEmpty()) bulletins()->prefetchThread(hubKey, thread);
+		bulletins()->read(hubKey, pane->board(), tth, true);
 	});
 
 	connect(pane, &BoardPane::parentRequested, this,
@@ -1645,14 +1424,8 @@ Qdc::BoardPane* Qdc::HubsView::openBoard(Entry& entry, const QString& board)
 		Entry* owner = entryForBoard(pane);
 		if (!owner || !owner->bridge) return;
 
-		/*
-		 * From the beginning rather than from the cursor, which is the only way a hub
-		 * that reordered or removed entries in violation of the extension becomes
-		 * visible at all. What arrives is reconciled against what is held - an entry
-		 * is recognised by its hash - so nothing is thrown away first.
-		 */
-		owner->bridge->subscribeBoard(board, 0);
-		owner->subscribed.insert(board);
+		/* What arrives is reconciled against what is held, so nothing is thrown away first. */
+		owner->bridge->subscribeBoard(board, true);
 	});
 
 	connect(pane, &BoardPane::threadSubmitted, this,
@@ -1695,21 +1468,12 @@ Qdc::BoardPane* Qdc::HubsView::openBoard(Entry& entry, const QString& board)
 
 	/*
 	 * Read means opened by somebody in the reading pane, which is not the same as
-	 * fetched: a post whose body nobody could be found for was still read, and one
-	 * fetched ahead of a reader was not. The pane says so itself, however the post came
-	 * to be on the screen - a selection, or a caller asking for one by hash.
+	 * fetched, however the post came to be on the screen. A document already here is
+	 * shown straight off the disk, which tells nobody anything.
 	 */
 	connect(pane, &BoardPane::readingChanged, this,
 	        [this, pane, hubKey](const QString& tth) {
-		markRead(pane, tth);
-
-		/*
-		 * And where the document is already here, it is read straight off the disk. A
-		 * post opened by its reader is where a body would be fetched anyway; the only
-		 * thing being skipped is the press, and it is skipped because reading a local
-		 * file says nothing to anybody.
-		 */
-		readHeldPost(pane, hubKey, tth);
+		bulletins()->read(hubKey, pane->board(), tth, false);
 	});
 
 	entry.item->setExpanded(true);
@@ -1721,21 +1485,6 @@ Qdc::BoardPane* Qdc::HubsView::openBoard(Entry& entry, const QString& board)
 	saveSession();
 
 	return pane;
-}
-
-void Qdc::HubsView::subscribeBoard(Entry& entry, const QString& board)
-{
-	if (!entry.bridge || board.isEmpty()) return;
-	if (entry.subscribed.contains(board)) return;
-
-	entry.subscribed.insert(board);
-
-	/*
-	 * Through the bridge, because the cursor is on the disk that belongs to the core
-	 * thread and this one may not wait for it. A hub that has not offered boards drops
-	 * the command; the feature arriving is what asks again.
-	 */
-	bulletins()->resume(entry.bridge, board);
 }
 
 void Qdc::HubsView::showBoard(BoardPane* pane)
@@ -1754,16 +1503,12 @@ void Qdc::HubsView::showBoard(BoardPane* pane)
 	}
 
 	/*
-	 * Already subscribed, from the descriptor that put the row there - opening a board
-	 * is reading what has been arriving rather than the thing that asks for it. Asked
-	 * for again all the same, since this is also the path a board reopened after being
-	 * closed comes back along, and asking twice for one already held costs nothing.
+	 * Followed already where the hub described it; asked all the same, because a row put
+	 * back from the last session may be for a board the hub has not mentioned, and a
+	 * board followed already is not asked of the hub twice.
 	 */
 	if (Entry* owner = entryForBoard(pane))
-	{
-		owner->left.remove(pane->board());
-		subscribeBoard(*owner, pane->board());
-	}
+		if (owner->bridge) owner->bridge->subscribeBoard(pane->board());
 
 	refreshBoardItem(item, pane);
 	refreshBadge();
@@ -1772,9 +1517,6 @@ void Qdc::HubsView::showBoard(BoardPane* pane)
 void Qdc::HubsView::closeBoard(Entry& entry, const QString& board)
 {
 	BoardPane* pane = entry.boards.take(board);
-
-	entry.subscribed.remove(board);
-
 	if (!pane) return;
 
 	QTreeWidgetItem* item = m_boardItems.take(pane);
@@ -1797,40 +1539,6 @@ void Qdc::HubsView::closeBoard(Entry& entry, const QString& board)
 	refreshBadge();
 }
 
-void Qdc::HubsView::markRead(BoardPane* pane, const QString& tth)
-{
-	if (!pane || tth.isEmpty()) return;
-
-	const QString hubKey = hubKeyOf(pane);
-	if (hubKey.isEmpty()) return;
-
-	/*
-	 * Written down rather than remembered here, because the question outlives the
-	 * window: a board nobody has opened for a week has to still say so after a restart.
-	 * The row is redrawn when the bridge says the count moved, and a post that was
-	 * already read moves nothing.
-	 */
-	bulletins()->markRead(hubKey, pane->board(), tth);
-}
-
-void Qdc::HubsView::readHeldPost(BoardPane* pane, const QString& hubKey,
-                                 const QString& tth)
-{
-	if (!pane || tth.isEmpty()) return;
-
-	/*
-	 * The bridge as it is rather than built to be asked: without one there is nothing
-	 * held, and a post nobody holds is left alone here. Answered from memory, because
-	 * this is reached while the pane is laying the post out.
-	 */
-	if (!m_bulletins || !m_bulletins->isHeld(tth)) return;
-
-	const BoardEntry wanted = pane->threads()->entryOf(tth);
-	if (wanted.tth.isEmpty()) return;
-
-	m_bulletins->readHeld(hubKey, wanted);
-}
-
 int Qdc::HubsView::unreadOn(BoardPane* pane) const
 {
 	if (!pane || !m_bulletins) return 0;
@@ -1845,167 +1553,13 @@ int Qdc::HubsView::unreadOn(BoardPane* pane) const
 	return m_bulletins->unread(hubKeyOf(pane), pane->board());
 }
 
-void Qdc::HubsView::keepComposed(const QString& hubKey, const BoardEntry& entry)
-{
-	const QString path = m_composed.value(entry.tth);
-	if (path.isEmpty() || entry.removed) return;
-
-	m_composed.remove(entry.tth);
-
-	/*
-	 * A copy, because adopting a document takes the file it is handed into the store -
-	 * and this client is still offering the original by its hash, which is what makes
-	 * the post readable to whoever asks for it first.
-	 *
-	 * Named after the hash, which here is one this client computed itself: nothing
-	 * reaches this line unless the hub named a post that was composed here, so the name
-	 * is ours rather than a stranger's. A board name would not do - '..' is a legal one.
-	 */
-	const QString copy = QDir(composed_post_folder()).filePath(entry.tth);
-
-	QFile::remove(copy);
-
-	if (!QFile::copy(path, copy)) return;
-
-	bulletins()->adopt(hubKey, entry, copy);
-}
-
 void Qdc::HubsView::submitPost(Entry& entry, BoardPane* pane, const QString& parent,
                                const QString& subject, const QString& body,
                                bool richText)
 {
 	if (!pane || !entry.bridge) return;
 
-	/*
-	 * The author's own client id, which the hub will compare against the one it
-	 * accepted the post from. Written into the document because it is the one thing
-	 * the hub must not be able to change about a post; nothing proves it, and a reader
-	 * is never shown it as a proven identity.
-	 */
-	const QString cid = ownCid();
-
-	if (cid.isEmpty())
-	{
-		QMessageBox::information(this, tr("Post"),
-			tr("This post cannot be written yet: a post says who wrote it, and this "
-			   "installation has no client ID until it has connected to a hub once."));
-		return;
-	}
-
-	/*
-	 * One line, because the subject is one parameter of one ADC message and a newline
-	 * inside it is not something the format admits. Reduced before the document is
-	 * built rather than after, since the hub is told the same subject and the two have
-	 * to be the same words.
-	 */
-	const QString oneLine = subject.simplified();
-
-	if (oneLine.isEmpty() && parent.isEmpty())
-	{
-		QMessageBox::information(this, tr("Post"),
-			tr("A post that starts a thread needs a subject."));
-		return;
-	}
-
-	const quint64 composed =
-		static_cast<quint64>(QDateTime::currentSecsSinceEpoch());
-
-	const QByteArray bytes = post_document(cid, parent, oneLine, body, richText,
-	                                       composed);
-
-	/*
-	 * Measured against what the hub said it takes, before anything is written or sent.
-	 * The limit is on the descriptor and the hub enforces it against the size declared
-	 * at submission, so there is no reason to learn it by being refused.
-	 */
-	const quint64 allowed = pane->boardInfo().maxSize;
-
-	if (allowed > 0 && static_cast<quint64>(bytes.size()) > allowed)
-	{
-		QMessageBox::information(this, tr("Post"),
-			tr("This post is %1 bytes and this board takes at most %2, so it would be "
-			   "refused. It has to be shorter.").arg(bytes.size()).arg(allowed));
-		return;
-	}
-
-	const QString folder = composed_post_folder();
-
-	if (!QDir().mkpath(folder))
-	{
-		QMessageBox::information(this, tr("Post"),
-			tr("This post cannot be kept: '%1' cannot be created, and a post nobody "
-			   "can send is not published.").arg(folder));
-		return;
-	}
-
-	/*
-	 * Named for when it was written, because its own name is its hash and that is not
-	 * known until the last byte has been written. The copy under the hash is made when
-	 * the entry comes back; see keepComposed().
-	 */
-	const QString path = QStringLiteral("%1/post-%2").arg(folder,
-		QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss-zzz")));
-
-	QFile document(path);
-
-	if (!document.open(QIODevice::WriteOnly))
-	{
-		QMessageBox::information(this, tr("Post"),
-			tr("This post could not be written to '%1'.").arg(path));
-		return;
-	}
-
-	if (document.write(bytes) != bytes.size())
-	{
-		document.close();
-
-		QMessageBox::information(this, tr("Post"),
-			tr("This post could not be written to '%1'.").arg(path));
-		return;
-	}
-
-	document.close();
-
-	const QString board = pane->board();
-	const QPointer<HubBridge> hub(entry.bridge);
-
-	/*
-	 * Hashed and offered first, and submitted only once that has happened: the hash is
-	 * the post's name and there is nothing to submit until it is known, and until the
-	 * first reader has fetched the document its author is its only source. The
-	 * connections are made for this one post and taken down with it.
-	 */
-	QObject* pending = new QObject(this);
-
-	connect(m_media, &MediaBridge::attached, pending,
-	        [this, hub, pending, path, board, oneLine, parent](const QString& hashed,
-	                                                          const QString& tth,
-	                                                          quint64 size) {
-		if (hashed != path) return;
-
-		m_composed.insert(tth, path);
-
-		if (hub) hub->submitPost(tth, size, board, oneLine, parent);
-
-		pending->deleteLater();
-	});
-
-	connect(m_media, &MediaBridge::attachFailed, pending,
-	        [this, pending, path](const QString& hashed, const QString& reason) {
-		if (hashed != path) return;
-
-		QMessageBox::information(this, tr("Post"), reason);
-		pending->deleteLater();
-	});
-
-	/*
-	 * As a post and not as an attachment. A file picked for a message is remembered so
-	 * that a magnet URI in it still works next year; this one must not be, because
-	 * whether a post is served at all is worked out again at every start-up from what
-	 * the post store holds and what the user said about this hub - and a copy left in
-	 * the configuration would go on being offered underneath that.
-	 */
-	m_media->attach(path, MediaBridge::Offer::Post);
+	bulletins()->write(entry.bridge, pane->board(), parent, subject, body, richText);
 }
 
 void Qdc::HubsView::setPasswordPrompt(PasswordPrompt prompt)
@@ -2511,65 +2065,6 @@ void Qdc::HubsView::reloadDownloadDirectory()
 	                                     : configured;
 }
 
-bool Qdc::HubsView::prefetchesOn(const QString& hubUrl) const
-{
-	return m_hubPrefetch.value(HubBridge::settingsUrl(hubUrl), m_prefetchPosts);
-}
-
-bool Qdc::HubsView::servesOn(const QString& hubUrl) const
-{
-	const QString key = HubBridge::settingsUrl(hubUrl);
-
-	if (const auto decided = m_hubServe.constFind(key); decided != m_hubServe.constEnd())
-		return *decided;
-
-	/*
-	 * A hub nobody bookmarked answers for nothing until they say so on that hub.
-	 * Offering a post says *I have read this* to anybody who asks for it, and the
-	 * extension asks that a hub the user has not explicitly joined be left out of that
-	 * - so a hub kept is taken as one joined, and a hub visited once is not.
-	 */
-	const bool joined = m_favourites
-		&& (m_favourites->contains(hubUrl) || m_favourites->contains(key));
-
-	if (!joined) return false;
-
-	return m_servePosts;
-}
-
-void Qdc::HubsView::reloadBoardPolicy()
-{
-	if (!m_config) return;
-
-	m_prefetchPosts = m_config->read(S::BoardPrefetch);
-	m_servePosts = m_config->read(S::BoardServe);
-
-	const int days = qMax(0, m_config->read(S::BoardKeepDays));
-	const int bytes = qMax(0, m_config->read(S::BoardCache));
-
-	m_postKeepSeconds = static_cast<quint64>(days) * SECONDS_IN_A_DAY;
-	m_postCacheBytes = static_cast<quint64>(bytes);
-
-	/*
-	 * Only where there is something to apply them to. Reading these costs nothing and
-	 * building the bridge makes directories, so a window that has not opened a hub
-	 * stays out of the user's filesystem.
-	 */
-	if (!m_bulletins) return;
-
-	m_bulletins->setCacheBounds(m_postKeepSeconds, m_postCacheBytes);
-
-	for (const Entry* entry : m_entries)
-		if (entry->bridge) applyBoardPolicy(entry->bridge->url());
-
-	/*
-	 * Chosen now and carried out as soon as nothing is reading what has to go. A
-	 * document is thrown away in one place and released in another, because discarding
-	 * one withdraws this client as a source for a post that may have no other copy.
-	 */
-	m_bulletins->evictNow();
-}
-
 QString Qdc::HubsView::localHubUrl() const
 {
 	const int port = m_config
@@ -2613,42 +2108,6 @@ void Qdc::HubsView::reloadLocalHub()
 	}
 }
 
-void Qdc::HubsView::applyBoardPolicy(const QString& hubUrl)
-{
-	if (!m_config || hubUrl.isEmpty()) return;
-
-	const QString key = HubBridge::settingsUrl(hubUrl);
-
-	/*
-	 * An absent value is how a hub says it has no opinion, which is not the same as
-	 * having decided against - so the entry is removed rather than written false.
-	 */
-	if (m_config->contains(ConfigStore::Session, key, BOARD_PREFETCH))
-	{
-		m_hubPrefetch.insert(key,
-			m_config->getBool(ConfigStore::Session, key, BOARD_PREFETCH));
-	}
-	else
-	{
-		m_hubPrefetch.remove(key);
-	}
-
-	if (m_config->contains(ConfigStore::Session, key, BOARD_SERVE))
-	{
-		m_hubServe.insert(key,
-			m_config->getBool(ConfigStore::Session, key, BOARD_SERVE));
-	}
-	else
-	{
-		m_hubServe.remove(key);
-	}
-
-	if (!m_bulletins) return;
-
-	m_bulletins->setPrefetch(key, prefetchesOn(key));
-	m_bulletins->setServing(key, servesOn(key));
-}
-
 void Qdc::HubsView::showHubMenu(const QPoint& at)
 {
 	QTreeWidgetItem* item = m_tree->itemAt(at);
@@ -2681,7 +2140,7 @@ void Qdc::HubsView::showHubMenu(const QPoint& at)
 
 	QMenu menu(this);
 
-	addHubChoice(menu, tr("Fetch pictures on this hub"), hubUrl, MEDIA_FETCH, {},
+	addHubChoice(menu, tr("Fetch pictures on this hub"), hubUrl, MEDIA_FETCH,
 	             [this, hubUrl](std::optional<bool> fetch) {
 		if (m_media) m_media->setFetchOn(hubUrl, fetch);
 	});
@@ -2695,19 +2154,22 @@ void Qdc::HubsView::showHubMenu(const QPoint& at)
 	 * disclosure has.
 	 */
 	addHubChoice(menu, tr("Fetch a thread ahead on this hub"), hubUrl, BOARD_PREFETCH,
-	             [this, hubUrl] { applyBoardPolicy(hubUrl); });
+	             [this, hubUrl](std::optional<bool> fetch) {
+		bulletins()->setPolicy(hubUrl, BoardBridge::Policy::FetchAhead, fetch);
+	});
 
 	menu.addSeparator();
 
 	addHubChoice(menu, tr("Offer posts read on this hub"), hubUrl, BOARD_SERVE,
-	             [this, hubUrl] { applyBoardPolicy(hubUrl); });
+	             [this, hubUrl](std::optional<bool> serve) {
+		bulletins()->setPolicy(hubUrl, BoardBridge::Policy::Serve, serve);
+	});
 
 	menu.exec(m_tree->viewport()->mapToGlobal(at));
 }
 
 void Qdc::HubsView::addHubChoice(QMenu& menu, const QString& title,
                                  const QString& hubUrl, const QString& key,
-                                 const std::function<void()>& applied,
                                  const std::function<void(std::optional<bool>)>& decide)
 {
 	if (!m_config) return;
@@ -2726,26 +2188,8 @@ void Qdc::HubsView::addHubChoice(QMenu& menu, const QString& title,
 		action->setChecked(ticked);
 		choices->addAction(action);
 
-		connect(action, &QAction::triggered, this, [this, hubUrl, key, answer, opinion,
-		                                            applied, decide] {
-			if (decide)
-			{
-				decide(opinion ? std::optional<bool>(answer) : std::nullopt);
-				return;
-			}
-
-			/*
-			 * Nothing written is what "follow the general setting" means: an absent
-			 * value is how a hub says it has no opinion, so removing it is not the
-			 * same as writing false.
-			 */
-			if (opinion)
-				m_config->setBool(ConfigStore::Session, hubUrl, key, answer);
-			else
-				m_config->remove(ConfigStore::Session, hubUrl, key);
-
-			m_config->save(ConfigStore::Session);
-			if (applied) applied();
+		connect(action, &QAction::triggered, this, [answer, opinion, decide] {
+			decide(opinion ? std::optional<bool>(answer) : std::nullopt);
 		});
 	};
 
@@ -2781,9 +2225,8 @@ void Qdc::HubsView::showBoardMenu(QTreeWidgetItem* item, const QPoint& globalPos
 	if (picked == readAll)
 	{
 		/*
-		 * One statement about the board rather than one about each post on it, written
-		 * down where it survives the window closing: see BoardBridge::markAllRead(),
-		 * which is also where the price of the watermark it writes is set out.
+		 * One statement about the board rather than one about each post on it; the
+		 * core writes it as a watermark (see BoardIndex::markAllRead()).
 		 */
 		bulletins()->markAllRead(hubKeyOf(pane), board);
 		return;
@@ -2796,11 +2239,7 @@ void Qdc::HubsView::showBoardMenu(QTreeWidgetItem* item, const QPoint& globalPos
 		 * detection a client has of a hub that reordered or removed entries: what
 		 * arrives is reconciled against what is held rather than replacing it.
 		 */
-		if (entry->bridge)
-		{
-			entry->bridge->subscribeBoard(board, 0);
-			entry->subscribed.insert(board);
-		}
+		if (entry->bridge) entry->bridge->subscribeBoard(board, true);
 
 		return;
 	}
@@ -2816,18 +2255,11 @@ void Qdc::HubsView::leaveBoard(const QString& url, const QString& board)
 	if (!entry || board.isEmpty()) return;
 
 	/*
-	 * Said to the hub as well as done here: a subscription lasts until it is cancelled,
+	 * Said to the core as well as done here: a subscription lasts until it is cancelled,
 	 * and a row taken away without a word would leave the hub sending a board nobody is
 	 * reading for as long as the connection lasts.
 	 */
 	if (entry->bridge) entry->bridge->unsubscribeBoard(board);
-
-	/*
-	 * Remembered as left, and only here - this is somebody saying they have finished
-	 * with the board, where closeBoard() is also how a board the hub has removed goes.
-	 * Marking that one would mean a board taken away and put back never came back.
-	 */
-	entry->left.insert(board);
 
 	closeBoard(*entry, board);
 }

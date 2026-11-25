@@ -24,11 +24,15 @@ namespace QuickDC { class Core; }
 
 namespace Qdc {
 
+class BoardBridge;
 class Completed;
 class CoreThread;
 class Favourites;
 class HubDirectory;
 class RecentHubs;
+struct BoardEntry;
+struct BoardInfo;
+struct BoardPost;
 struct CompletedDownload;
 struct HubListEntry;
 struct HubListSource;
@@ -54,6 +58,16 @@ void announce(RecentHubs& recent, const QList<RecentHub>& hubs);
 void announce(Completed& completed, const QList<CompletedDownload>& downloads);
 void announce(HubDirectory& directory, const QVector<HubListEntry>& hubs,
               const QList<HubListSource>& sources);
+
+/* What the core says of the boards on the hub filed under 'hubKey'; see BoardBridge::hubKey(). */
+void announceBoard(BoardBridge& boards, const QString& hubKey, const BoardInfo& board, bool left = false);
+void announceGone(BoardBridge& boards, const QString& hubKey, const QString& board);
+void announceEntries(BoardBridge& boards, const QString& hubKey, const QString& board,
+                     const QVector<BoardEntry>& entries, int unread, bool whole = false);
+void announceRead(BoardBridge& boards, const QString& hubKey, const QString& board, int unread,
+                  const QStringList& read, bool whole);
+void announcePost(BoardBridge& boards, const BoardPost& post, const QString& attributedTo);
+void announceUnreadable(BoardBridge& boards, const QString& tth);
 
 }
 }

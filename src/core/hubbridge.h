@@ -157,34 +157,6 @@ public:
 	bool supportsRichText() const;
 
 	/**
-	 * Whether this hub has bulletin boards, as it stands.
-	 *
-	 * Negotiated in the same exchange as markdown and read the same way: the client
-	 * offers the extension in its SUP and only a hub that answers with the same has
-	 * agreed to carry a board. False until that answer has been read, false for the
-	 * rest of a session on a hub that stayed quiet, and false on NMDC, which has no
-	 * such thing.
-	 *
-	 * The hub's answer is authoritative for the connection and is never cached
-	 * across one: a hub may announce boards in a later SUP than its first and may
-	 * withdraw them again, and withdrawing them cancels every subscription this
-	 * session held. Follow bulletinSupportChanged() rather than asking once.
-	 */
-	bool supportsBulletins() const;
-
-	/**
-	 * The boards this connection has a subscription on, as this side sees it.
-	 *
-	 * A subscription is the hub's to cancel and a client has no way to learn that
-	 * one has lapsed except by noticing that nothing arrives - so this is what was
-	 * asked for and not what the hub is honouring. It is dropped when the feature is
-	 * withdrawn and when the session ends, because both of those cancel every
-	 * subscription on the connection and neither is reported any other way.
-	 */
-	QStringList subscribedBoards() const;
-	bool isSubscribed(const QString& board) const;
-
-	/**
 	 * Whether to follow a redirect the hub asks for.
 	 *
 	 * The core answers inside its own callback, and there is no way to ask a
@@ -228,30 +200,14 @@ public slots:
 	void sendPassword(const QString& password);
 
 	/**
-	 * Ask for a board's entries from 'timestamp' onwards, and for everything the
-	 * hub accepts afterwards.
-	 *
-	 * The backlog and the live feed are one stream and are not distinguished: there
-	 * is no end-of-backlog marker, because there is no end. A view shows entries as
-	 * they arrive rather than waiting for a set.
-	 *
-	 * @param timestamp the highest timestamp already held, and never one past it.
-	 *        Timestamps are seconds and are not unique, so a post the hub accepted
-	 *        in the same second as the last entry received would fall behind a
-	 *        cursor advanced past it and be delivered to nobody. The entries of that
-	 *        second arriving twice is the price, and the index absorbs them. Zero
-	 *        asks for the whole board. BoardBridge::resume() is the way to ask
-	 *        without having to know the cursor.
-	 *
-	 * Asking again for a board already subscribed to replaces the subscription
-	 * rather than adding to it, and replays from the newly requested point.
-	 *
-	 * Dropped silently where the hub has no boards - which is the ordinary case
-	 * rather than a fault, so it is not reported as a systemError() the way an
-	 * attempt to chat without a session is.
+	 * Follow a board again: one left, or with 'fromStart' every entry the hub holds
+	 * rather than from the highest timestamp held, which is the only way a hub that
+	 * reordered or removed entries becomes visible. The core follows every board a
+	 * hub describes by itself.
 	 */
-	void subscribeBoard(const QString& board, quint64 timestamp = 0);
+	void subscribeBoard(const QString& board, bool fromStart = false);
 
+	/** Leave a board; its descriptors do not take it up again while the session lasts. */
 	void unsubscribeBoard(const QString& board);
 
 	/**
@@ -264,22 +220,14 @@ public slots:
 	void requestBoardEntry(const QString& board, const QString& tth);
 
 	/**
-	 * Submit a post that has already been composed and hashed.
+	 * Write a post and submit it, the core composing, signing and offering the
+	 * document. Answered through BoardBridge, by 'request'; the entry coming back
+	 * is what publishes it. False where there is no session to send it on.
 	 *
-	 * The document has to be servable before this is sent. Until the first reader
-	 * has fetched it the author is its only source, and an author who submits a post
-	 * and disconnects has published nothing.
-	 *
-	 * There is no success reply: the entry coming back is the acknowledgement, and
-	 * the hub sends it to the author whether or not the author is subscribed. So a
-	 * post is not published until it has arrived as a boardEntriesReceived(), and a
-	 * refusal arrives as a boardRefused() naming the same hash.
-	 *
-	 * @param subject should match the document's, which is where the real one is.
 	 * @param parent empty for a post that starts a thread.
 	 */
-	void submitPost(const QString& tth, quint64 size, const QString& board,
-	                const QString& subject, const QString& parent = QString());
+	bool writePost(quint64 request, const QString& board, const QString& parent,
+	               const QString& subject, const QString& body, bool richText);
 
 	/**
 	 * Ask the hub to withdraw a post.
@@ -310,16 +258,6 @@ signals:
 	 * negotiates from nothing, and what one hub allowed says nothing about the next.
 	 */
 	void richTextSupportChanged(bool supported);
-
-	/**
-	 * The hub has bulletin boards, or the session that had them has ended.
-	 *
-	 * Emitted only on a change, because the core reports the current answer after
-	 * every SUP whether or not it moved. False again on disconnection and on the hub
-	 * withdrawing the feature, and in both cases every subscription on the
-	 * connection has been cancelled with it - this is the only signal that says so.
-	 */
-	void bulletinSupportChanged(bool supported);
 
 	void hubStatusChanged(Qdc::HubStatus status);
 	void hubNameChanged(const QString& name);
@@ -384,41 +322,6 @@ signals:
 	void chatMediaReady(const QString& tth, const QString& path);
 
 	/**
-	 * The hub described one of its boards, or said one no longer exists.
-	 *
-	 * One per board on login, and again whenever any field of it changes - including
-	 * what this session may do on it, which is stated per session because "what may
-	 * *you* do here" is a question only the hub can answer. A descriptor subscribes
-	 * nobody to anything; it says what there is to subscribe to.
-	 *
-	 * A board this session may not see is not described at all, so silence is the
-	 * rest of the answer: there is no event for a board being hidden and there cannot
-	 * be one.
-	 */
-	void boardDescribed(const Qdc::BoardInfo& board);
-
-	/**
-	 * Index entries from a board on this hub, in the order they arrived.
-	 *
-	 * Batched, and for the same reason as searchResultsReceived(): a subscription
-	 * resumed from zero on a busy board is thousands of entries in one burst, and
-	 * handing them over one at a time cost the view a model transaction and the
-	 * window a relayout for each. They are collected for a moment and handed over
-	 * together instead.
-	 *
-	 * A batch may carry entries from more than one board - a session subscribes to
-	 * several at once and the hub interleaves them freely - so BoardEntry::board is
-	 * what says where each one belongs. They arrive for three reasons that are
-	 * deliberately not distinguished: the backlog of a subscription, a post somebody
-	 * has just made, and a post this client submitted.
-	 *
-	 * Nothing here is evidence. Every field is one hub's claim about a document that
-	 * may not exist, and the two copied out of that document - the parent and the
-	 * subject - are hints until it has been fetched and hashed.
-	 */
-	void boardEntriesReceived(const QVector<Qdc::BoardEntry>& entries);
-
-	/**
 	 * The hub refused something said about a board.
 	 *
 	 * Named by the board or by the hash rather than by a token, because the
@@ -458,19 +361,7 @@ private:
 
 	void deliverSearchResults();
 
-	/** The same, for index entries, which arrive in far larger bursts. */
-	void collect(const Qdc::BoardEntry& entry);
 
-	void deliverBoardEntries();
-
-	/**
-	 * What a session losing its boards means: every subscription on the connection
-	 * is cancelled, and this side has to stop believing it holds one.
-	 *
-	 * The hub says so by withdrawing the feature and by nothing else, and a
-	 * connection ending says it without saying anything at all. Both land here.
-	 */
-	void bulletinsLost();
 
 	CoreThread* m_thread;
 	QString m_url;
@@ -486,12 +377,6 @@ private:
 
 	/** What the hub answered about RTF0; see supportsRichText(). */
 	bool m_richText = false;
-
-	/** What it answered about BBS0; see supportsBulletins(). */
-	bool m_bulletins = false;
-
-	/** The boards asked for on this connection; see subscribedBoards(). */
-	QSet<QString> m_subscribed;
 
 	NetStatus m_netStatus = NetStatus::Invalid;
 	HubStatus m_hubStatus = HubStatus::None;
@@ -522,10 +407,6 @@ private:
 	/** Replies waiting to go out together; see searchResultsReceived(). */
 	QVector<Qdc::SearchHit> m_pendingHits;
 	QTimer* m_hitTimer = nullptr;
-
-	/** Index entries waiting to go out together; see boardEntriesReceived(). */
-	QVector<Qdc::BoardEntry> m_pendingEntries;
-	QTimer* m_entryTimer = nullptr;
 
 };
 

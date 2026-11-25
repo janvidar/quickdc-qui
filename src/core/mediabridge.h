@@ -49,48 +49,14 @@ public:
 	~MediaBridge() override;
 
 	/**
-	 * What is being offered, which decides how long the offer lasts and what it costs.
-	 *
-	 * Two different things reach this class by the same route - a file somebody picked
-	 * for a message, and the document a bulletin board post is made of - and what is
-	 * right for one is wrong for the other.
-	 */
-	enum class Offer {
-		/**
-		 * A file chosen for a message.
-		 *
-		 * Remembered in the configuration, so that a magnet URI in a message somebody
-		 * scrolls back to next year still finds the file; and served against the
-		 * ordinary upload slots, like anything else a user shares.
-		 */
-		Attachment,
-
-		/**
-		 * The document of a post being submitted.
-		 *
-		 * Offered for this session only, because whether a post is served at all is
-		 * decided again at every start-up from what the post store holds and the
-		 * per-hub setting - and a copy remembered here would be offered again behind
-		 * that setting's back, which is a disclosure the user turned off.
-		 *
-		 * And without taking an upload slot: until the first reader has fetched it its
-		 * author is its only source, so this is the moment at which being turned away
-		 * for want of a slot costs the most.
-		 */
-		Post
-	};
-
-	/**
 	 * Hash a local file and offer it by that hash.
 	 *
 	 * Answered by attached() or attachFailed(), always with the path as it was given, so
 	 * a caller waiting on several at once can tell them apart.
-	 *
-	 * An Offer::Attachment is forgotten when the core stops only in the sense that this
-	 * class writes nothing down itself; the share remembers it. An Offer::Post is gone
-	 * with the session - see Offer.
+	 * Remembered by the share across restarts, so a magnet URI in a message somebody
+	 * scrolls back to next year still finds the file.
 	 */
-	void attach(const QString& path, Offer offer = Offer::Attachment);
+	void attach(const QString& path);
 
 	/**
 	 * Where a file with this hash is, if this client is the one offering it.

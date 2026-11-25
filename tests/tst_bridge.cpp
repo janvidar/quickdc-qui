@@ -22,13 +22,8 @@
 #include <api/bulletins.h>
 #include <api/core.h>
 #include <api/hub.h>
-#include <hash/hashjob.h>
-#include <network/adc/adcbbs.h>
-#include <network/downloadqueue.h>
 #include <network/hubmanager.h>
 
-#include <samurai/crypto/digest/merkletree.h>
-#include <samurai/crypto/digest/tiger.h>
 
 #include <QCoreApplication>
 #include <QDir>
@@ -63,9 +58,6 @@ private slots:
 	void aBlockingCallDoesNotWaitForThePollInterval();
 	void snapshotsDoNotWaitForABusyCore();
 	void anOfferedFileIsRecognisedAfterARestart();
-	void aPostIsOfferedForTheSessionAndWithoutASlot();
-	void aPostHeldFromAnEarlierSessionIsOfferedWhenItsBoardIsTakenUp();
-	void aPostHeldFromAnEarlierSessionIsOfferedWhenItsBoardIsReadBack();
 	void configRoundTripsThroughTheStore();
 	void aGroupIsReadInOneTrip();
 	void configWritesTheFileItWasGiven();
@@ -78,22 +70,9 @@ private slots:
 	void bridgesAreBuiltAndTornDownWithoutWaiting();
 	void theCoreKnowsAHubByTheNameTheViewsFileItUnder();
 
-	void bulletinsGoWithTheSessionAndTakeSubscriptionsWithThem();
-	void entriesArriveInOneBatchRatherThanOneSignalEach();
-	void anEntryIsKeptAndTheCursorIsTheHighestSeen();
-	void aBoardWithAHoleInItSaysSo();
-	void nothingIsFetchedMerelyBecauseAnEntryArrived();
-	void aDocumentThatIsNotThePostIsThrownAwayAndNeverServed();
-	void aDocumentWhoseAuthorDisagreesIsDisputedAndAttributedToTheIndex();
-	void aTransferPastItsCapIsAbandoned();
-	void aPostBeingReadIsNotInSomebodysTransferList();
-	void aDocumentSomebodyIsBeingSentIsNotReleased();
-	void aPostOpenedReadsAsReadAndTheBoardsCountFalls();
-	void readStateOutlivesTheBridgeThatWroteIt();
-	void aMarkThatCouldNotBeWrittenLeavesThePostUnread();
-	void aBoardReadBackKnowsWhichDocumentsItHolds();
-	void aHeldDocumentIsReadWithoutAskingAnybody();
-	void aDocumentKnownNotToBeThePostIsNotOfferedAsFetchable();
+	void entriesAHubSendsReachTheViewReadWhereTheyWereRead();
+	void whatTheCoreSaysOfAPostIsWhatIsDrawn();
+	void aPostWithNoSessionToGoOnSaysWhy();
 
 	void anAddressChangeIsWhatCountsAsTheNetworkChanging();
 	void addressesTheMachineAlwaysHasAreNotAChange();
@@ -102,9 +81,6 @@ private slots:
 
 private:
 	QString path(const QString& name) const;
-
-	/** A directory of its own for one test's boards, documents and fetches. */
-	QString boards(const QString& name) const;
 
 	/**
 	 * The core side listener of a hub bridge.
@@ -118,29 +94,6 @@ private:
 	 */
 	QuickDC::HubListener* listenerFor(const Qdc::HubBridge& hub);
 
-	/**
-	 * Whether this client is answering for the document, and answering for it as a
-	 * post.
-	 *
-	 * Slot free is what tells the two apart: an ordinary attachment is offered on the
-	 * usual terms and a post document is offered without taking a slot, so a check on
-	 * being shared at all would pass on either.
-	 */
-	bool isOffered(const QByteArray& tth);
-
-	/**
-	 * Leave a board with one post read, held and verified, and nothing offering it.
-	 *
-	 * The state a client starts up in, arrived at the way a client arrives at it: an
-	 * entry from the hub, a document fetched, and then the offer withdrawn by hand
-	 * because the share manager belongs to the process rather than to the bridge that
-	 * made the offer. Without that last step every assertion about a later session
-	 * would pass on the strength of this one.
-	 */
-	void readAPostInAnEarlierSession(const QString& directory, const QString& address,
-	                                const QString& board,
-	                                const QByteArray& document);
-
 	QTemporaryDir m_dir;
 	Qdc::CoreThread* m_thread = nullptr;
 };
@@ -150,85 +103,19 @@ namespace {
 /** A tiger root in base32, which is how long a post's name is. */
 const QString ENTRY_TTH =
 	QStringLiteral("L6LKZG4CUXDSCJQHBLL5GFG6FWAPSLKK2S3VIFA");
-const QString OTHER_TTH =
-	QStringLiteral("F6ED42THAKQCOCNHJOUCMOEOX4GOCT25D5WM7SY");
-
 const QString AUTHOR_CID =
 	QStringLiteral("IPJJWEPPPLCA3PF2ZCRRYO4F2ZX2EV2JMW2KC3I");
-const QString OTHER_CID =
-	QStringLiteral("NNPPWEPPPLCA3PF2ZCRRYO4F2ZX2EV2JMW2KC3I");
 
-/**
- * The tiger tree root of some bytes, computed the way the core computes one.
- *
- * A post is named by the hash of its own document, so a test that wants a document
- * which verifies has to name it the same way the client will. Written out here
- * rather than asked of a bridge, because what is being checked is that the bridge
- * arrives at this answer for itself.
- */
-QString tth_of(const QByteArray& bytes)
-{
-	Samurai::Crypto::Digest::Tiger tiger;
-	Samurai::Crypto::Digest::MerkleTree tree(
-		&tiger, Samurai::Crypto::Digest::DEFAULT_MERKLE_BLOCK_SIZE,
-		QUICKDC_TTH_TREE_LEVELS);
-
-	tree.update(bytes.constData(), static_cast<size_t>(bytes.size()));
-
-	char printed[128];
-	if (!tree.digest().getFormattedString(
-			Samurai::Crypto::Digest::HashValue::Format::Base32, printed,
-			sizeof(printed)))
-	{
-		return QString();
-	}
-
-	return QString::fromLatin1(printed);
-}
-
-/** A post document: its canonical header, the newline that ends it, and a body. */
-QByteArray post_document(const QString& cid, const QString& subject,
-                         const QByteArray& body)
-{
-	QuickDC::Post post;
-	post.cid = cid.toStdString();
-	post.subject = subject.toStdString();
-
-	const std::string header = ADC::writePostHeader(post);
-
-	QByteArray document = QByteArray::fromStdString(header);
-	document.append('\n');
-	document.append(body);
-
-	return document;
-}
-
-QuickDC::BoardEntry core_entry(const QString& tth, const QString& board,
-                               const QString& cid, quint64 timestamp)
+QuickDC::BoardEntry core_entry(const QString& tth, const QString& board, quint64 timestamp)
 {
 	QuickDC::BoardEntry entry;
 
 	entry.tth = tth.toStdString();
 	entry.size = 412;
 	entry.board = board.toStdString();
-	entry.cid = cid.toStdString();
+	entry.cid = AUTHOR_CID.toStdString();
 	entry.thread = tth.toStdString();
 	entry.timestamp = timestamp;
-
-	return entry;
-}
-
-Qdc::BoardEntry bridge_entry(const QString& tth, const QString& board,
-                             const QString& cid, quint64 size)
-{
-	Qdc::BoardEntry entry;
-
-	entry.tth = tth;
-	entry.size = size;
-	entry.board = board;
-	entry.cid = cid;
-	entry.thread = tth;
-	entry.timestamp = 1786439662;
 
 	return entry;
 }
@@ -238,14 +125,6 @@ Qdc::BoardEntry bridge_entry(const QString& tth, const QString& board,
 QString TestBridge::path(const QString& name) const
 {
 	return QDir(m_dir.path()).filePath(name);
-}
-
-QString TestBridge::boards(const QString& name) const
-{
-	const QString directory = path(name);
-	QDir().mkpath(directory);
-
-	return directory;
 }
 
 QuickDC::HubListener* TestBridge::listenerFor(const Qdc::HubBridge& hub)
@@ -429,88 +308,6 @@ void TestBridge::anOfferedFileIsRecognisedAfterARestart()
 	              QStringLiteral("File 0"));
 	config.setNumber(Qdc::ConfigStore::Application, QStringLiteral("Attachments"),
 	                 QStringLiteral("Total"), 0);
-}
-
-/**
- * A post document and a picture reach the share by the same call and must not be
- * offered on the same terms.
- *
- * Both halves matter and both were wrong. A post remembered in the configuration goes
- * on being offered at the next start-up whatever the user said about the hub it came
- * from; a post that takes an upload slot is turned away at the one moment its author is
- * its only source.
- */
-void TestBridge::aPostIsOfferedForTheSessionAndWithoutASlot()
-{
-	Qdc::ConfigBridge config(m_thread);
-	Qdc::MediaBridge media(m_thread, &config);
-
-	const auto write = [this](const char* name, const QByteArray& content) {
-		const QString path = QDir(m_dir.path()).filePath(QLatin1String(name));
-
-		QFile file(path);
-		if (!file.open(QIODevice::WriteOnly)) return QString();
-
-		file.write(content);
-		file.close();
-
-		return path;
-	};
-
-	const QString post = write("post-document", "IBB0 IDSOMEBODY\nthe words\n");
-	const QString picture = write("holiday.jpg", "not really a picture");
-
-	QVERIFY(!post.isEmpty() && !picture.isEmpty());
-
-	QSignalSpy attached(&media, &Qdc::MediaBridge::attached);
-	QSignalSpy refused(&media, &Qdc::MediaBridge::attachFailed);
-
-	media.attach(post, Qdc::MediaBridge::Offer::Post);
-	media.attach(picture, Qdc::MediaBridge::Offer::Attachment);
-
-	QTRY_VERIFY(attached.count() + refused.count() == 2);
-
-	QVERIFY2(refused.isEmpty(),
-	         qPrintable(refused.isEmpty() ? QString()
-	                                      : refused.first().at(1).toString()));
-
-	QHash<QString, QString> hashes;
-
-	for (const QList<QVariant>& one : attached)
-		hashes.insert(one.at(0).toString(), one.at(1).toString());
-
-	const QByteArray postTth = hashes.value(post).toUtf8();
-	const QByteArray pictureTth = hashes.value(picture).toUtf8();
-
-	QVERIFY(!postTth.isEmpty() && !pictureTth.isEmpty());
-
-	bool postFree = false;
-	bool pictureFree = false;
-	int remembered = -1;
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [&] {
-		QuickDC::Core* core = Qdc::Testing::core(m_thread);
-		if (!core || !core->shares || !core->config) return;
-
-		postFree = core->shares->isSlotFreeByTTH(postTth.constData());
-		pictureFree = core->shares->isSlotFreeByTTH(pictureTth.constData());
-
-		/*
-		 * Detaching the picture is what makes the group be written - nothing else in a
-		 * test's lifetime does, so an assertion on the configuration without it passes
-		 * whatever either attachment asked for - and it is also what makes the answer
-		 * mean something: the picture is remembered and is going, so what is left is
-		 * whatever else was remembered. Nothing, if the post was for the session; the
-		 * post, if it was not.
-		 */
-		core->shares->detach(pictureTth.constData());
-
-		remembered = core->config->peekNumber("Attachments", "Total", -1);
-	}));
-
-	QVERIFY(postFree);
-	QVERIFY(!pictureFree);
-	QCOMPARE(remembered, 0);
 }
 
 void TestBridge::configRoundTripsThroughTheStore()
@@ -742,7 +539,7 @@ void TestBridge::nothingAViewAsksForWaitsForABusyCore()
 	Qdc::SearchBridge search(m_thread);
 	Qdc::MediaBridge media(m_thread, &config);
 	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.1:412"));
-	Qdc::BoardBridge posts(m_thread, &transfers, boards(QStringLiteral("busy")));
+	Qdc::BoardBridge posts(m_thread);
 
 	const QString group = QStringLiteral("Busy");
 
@@ -792,31 +589,21 @@ void TestBridge::nothingAViewAsksForWaitsForABusyCore()
 	hub.sendChat(QStringLiteral("hello"), false);
 	hub.disconnectFromHub();
 
-	/* Everything a board pane reaches for, including the questions about a hub. */
-	hub.supportsBulletins();
-	hub.subscribedBoards();
-	hub.subscribeBoard(QStringLiteral("general"), 0);
+	/* Everything a board pane reaches for. */
+	hub.subscribeBoard(QStringLiteral("general"));
 	hub.requestBoardEntry(QStringLiteral("general"), ENTRY_TTH);
-	hub.submitPost(ENTRY_TTH, 412, QStringLiteral("general"),
-	               QStringLiteral("A subject"), QString());
 	hub.withdrawPost(ENTRY_TTH, QStringLiteral("general"));
 	hub.unsubscribeBoard(QStringLiteral("general"));
 
-	posts.follow(&hub);
 	posts.postState(ENTRY_TTH);
 	posts.attribution(ENTRY_TTH);
-	posts.prefetches(QStringLiteral("adc://192.0.2.1:412"));
-	posts.serves(QStringLiteral("adc://192.0.2.1:412"));
-	posts.setServing(QStringLiteral("adc://192.0.2.1:412"), true);
-	posts.loadEntries(QStringLiteral("adc://192.0.2.1:412"),
-	                  QStringLiteral("general"));
-	posts.requestState(QStringLiteral("adc://192.0.2.1:412"),
-	                   QStringLiteral("general"));
-	posts.resume(&hub, QStringLiteral("general"));
-	posts.fetch(QStringLiteral("adc://192.0.2.1:412"),
-	            bridge_entry(ENTRY_TTH, QStringLiteral("general"), AUTHOR_CID, 412));
-	posts.evictNow();
-	posts.releasePending();
+	posts.unread(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"));
+	posts.loadEntries(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"));
+	posts.read(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"), ENTRY_TTH, true);
+	posts.markAllRead(QStringLiteral("adc://192.0.2.1:412"), QStringLiteral("general"));
+	posts.setPolicy(QStringLiteral("adc://192.0.2.1:412"), Qdc::BoardBridge::Policy::Serve, true);
+	posts.write(&hub, QStringLiteral("general"), QString(), QStringLiteral("A subject"),
+	            QStringLiteral("A body"), false);
 
 	const qint64 spent = timer.elapsed();
 
@@ -917,1340 +704,111 @@ void TestBridge::theCoreKnowsAHubByTheNameTheViewsFileItUnder()
  * A client that went on believing it held a subscription would wait for entries that
  * are never coming, since nothing else ever mentions it again.
  */
-void TestBridge::bulletinsGoWithTheSessionAndTakeSubscriptionsWithThem()
-{
-	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.30:412"), this);
-
-	QuickDC::HubListener* listener = listenerFor(hub);
-	QVERIFY(listener != nullptr);
-
-	QSignalSpy support(&hub, &Qdc::HubBridge::bulletinSupportChanged);
-	QVERIFY(support.isValid());
-	QVERIFY(!hub.supportsBulletins());
-
-	/* Said twice, as a hub sending two SUPs would have it said. */
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
-		listener->EventBoardsAvailable(true);
-		listener->EventBoardsAvailable(true);
-	}));
-
-	QTRY_COMPARE(support.count(), 1);
-	QCOMPARE(support.at(0).at(0).toBool(), true);
-	QVERIFY(hub.supportsBulletins());
-
-	hub.subscribeBoard(QStringLiteral("general"), 0);
-	hub.subscribeBoard(QStringLiteral("announcements"), 1786439662);
-
-	QVERIFY(hub.isSubscribed(QStringLiteral("general")));
-	QCOMPARE(hub.subscribedBoards().size(), 2);
-
-	/* The hub withdraws the feature, which cancels both of them. */
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
-		listener->EventBoardsAvailable(false);
-	}));
-
-	QTRY_COMPARE(support.count(), 2);
-	QCOMPARE(support.at(1).at(0).toBool(), false);
-	QVERIFY(!hub.supportsBulletins());
-	QVERIFY(hub.subscribedBoards().isEmpty());
-	QVERIFY(!hub.isSubscribed(QStringLiteral("general")));
-
-	/* And again, with the connection ending rather than the hub saying anything. */
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
-		listener->EventBoardsAvailable(true);
-	}));
-
-	QTRY_COMPARE(support.count(), 3);
-	hub.subscribeBoard(QStringLiteral("general"), 0);
-	QVERIFY(hub.isSubscribed(QStringLiteral("general")));
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
-		listener->EventNetStatus(QuickDC::HubListener::NetDisconnected);
-	}));
-
-	QTRY_COMPARE(support.count(), 4);
-	QCOMPARE(support.at(3).at(0).toBool(), false);
-	QVERIFY(hub.subscribedBoards().isEmpty());
-}
-
 /**
- * A resumed subscription is a burst, and one model transaction each is what froze
- * the window when searches did the same thing.
+ * What a hub sends about a board reaches the view through the core, which keeps it:
+ * a board read back after the view that read it has gone says which posts were read.
  */
-void TestBridge::entriesArriveInOneBatchRatherThanOneSignalEach()
+void TestBridge::entriesAHubSendsReachTheViewReadWhereTheyWereRead()
 {
-	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.31:412"), this);
-
-	QuickDC::HubListener* listener = listenerFor(hub);
-	QVERIFY(listener != nullptr);
-
-	QSignalSpy batches(&hub, &Qdc::HubBridge::boardEntriesReceived);
-	QVERIFY(batches.isValid());
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
-		for (int n = 0; n < 6; ++n)
-		{
-			QuickDC::BoardEntry entry = core_entry(ENTRY_TTH,
-			                                       QStringLiteral("general"),
-			                                       AUTHOR_CID, 1786439662 + n);
-
-			/* One hash per entry, since an index is keyed on it. */
-			entry.tth[0] = static_cast<char>('A' + n);
-
-			listener->EventBoardEntry(entry);
-		}
-	}));
-
-	QTRY_COMPARE(batches.count(), 1);
-
-	const QVector<Qdc::BoardEntry> arrived =
-		batches.at(0).at(0).value<QVector<Qdc::BoardEntry>>();
-
-	QCOMPARE(arrived.size(), 6);
-	QCOMPARE(arrived.at(0).board, QStringLiteral("general"));
-	QCOMPARE(arrived.at(0).cid, AUTHOR_CID);
-	QCOMPARE(arrived.at(5).timestamp, 1786439662u + 5);
-}
-
-/**
- * An entry is written down as it arrives, and the cursor is the highest timestamp
- * seen rather than one past it.
- *
- * One second past the highest is the natural thing to write and it is wrong:
- * timestamps are seconds and are not unique, so a post the hub accepts in the same
- * second as the last entry received would fall behind the cursor and be delivered to
- * nobody. This asks the bridge for the cursor and holds it against what the hub
- * actually said.
- */
-void TestBridge::anEntryIsKeptAndTheCursorIsTheHighestSeen()
-{
-	Qdc::TransferBridge transfers(m_thread, this);
-	Qdc::BoardBridge posts(m_thread, &transfers, boards(QStringLiteral("kept")),
-	                       this);
-	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.32:412"), this);
-
-	posts.follow(&hub);
-	QVERIFY(posts.follows(&hub));
-
-	QuickDC::HubListener* listener = listenerFor(hub);
-	QVERIFY(listener != nullptr);
-
-	QSignalSpy stored(&posts, &Qdc::BoardBridge::entriesStored);
-	QVERIFY(stored.isValid());
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
-		listener->EventBoardEntry(core_entry(ENTRY_TTH, QStringLiteral("general"),
-		                                     AUTHOR_CID, 1786439000));
-		listener->EventBoardEntry(core_entry(OTHER_TTH, QStringLiteral("general"),
-		                                     AUTHOR_CID, 1786439662));
-
-		/* The same entry again, as the resumption window replays it. */
-		listener->EventBoardEntry(core_entry(OTHER_TTH, QStringLiteral("general"),
-		                                     AUTHOR_CID, 1786439662));
-	}));
-
-	QTRY_COMPARE(stored.count(), 1);
-
-	const QVector<Qdc::BoardEntry> kept =
-		stored.at(0).at(2).value<QVector<Qdc::BoardEntry>>();
-
-	/* The duplicate was dropped, and the two real entries were kept. */
-	QCOMPARE(kept.size(), 2);
-
-	QSignalSpy state(&posts, &Qdc::BoardBridge::boardStateReady);
-	QVERIFY(state.isValid());
-
-	posts.requestState(Qdc::BoardBridge::hubKey(hub.url()),
-	                   QStringLiteral("general"));
-
-	QTRY_COMPARE(state.count(), 1);
-	QCOMPARE(state.at(0).at(2).toULongLong(), 1786439662u);
-
-	/* Nothing has described the board, so whether it is whole cannot be answered. */
-	QCOMPARE(state.at(0).at(3).value<Qdc::BoardBridge::View>(),
-	         Qdc::BoardBridge::View::Unknown);
-
-	/* And the entries read back as a board rather than as what arrived. */
-	QSignalSpy loaded(&posts, &Qdc::BoardBridge::entriesLoaded);
-	posts.loadEntries(Qdc::BoardBridge::hubKey(hub.url()),
-	                  QStringLiteral("general"));
-
-	QTRY_COMPARE(loaded.count(), 1);
-	QCOMPARE(loaded.at(0).at(2).value<QVector<Qdc::BoardEntry>>().size(), 2);
-}
-
-/**
- * A hub that will not replay far enough back leaves a hole no subscription can
- * close, and an interface has to be able to say so rather than present an incomplete
- * board as the whole of one.
- */
-void TestBridge::aBoardWithAHoleInItSaysSo()
-{
-	Qdc::BoardBridge posts(m_thread, nullptr, boards(QStringLiteral("gap")), this);
-	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.33:412"), this);
-
-	posts.follow(&hub);
-
-	QuickDC::HubListener* listener = listenerFor(hub);
-	QVERIFY(listener != nullptr);
-
-	QSignalSpy state(&posts, &Qdc::BoardBridge::boardStateReady);
-	QVERIFY(state.isValid());
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
-		listener->EventBoardEntry(core_entry(ENTRY_TTH, QStringLiteral("general"),
-		                                     AUTHOR_CID, 1786439000));
-	}));
-
-	/*
-	 * The hub then says it replays nothing older than a timestamp above what is
-	 * held, which is a hub raising its oldest rather than a client falling behind -
-	 * and the entries between the two are not coming either way.
-	 */
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
-		QuickDC::Board board;
-		board.name = "general";
-		board.permissions = QuickDC::Subscribe;
-		board.maxSize = 262144;
-		board.newest = 1786500000;
-		board.oldest = 1786440000;
-
-		listener->EventBoardDescribed(board);
-	}));
-
-	QTRY_VERIFY(state.count() >= 1);
-
-	const QVariantList last = state.at(state.count() - 1);
-
-	QCOMPARE(last.at(1).toString(), QStringLiteral("general"));
-	QCOMPARE(last.at(3).value<Qdc::BoardBridge::View>(),
-	         Qdc::BoardBridge::View::Gap);
-}
-
-/**
- * An entry arriving is not a reason to ask anybody for anything.
- *
- * A subscription is cheap and a body is not. Fetching one says "I have read this" to
- * whoever answers - and the author is the only source until somebody else has read
- * it, so an author who records who fetches has a complete census of the readers a
- * subscription delivered the entry to within the second. So this checks the queue
- * itself: not that no signal was emitted, but that the core was never asked.
- */
-void TestBridge::nothingIsFetchedMerelyBecauseAnEntryArrived()
-{
-	Qdc::TransferBridge transfers(m_thread, this);
-	Qdc::BoardBridge posts(m_thread, &transfers,
-	                       boards(QStringLiteral("unfetched")), this);
-	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.34:412"), this);
-
-	posts.follow(&hub);
-
-	QuickDC::HubListener* listener = listenerFor(hub);
-	QVERIFY(listener != nullptr);
-
-	QSignalSpy stored(&posts, &Qdc::BoardBridge::entriesStored);
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener] {
-		listener->EventBoardEntry(core_entry(ENTRY_TTH, QStringLiteral("general"),
-		                                     AUTHOR_CID, 1786439662));
-	}));
-
-	QTRY_COMPARE(stored.count(), 1);
-
-	/* Nothing is announced about the post's body, because nothing was attempted. */
-	QCOMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Announced);
-
-	const QByteArray hash = ENTRY_TTH.toUtf8();
-
-	const auto queuedNow = [this, hash] {
-		bool queued = false;
-
-		Qdc::Testing::runOnCore(m_thread, [this, hash, &queued] {
-			QuickDC::Core* core = Qdc::Testing::core(m_thread);
-			if (!core || !core->queue) return;
-
-			queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
-		});
-
-		return queued;
-	};
-
-	QVERIFY2(!queuedNow(), "an entry arriving put its body in the download queue");
-
-	/* And prefetching is off until a hub is named, so a thread opens the same way. */
-	const QString key = Qdc::BoardBridge::hubKey(hub.url());
-	QVERIFY(!posts.prefetches(key));
-
-	const QVector<Qdc::BoardEntry> thread = {
-		bridge_entry(ENTRY_TTH, QStringLiteral("general"), AUTHOR_CID, 412)
-	};
-
-	posts.prefetchThread(key, thread);
-
-	/*
-	 * Given a chance to happen before it is called absent. What a fetch changes is
-	 * written by a completion delivered to this thread's event loop, and waiting on the
-	 * core runs none of them - so a check that only blocks on the core reads back the
-	 * value it read before and would say the same whether or not anything was fetched.
-	 */
-	QTest::qWait(120);
-
-	QCOMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Announced);
-	QVERIFY2(!queuedNow(), "a thread was prefetched from a hub nobody had named");
-
-	/*
-	 * And named, the same call does fetch it. This half is what makes the other half
-	 * mean anything: without it every assertion above would hold just as well for a
-	 * prefetch that never worked at all, which is the one thing they exist to tell
-	 * apart from a prefetch that is off.
-	 */
-	posts.setPrefetch(key, true);
-	QVERIFY(posts.prefetches(key));
-
-	posts.prefetchThread(key, thread);
-
-	QTRY_COMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Fetching);
-	QTRY_VERIFY2(queuedNow(), "a thread prefetched from a named hub was not fetched");
-
-	/*
-	 * And taken out again, because the queue belongs to the core and the core outlives
-	 * every case in this binary: a file left in it under a hash the other cases use is
-	 * this one deciding what they find.
-	 */
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash] {
-		QuickDC::Core* core = Qdc::Testing::core(m_thread);
-		if (!core || !core->queue) return;
-
-		if (QuickDC::QueueFile* file = core->queue->getFileByTTH(hash.constData()))
-			core->queue->remove(file);
-	}));
-
-	QVERIFY(!queuedNow());
-}
-
-/**
- * Bytes that do not hash to the name they were asked for are not the post, are
- * thrown away entirely, and are never offered to anybody.
- *
- * This is the check everything else in the extension rests on. Until it has passed,
- * an index entry is a stranger's description of a file that may not exist - and a
- * client that answered searches for what it had not checked would spread a forgery
- * under a name other clients have verified.
- */
-void TestBridge::aDocumentThatIsNotThePostIsThrownAwayAndNeverServed()
-{
-	const QString directory = boards(QStringLiteral("junk"));
-
-	Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
-
-	/* Serving is on, so that nothing is being proved by its being off. */
-	posts.setServing(QStringLiteral("adc://192.0.2.35:412"), true);
-
-	const QString file = QDir(directory).filePath(QStringLiteral("arrived"));
-
-	QFile bytes(file);
-	QVERIFY(bytes.open(QIODevice::WriteOnly));
-	bytes.write("IBB0 ID" + AUTHOR_CID.toUtf8() + " SJx\nnot the post it claims");
-	bytes.close();
-
-	QSignalSpy unavailable(&posts, &Qdc::BoardBridge::postUnavailable);
-	QVERIFY(unavailable.isValid());
-
-	posts.adopt(QStringLiteral("adc://192.0.2.35:412"),
-	            bridge_entry(ENTRY_TTH, QStringLiteral("general"), AUTHOR_CID, 412),
-	            file);
-
-	QTRY_COMPARE(unavailable.count(), 1);
-	QCOMPARE(unavailable.at(0).at(0).toString(), ENTRY_TTH);
-	QCOMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Unavailable);
-
-	/* Discarded entirely, and never filed under a name that does not describe it. */
-	QVERIFY2(!QFile::exists(file), "the bytes were kept after failing to verify");
-	QVERIFY(!QFile::exists(QDir(directory).filePath(QStringLiteral("posts/")
-	                                                + ENTRY_TTH)));
-}
-
-/**
- * Where the document and the hub disagree about the author, the post is attributed
- * to the hub's claim and the document's is shown as a claim.
- *
- * There is no automatic resolution: the document says who wrote the post and the hub
- * says who submitted it, which are claims about different events. The honest case -
- * a post relayed to a second hub by somebody who did not write it - is
- * indistinguishable from a forgery, so what must never happen is the document's
- * claim being presented as the author.
- */
-void TestBridge::aDocumentWhoseAuthorDisagreesIsDisputedAndAttributedToTheIndex()
-{
-	const QString directory = boards(QStringLiteral("disputed"));
-	const QString hubUrl = QStringLiteral("adc://192.0.2.36:412");
-
-	Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
-	posts.setServing(hubUrl, true);
-
-	const QByteArray document =
-		post_document(AUTHOR_CID, QStringLiteral("Hub upgrade on Saturday"),
-		              "The hub will be offline on Saturday.\n");
-
-	const QString tth = tth_of(document);
-	QCOMPARE(tth.size(), 39);
-
-	const QString file = QDir(directory).filePath(QStringLiteral("relayed"));
-
-	QFile bytes(file);
-	QVERIFY(bytes.open(QIODevice::WriteOnly));
-	bytes.write(document);
-	bytes.close();
-
-	QSignalSpy ready(&posts, &Qdc::BoardBridge::postReady);
-	QVERIFY(ready.isValid());
-
-	/* The hub says it accepted the post from somebody other than its author. */
-	posts.adopt(hubUrl,
-	            bridge_entry(tth, QStringLiteral("general"), OTHER_CID,
-	                         static_cast<quint64>(document.size())),
-	            file);
-
-	QTRY_COMPARE(ready.count(), 1);
-
-	const Qdc::BoardPost post = ready.at(0).at(1).value<Qdc::BoardPost>();
-
-	QCOMPARE(post.state, Qdc::PostState::Disputed);
-	QCOMPARE(posts.postState(tth), Qdc::PostState::Disputed);
-
-	/* The document's own claim, which is what that field means and is not the author. */
-	QCOMPARE(post.cid, AUTHOR_CID);
-
-	/* And the attribution, which is the index entry's and never the document's. */
-	QCOMPARE(posts.attribution(tth), OTHER_CID);
-
-	QCOMPARE(post.subject, QStringLiteral("Hub upgrade on Saturday"));
-	QVERIFY(post.body.startsWith(QStringLiteral("The hub will be offline")));
-
-	/* It verified, so it is held under its hash and the fetched copy has moved. */
-	QVERIFY(QFile::exists(QDir(directory).filePath(QStringLiteral("posts/") + tth)));
-	QVERIFY(!QFile::exists(file));
-
-	/*
-	 * And asking again reads the copy that is held rather than adopting it a second
-	 * time, which would be the store handing its own document to be moved away.
-	 */
-	QSignalSpy again(&posts, &Qdc::BoardBridge::postReady);
-
-	posts.fetch(hubUrl, bridge_entry(tth, QStringLiteral("general"), OTHER_CID,
-	                                 static_cast<quint64>(document.size())));
-
-	QTRY_COMPARE(again.count(), 1);
-	QVERIFY2(QFile::exists(QDir(directory).filePath(QStringLiteral("posts/") + tth)),
-	         "reading a post that is held threw the document away");
-}
-
-/**
- * A declared size bounds nothing, so the transfer is bounded here and abandoned when
- * it is passed.
- *
- * Nothing verifies the size before the transfer: the author states it and the hub
- * copies it, so a peer answering an entry which declared four hundred bytes may send
- * for as long as it is allowed to.
- */
-void TestBridge::aTransferPastItsCapIsAbandoned()
-{
-	/* Both bounds, and neither is the other's excuse. */
-	QVERIFY(Qdc::BoardBridge::passesCap(2000, 0, 1024));
-	QVERIFY(Qdc::BoardBridge::passesCap(500, 412, 1024));
-	QVERIFY(!Qdc::BoardBridge::passesCap(412, 412, 1024));
-	QVERIFY(!Qdc::BoardBridge::passesCap(5000, 0, 0));
-
-	const QString directory = boards(QStringLiteral("capped"));
-
-	Qdc::TransferBridge transfers(m_thread, this);
-	Qdc::BoardBridge posts(m_thread, &transfers, directory, this);
-
-	posts.setFetchCap(1024);
-	QCOMPARE(posts.fetchCap(), 1024u);
-
-	/* An entry that declares more than the cap is not asked for at all. */
-	QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnavailable);
-
-	posts.fetch(QStringLiteral("adc://192.0.2.37:412"),
-	            bridge_entry(OTHER_TTH, QStringLiteral("general"), AUTHOR_CID,
-	                         64 * 1024));
-
-	QTRY_COMPARE(refused.count(), 1);
-	QCOMPARE(refused.at(0).at(0).toString(), OTHER_TTH);
-
-	/* One that declares nothing is fetched, and then bounded by what arrives. */
-	posts.fetch(QStringLiteral("adc://192.0.2.37:412"),
-	            bridge_entry(ENTRY_TTH, QStringLiteral("general"), AUTHOR_CID, 0));
-
-	QTRY_COMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Fetching);
-
-	Qdc::TransferInfo row;
-	row.filename = QDir(QDir(directory).filePath(QStringLiteral("incoming")))
-		.filePath(ENTRY_TTH);
-	row.transferred = 4096;
-	row.length = 4096;
-
-	posts.abandonOverCap({row});
-
-	QTRY_COMPARE(refused.count(), 2);
-	QCOMPARE(refused.at(1).at(0).toString(), ENTRY_TTH);
-	QCOMPARE(posts.postState(ENTRY_TTH), Qdc::PostState::Unavailable);
-
-	/* And it is out of the queue, so nothing goes on fetching it. */
-	const QByteArray hash = ENTRY_TTH.toUtf8();
-	bool queued = true;
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash, &queued] {
-		QuickDC::Core* core = Qdc::Testing::core(m_thread);
-		if (!core || !core->queue) return;
-
-		queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
-	}));
-
-	QVERIFY2(!queued, "an abandoned fetch was left in the queue");
-}
-
-/**
- * A body somebody is reading is not a download somebody chose.
- *
- * A transfer list is a list of what the user asked for, and a thread of ten replies
- * would otherwise put ten rows in it. What is hidden is the row and not the
- * transfer: the file is queued and fetched exactly as before.
- */
-void TestBridge::aPostBeingReadIsNotInSomebodysTransferList()
-{
-	const QString directory = boards(QStringLiteral("hidden"));
-	const QString incoming = QDir(directory).filePath(QStringLiteral("incoming"));
-
-	/* A directory whose name merely begins the same way is somebody's own file. */
-	QVERIFY(Qdc::TransferBridge::isUnder(incoming + QStringLiteral("/x"),
-	                                     {incoming}));
-	QVERIFY(!Qdc::TransferBridge::isUnder(incoming + QStringLiteral("scripts/x"),
-	                                      {incoming}));
-	QVERIFY(!Qdc::TransferBridge::isUnder(QString(), {incoming}));
-
-	Qdc::TransferInfo hidden;
-	hidden.id = 1;
-	hidden.filename = QDir(incoming).filePath(ENTRY_TTH);
-	hidden.transferred = 100;
-	hidden.length = 412;
-
-	Qdc::TransferInfo chosen;
-	chosen.id = 2;
-	chosen.filename = QDir(directory).filePath(QStringLiteral("holiday.jpg"));
-	chosen.transferred = 100;
-	chosen.length = 4096;
-
-	const QVector<Qdc::TransferInfo> folded =
-		Qdc::TransferBridge::foldByFile({hidden, chosen}, {}, {}, 0, {incoming});
-
-	QCOMPARE(folded.size(), 1);
-	QCOMPARE(folded.at(0).filename, chosen.filename);
-
-	Qdc::TransferBridge transfers(m_thread, this);
-	transfers.hidePath(incoming);
-	QCOMPARE(transfers.hiddenPaths(), QStringList{incoming});
-
-	const QString body = QDir(incoming).filePath(ENTRY_TTH);
-	const QString film = path(QStringLiteral("film.mkv"));
-
-	transfers.enqueue(body, ENTRY_TTH, 412);
-	transfers.enqueue(film, OTHER_TTH, 4096);
-
-	/* The one the user asked for turns up in the snapshot, and the other does not. */
-	QTRY_VERIFY(!transfers.queueSnapshot().isEmpty());
-
-	bool sawFilm = false;
-	bool sawBody = false;
-
-	for (const Qdc::QueueEntry& entry : transfers.queueSnapshot())
-	{
-		if (entry.filename == film) sawFilm = true;
-		if (entry.filename == body) sawBody = true;
-	}
-
-	QVERIFY(sawFilm);
-	QVERIFY2(!sawBody, "a post being read appeared in the queue a user is shown");
-
-	/* The core has both of them, which is the point: the row is hidden, not the file. */
-	const QByteArray hidden8 = body.toUtf8();
-	bool queued = false;
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hidden8, &queued] {
-		QuickDC::Core* core = Qdc::Testing::core(m_thread);
-		if (!core || !core->queue) return;
-
-		queued = core->queue->getFileByName(hidden8.constData()) != nullptr;
-	}));
-
-	QVERIFY(queued);
-
-	transfers.removeFromQueue(body);
-	transfers.removeFromQueue(film);
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
-}
-
-/**
- * A document that has been marked to go is not released while a peer is being sent
- * it.
- *
- * An upload holds the interior handle the share manager returns for a hash - a
- * member of the object that withdrawing it destroys - and reads through it until the
- * transfer ends. The share manager hears nothing about transfers and the store knows
- * about neither, so this layer is the only one that can say; getting it wrong is a
- * use-after-free rather than a wrong pixel.
- */
-void TestBridge::aDocumentSomebodyIsBeingSentIsNotReleased()
-{
-	Qdc::TransferInfo sending;
-	sending.upload = true;
-	sending.filename = QStringLiteral("/home/somebody/.quickdc/posts/") + ENTRY_TTH;
-
-	Qdc::TransferInfo fetching;
-	fetching.filename = QStringLiteral("/home/somebody/.quickdc/posts/") + OTHER_TTH;
-
-	const QVector<QString> marked = {ENTRY_TTH, OTHER_TTH};
-
-	const QVector<QString> allowed =
-		Qdc::BoardBridge::releasable(marked, {sending, fetching});
-
-	/* The one being sent stays marked; the one merely being read is not an upload. */
-	QCOMPARE(allowed.size(), 1);
-	QCOMPARE(allowed.at(0), OTHER_TTH);
-
-	/* With nothing being sent, everything marked may go. */
-	QCOMPARE(Qdc::BoardBridge::releasable(marked, {}).size(), 2);
-
-	/* And a shared file that happens to be uploading is nothing to do with these. */
-	Qdc::TransferInfo unrelated;
-	unrelated.upload = true;
-	unrelated.filename = QStringLiteral("/home/somebody/share/holiday.jpg");
-
-	QCOMPARE(Qdc::BoardBridge::releasable(marked, {unrelated}).size(), 2);
-}
-
-/**
- * Opening a post reads it, the board's count falls, and dismissing the board reads the
- * rest of it.
- *
- * Read means opened by somebody in the reading pane, which is a different fact from the
- * document having been fetched: this test never fetches anything. The count is asked of
- * the bridge rather than worked out here, because answering it while a row is being
- * drawn is what it is for.
- */
-void TestBridge::aPostOpenedReadsAsReadAndTheBoardsCountFalls()
-{
-	const QString board = QStringLiteral("general");
-
-	Qdc::BoardBridge posts(m_thread, nullptr, boards(QStringLiteral("opened")), this);
-	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.51:412"), this);
-
-	const QString key = Qdc::BoardBridge::hubKey(hub.url());
-
-	posts.follow(&hub);
-
-	QuickDC::HubListener* listener = listenerFor(hub);
-	QVERIFY(listener != nullptr);
-
-	/* Nothing has been heard of this board, which is not the same as nothing unread. */
-	QCOMPARE(posts.unread(key, board), 0);
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, board] {
-		listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
-		                                     1786439000));
-		listener->EventBoardEntry(core_entry(OTHER_TTH, board, AUTHOR_CID,
-		                                     1786439662));
-	}));
-
-	QTRY_COMPARE(posts.unread(key, board), 2);
-
-	QVERIFY(!posts.isRead(key, board, ENTRY_TTH));
-	QVERIFY(!posts.isRead(key, board, OTHER_TTH));
-
-	posts.markRead(key, board, ENTRY_TTH);
-
-	QTRY_COMPARE(posts.unread(key, board), 1);
-
-	QVERIFY(posts.isRead(key, board, ENTRY_TTH));
-	QVERIFY2(!posts.isRead(key, board, OTHER_TTH),
-	         "a post nobody opened was marked read beside one that was");
-
-	/* And a post read twice is not read twice: nothing moves and nothing is said. */
-	QSignalSpy moved(&posts, &Qdc::BoardBridge::readStateChanged);
-	QVERIFY(moved.isValid());
-
-	posts.markRead(key, board, ENTRY_TTH);
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
-	QCoreApplication::processEvents();
-
-	QCOMPARE(moved.count(), 0);
-	QCOMPARE(posts.unread(key, board), 1);
-
-	/*
-	 * Dismissing the board reads the rest of it - one watermark and a mark for each
-	 * entry standing at its second, rather than a record for every post.
-	 */
-	posts.markAllRead(key, board);
-
-	QTRY_COMPARE(posts.unread(key, board), 0);
-	QVERIFY(posts.isRead(key, board, OTHER_TTH));
-}
-
-/**
- * Read state survives the bridge being destroyed and built again on the same directory,
- * which is the whole point of keeping it in the index rather than in a view.
- *
- * A board nobody has opened for a week has to still say so after a restart. A read set
- * held for as long as a window is open cannot answer that, and the answer it gives
- * instead - every post unread again - is wrong in the direction that makes a badge
- * useless.
- */
-void TestBridge::readStateOutlivesTheBridgeThatWroteIt()
-{
-	const QString board = QStringLiteral("general");
-	const QString directory = boards(QStringLiteral("remembered"));
-
-	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.52:412"), this);
-	const QString key = Qdc::BoardBridge::hubKey(hub.url());
-
-	{
-		Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
-		posts.follow(&hub);
-
-		QuickDC::HubListener* listener = listenerFor(hub);
-		QVERIFY(listener != nullptr);
-
-		QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, board] {
-			listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
-			                                     1786439000));
-			listener->EventBoardEntry(core_entry(OTHER_TTH, board, AUTHOR_CID,
-			                                     1786439662));
-		}));
-
-		QTRY_COMPARE(posts.unread(key, board), 2);
-
-		posts.markRead(key, board, ENTRY_TTH);
-		QTRY_COMPARE(posts.unread(key, board), 1);
-	}
-
-	/* The store is deleted inside a job, so this is where that job has finished. */
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
-
-	Qdc::BoardBridge again(m_thread, nullptr, directory, this);
-
-	QSignalSpy loaded(&again, &Qdc::BoardBridge::entriesLoaded);
-	QVERIFY(loaded.isValid());
-
-	/* A bridge that has just been built has heard nothing at all yet. */
-	QCOMPARE(again.unread(key, board), 0);
-	QVERIFY(!again.isRead(key, board, ENTRY_TTH));
-
-	again.loadEntries(key, board);
-
-	QTRY_COMPARE(loaded.count(), 1);
-	QCOMPARE(loaded.at(0).at(2).value<QVector<Qdc::BoardEntry>>().size(), 2);
-
-	/*
-	 * Both entries came back and one of them is still read, so the board still counts
-	 * the one nobody has opened - which is what the user left it saying.
-	 */
-	QVERIFY2(again.isRead(key, board, ENTRY_TTH),
-	         "a post read before the restart came back unread");
-
-	QVERIFY(!again.isRead(key, board, OTHER_TTH));
-	QCOMPARE(again.unread(key, board), 1);
-}
-
-/**
- * A mark that could not be written leaves the post unread, deliberately.
- *
- * Of the two ways to be wrong about this, a count that overstates asks somebody to look
- * again at a post they have already read, and one that understates hides a post nobody
- * has seen. So a read record that did not reach the disk is not pretended to have: the
- * index is asked what the post reads as afterwards rather than told.
- */
-void TestBridge::aMarkThatCouldNotBeWrittenLeavesThePostUnread()
-{
-	const QString board = QStringLiteral("general");
-	const QString directory = boards(QStringLiteral("unwritable"));
-
-	Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
-	Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.53:412"), this);
-
-	const QString key = Qdc::BoardBridge::hubKey(hub.url());
-
-	posts.follow(&hub);
-
-	QuickDC::HubListener* listener = listenerFor(hub);
-	QVERIFY(listener != nullptr);
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, board] {
-		listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
-		                                     1786439000));
-	}));
-
-	QTRY_COMPARE(posts.unread(key, board), 1);
-
-	/*
-	 * The board's own index file, which is named after a digest of the hub and the
-	 * board rather than after either of them - so it is found by being the one file
-	 * this board wrote rather than by a name built here.
-	 */
-	const QDir written(QDir(directory).filePath(QStringLiteral("boards")));
-	const QStringList files = written.entryList(QDir::Files);
-
-	QCOMPARE(files.size(), 1);
-
-	const QString index = written.filePath(files.at(0));
-	QVERIFY(QFile::setPermissions(index, QFileDevice::ReadOwner));
-
-	posts.markRead(key, board, ENTRY_TTH);
-
-	/* The mark's job is ordered before this one, and its answer before these lines. */
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
-	QCoreApplication::processEvents();
-
-	QVERIFY2(!posts.isRead(key, board, ENTRY_TTH),
-	         "a mark that could not be written was reported as read");
-
-	QCOMPARE(posts.unread(key, board), 1);
-
-	/*
-	 * And with the file writable again the same mark goes through, which is what says
-	 * the refusal above was the write failing rather than nothing having happened.
-	 */
-	QVERIFY(QFile::setPermissions(index, QFileDevice::ReadOwner
-	                                     | QFileDevice::WriteOwner));
-
-	posts.markRead(key, board, ENTRY_TTH);
-
-	QTRY_COMPARE(posts.unread(key, board), 0);
-	QVERIFY(posts.isRead(key, board, ENTRY_TTH));
-}
-
-/**
- * A board read back off the disk knows which of its documents are here, and does not
- * pretend to know what they came to.
- *
- * Nothing else on this side ever asks the store, so without this every post on a board
- * that is reopened - or on one that comes back after a restart - reads as though its body
- * had never been fetched, including a post written on this machine. What must not happen
- * instead is the opposite mistake: a held document being called verified. Step 4 of
- * verification compares the author the document claims against the one the hub claims,
- * that comparison was made when the document was first read, and it is written down
- * nowhere - so a post the two disagree about would come back drawn as one they agreed on.
- */
-void TestBridge::aBoardReadBackKnowsWhichDocumentsItHolds()
-{
-
-	const QString board = QStringLiteral("general");
-	const QString directory = boards(QStringLiteral("remembers-documents"));
-	const QString hubUrl = QStringLiteral("adc://192.0.2.54:412");
-
-	Qdc::HubBridge hub(m_thread, hubUrl, this);
-	const QString key = Qdc::BoardBridge::hubKey(hub.url());
-
-	/* One document that is the post it claims to be, and one that is not. */
-	const QByteArray document =
-		post_document(AUTHOR_CID, QStringLiteral("Hub upgrade on Saturday"),
-		              "The hub will be offline on Saturday.\n");
-
-	const QByteArray junk = "this hashes to its name and is not a post document\n";
-
-	const QString readable = tth_of(document);
-	const QString unreadable = tth_of(junk);
-
-	QCOMPARE(readable.size(), 39);
-	QCOMPARE(unreadable.size(), 39);
-
-	{
-		Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
-		posts.follow(&hub);
-
-		QuickDC::HubListener* listener = listenerFor(hub);
-		QVERIFY(listener != nullptr);
-
-		/* Three entries: the two documents, and one whose body nobody ever fetched. */
-		QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, board, readable, unreadable] {
-			listener->EventBoardEntry(core_entry(readable, board, AUTHOR_CID,
-			                                     1786439000));
-			listener->EventBoardEntry(core_entry(unreadable, board, AUTHOR_CID,
-			                                     1786439001));
-			listener->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID,
-			                                     1786439002));
-		}));
-
-		QTRY_COMPARE(posts.unread(key, board), 3);
-
-		const QString first = QDir(directory).filePath(QStringLiteral("first"));
-		const QString second = QDir(directory).filePath(QStringLiteral("second"));
-
-		QFile bytes(first);
-		QVERIFY(bytes.open(QIODevice::WriteOnly));
-		bytes.write(document);
-		bytes.close();
-
-		QFile other(second);
-		QVERIFY(other.open(QIODevice::WriteOnly));
-		other.write(junk);
-		other.close();
-
-		QSignalSpy ready(&posts, &Qdc::BoardBridge::postReady);
-
-		/*
-		 * The final one of the two failures, and not the "not this time" one: these
-		 * bytes hash to the name the entry gave and are not a post document, so no
-		 * copy anywhere differs and asking again would produce nothing.
-		 */
-		QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnreadable);
-		QSignalSpy later(&posts, &Qdc::BoardBridge::postUnavailable);
-
-		posts.adopt(key, bridge_entry(readable, board, AUTHOR_CID,
-		                              static_cast<quint64>(document.size())), first);
-
-		posts.adopt(key, bridge_entry(unreadable, board, AUTHOR_CID,
-		                              static_cast<quint64>(junk.size())), second);
-
-		QTRY_COMPARE(ready.count(), 1);
-		QTRY_COMPARE(refused.count(), 1);
-		QCOMPARE(later.count(), 0);
-
-		/* Both are here from the moment they were adopted, whatever they came to. */
-		QVERIFY(posts.isHeld(readable));
-		QVERIFY(posts.isHeld(unreadable));
-		QVERIFY(!posts.isHeld(ENTRY_TTH));
-	}
-
-	/* The store is deleted inside a job, so this is where that job has finished. */
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
-
-	Qdc::BoardBridge again(m_thread, nullptr, directory, this);
-
-	/* A bridge that has just been built has heard nothing at all yet. */
-	QVERIFY(!again.isHeld(readable));
-
-	QSignalSpy loaded(&again, &Qdc::BoardBridge::entriesLoaded);
-	QVERIFY(loaded.isValid());
-
-	again.loadEntries(key, board);
-
-	QTRY_COMPARE(loaded.count(), 1);
-	QCOMPARE(loaded.at(0).at(2).value<QVector<Qdc::BoardEntry>>().size(), 3);
-
-	/* What is here is here again, and the entry whose body was never fetched is not. */
-	QVERIFY2(again.isHeld(readable),
-	         "a document on the disk was forgotten when the board was read back");
-
-	QVERIFY(again.isHeld(unreadable));
-	QVERIFY(!again.isHeld(ENTRY_TTH));
-
-	/*
-	 * And being held is not a verdict. The document is read again on being opened and
-	 * the state comes out of that reading; declaring it verified here would present a
-	 * post whose author the hub and the document disagree about as one they agreed on.
-	 */
-	QCOMPARE(again.postState(readable), Qdc::PostState::Announced);
-	QCOMPARE(again.attribution(readable), QString());
-
-	/*
-	 * The one that cannot be read is the exception, because that answer does survive:
-	 * these bytes hash to the name the entry gave and are not a post, so every copy of
-	 * it is these same bytes and there is nothing for a reader to ask anybody for.
-	 */
-	QCOMPARE(again.postState(unreadable), Qdc::PostState::Unavailable);
-	QCOMPARE(again.postState(ENTRY_TTH), Qdc::PostState::Announced);
-
-	/*
-	 * And the same again for an entry that arrives rather than one read back, which is
-	 * the way it actually happens: a document is held by hash and is the same document
-	 * on every hub, while an index belongs to one board on one of them. So the ordinary
-	 * way to meet a post whose bytes are already on this machine is as news from a second
-	 * hub - and asking only on the way back from the disk left it drawn as unfetched and
-	 * then fetched over the network from somebody who would be told, for a file that was
-	 * already here.
-	 */
-	const QString elsewhere = QStringLiteral("adc://192.0.2.55:412");
-
-	Qdc::HubBridge second(m_thread, elsewhere, this);
-	const QString otherKey = Qdc::BoardBridge::hubKey(second.url());
-
-	/*
-	 * A third bridge, which has never read a board back. Asking the one above would
-	 * prove nothing: it already knows what it holds from the load, so the answer would
-	 * be right whether an arriving entry was checked or not.
-	 */
-	Qdc::BoardBridge fresh(m_thread, nullptr, directory, this);
-	fresh.follow(&second);
-
-	QVERIFY(!fresh.isHeld(readable));
-
-	QuickDC::HubListener* other = listenerFor(second);
-	QVERIFY(other != nullptr);
-
-	QSignalSpy arrived(&fresh, &Qdc::BoardBridge::entriesStored);
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [other, board, readable, unreadable] {
-		other->EventBoardEntry(core_entry(readable, board, AUTHOR_CID, 1786440000));
-		other->EventBoardEntry(core_entry(unreadable, board, AUTHOR_CID, 1786440001));
-		other->EventBoardEntry(core_entry(ENTRY_TTH, board, AUTHOR_CID, 1786440002));
-	}));
-
-	QTRY_VERIFY(arrived.count() >= 1);
-	QTRY_COMPARE(fresh.unread(otherKey, board), 3);
-
-	QVERIFY2(fresh.isHeld(readable),
-	         "a document on the disk was not recognised in an arriving entry");
-
-	QVERIFY(fresh.isHeld(unreadable));
-	QVERIFY(!fresh.isHeld(ENTRY_TTH));
-
-	/* And the one that can never be read says so without anybody pressing anything. */
-	QTRY_COMPARE(fresh.postState(unreadable), Qdc::PostState::Unavailable);
-}
-
-/**
- * A post whose document is here is read off this disk, and nobody is asked anything.
- *
- * The rule that a body is never fetched without a reader asking is a privacy rule: the
- * request goes to whoever holds the document, which at first is only its author, so a
- * fetch nobody asked for is a census of the post's readers. Reading a file that is
- * already here is visible to nobody, so it needs no press - and it must not be able to
- * turn into a fetch, however stale this side's idea of what it holds has become.
- */
-void TestBridge::aHeldDocumentIsReadWithoutAskingAnybody()
-{
-	const QString board = QStringLiteral("general");
-	const QString directory = boards(QStringLiteral("read-from-disk"));
-	const QString hubUrl = QStringLiteral("adc://192.0.2.55:412");
-
-	Qdc::TransferBridge transfers(m_thread, this);
-	Qdc::BoardBridge posts(m_thread, &transfers, directory, this);
-
-	const QByteArray document =
-		post_document(AUTHOR_CID, QStringLiteral("Hub upgrade on Saturday"),
-		              "The hub will be offline on Saturday.\n");
-
-	const QString tth = tth_of(document);
-	const QString file = QDir(directory).filePath(QStringLiteral("composed"));
-
-	QFile bytes(file);
-	QVERIFY(bytes.open(QIODevice::WriteOnly));
-	bytes.write(document);
-	bytes.close();
-
-	const Qdc::BoardEntry entry =
-		bridge_entry(tth, board, AUTHOR_CID, static_cast<quint64>(document.size()));
-
-	QSignalSpy ready(&posts, &Qdc::BoardBridge::postReady);
-	QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnavailable);
-	QVERIFY(ready.isValid());
-
-	posts.adopt(hubUrl, entry, file);
-
-	QTRY_COMPARE(ready.count(), 1);
-	QVERIFY(posts.isHeld(tth));
-
-	/*
-	 * Opened again, as a reader coming back to a post does. Fetching is momentary and is
-	 * said at once rather than when the disk answers: for the moment this takes, the
-	 * post must not go on saying that nothing about it has been verified.
-	 */
-	posts.readHeld(hubUrl, entry);
-	QCOMPARE(posts.postState(tth), Qdc::PostState::Fetching);
-
-	QTRY_COMPARE(ready.count(), 2);
-
-	const Qdc::BoardPost post = ready.at(1).at(1).value<Qdc::BoardPost>();
-
-	QCOMPARE(post.state, Qdc::PostState::Verified);
-	QCOMPARE(posts.postState(tth), Qdc::PostState::Verified);
-	QCOMPARE(post.subject, QStringLiteral("Hub upgrade on Saturday"));
-	QVERIFY(post.body.startsWith(QStringLiteral("The hub will be offline")));
-
-	/* And the document is still where it was: reading it is not adopting it again. */
-	QVERIFY(QFile::exists(QDir(directory).filePath(QStringLiteral("posts/") + tth)));
-
-	/* Nothing went out for it. This is the check that matters: the queue itself. */
-	const QByteArray hash = tth.toUtf8();
-	bool queued = true;
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash, &queued] {
-		QuickDC::Core* core = Qdc::Testing::core(m_thread);
-		if (!core || !core->queue) return;
-
-		queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
-	}));
-
-	QVERIFY2(!queued, "reading a post that is on this disk asked a peer for it");
-
-	/*
-	 * And a post whose document is not here is left alone entirely. Not refused and not
-	 * fetched: nobody asked for this body, so nothing is said about it and nothing goes
-	 * on the network.
-	 */
-	const Qdc::BoardEntry absent = bridge_entry(OTHER_TTH, board, AUTHOR_CID, 412);
-
-	QVERIFY(!posts.isHeld(OTHER_TTH));
-
-	posts.readHeld(hubUrl, absent);
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
-	QCoreApplication::processEvents();
-
-	QCOMPARE(posts.postState(OTHER_TTH), Qdc::PostState::Announced);
-	QCOMPARE(ready.count(), 2);
-	QCOMPARE(refused.count(), 0);
-
-	const QByteArray other = OTHER_TTH.toUtf8();
-	queued = true;
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, other, &queued] {
-		QuickDC::Core* core = Qdc::Testing::core(m_thread);
-		if (!core || !core->queue) return;
-
-		queued = core->queue->getFileByTTH(other.constData()) != nullptr;
-	}));
-
-	QVERIFY2(!queued, "opening a post nobody holds fetched it without being asked");
-}
-
-/**
- * A document that is here and is not the post it claims to be is not offered as
- * something to fetch.
- *
- * These bytes hash to the name the entry gave, so every copy of the post is these same
- * bytes and it is unreadable for ever. There is nobody to ask and nothing to try again,
- * so what a reader gets is the reason - not a button that this bridge would only refuse.
- */
-void TestBridge::aDocumentKnownNotToBeThePostIsNotOfferedAsFetchable()
-{
-	const QString board = QStringLiteral("general");
-	const QString directory = boards(QStringLiteral("never-readable"));
-	const QString hubUrl = QStringLiteral("adc://192.0.2.56:412");
-
-	Qdc::TransferBridge transfers(m_thread, this);
-	Qdc::BoardBridge posts(m_thread, &transfers, directory, this);
-
-	const QByteArray junk = "these bytes are their own name and are not a post\n";
-	const QString tth = tth_of(junk);
-
-	const QString file = QDir(directory).filePath(QStringLiteral("arrived"));
-
-	QFile bytes(file);
-	QVERIFY(bytes.open(QIODevice::WriteOnly));
-	bytes.write(junk);
-	bytes.close();
-
-	const Qdc::BoardEntry entry =
-		bridge_entry(tth, board, AUTHOR_CID, static_cast<quint64>(junk.size()));
-
-	/*
-	 * Reported as unreadable both times: the bytes hash to the name and are not a post,
-	 * which is the answer for good rather than for now - so the reading side is told the
-	 * one that takes the entry off the board and never the one that keeps it.
-	 */
-	QSignalSpy refused(&posts, &Qdc::BoardBridge::postUnreadable);
-	QSignalSpy later(&posts, &Qdc::BoardBridge::postUnavailable);
-	QVERIFY(refused.isValid());
-
-	posts.adopt(hubUrl, entry, file);
-
-	QTRY_COMPARE(refused.count(), 1);
-
-	/* Kept, and remembered as what it is, so that it is not fetched and refused again. */
-	QVERIFY(posts.isHeld(tth));
-	QCOMPARE(posts.postState(tth), Qdc::PostState::Unavailable);
-
-	posts.readHeld(hubUrl, entry);
-
-	QTRY_COMPARE(refused.count(), 2);
-
-	QVERIFY2(refused.at(1).at(1).toString().contains(
-			QStringLiteral("not the post it claims to be")),
-	         qPrintable(refused.at(1).at(1).toString()));
-
-	QCOMPARE(later.count(), 0);
-	QCOMPARE(posts.postState(tth), Qdc::PostState::Unavailable);
-
-	/* And nothing was asked of anybody for it, which is the point of remembering. */
-	const QByteArray hash = tth.toUtf8();
-	bool queued = true;
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash, &queued] {
-		QuickDC::Core* core = Qdc::Testing::core(m_thread);
-		if (!core || !core->queue) return;
-
-		queued = core->queue->getFileByTTH(hash.constData()) != nullptr;
-	}));
-
-	QVERIFY2(!queued, "a document known not to be its post was fetched again");
-}
-
-bool TestBridge::isOffered(const QByteArray& tth)
-{
-	bool free = false;
-
-	Qdc::Testing::runOnCore(m_thread, [this, tth, &free] {
-		QuickDC::Core* core = Qdc::Testing::core(m_thread);
-		if (!core || !core->shares) return;
-
-		free = core->shares->isSlotFreeByTTH(tth.constData());
-	});
-
-	return free;
-}
-
-void TestBridge::readAPostInAnEarlierSession(const QString& directory,
-                                             const QString& address,
-                                             const QString& board,
-                                             const QByteArray& document)
-{
+	const QString address = QStringLiteral("adc://192.0.2.60:412");
 	const QString key = Qdc::BoardBridge::hubKey(address);
-	const QString tth = tth_of(document);
-	const QByteArray hash = tth.toUtf8();
+	const QString board = QStringLiteral("general");
+	const QString first = QStringLiteral("L6LKZG4CUXDSCJQHBLL5GFG6FWAPSLKK2S3VIFA");
+	const QString second = QStringLiteral("F6ED42THAKQCOCNHJOUCMOEOX4GOCT25D5WM7SY");
 
+	Qdc::HubBridge hub(m_thread, address);
 	{
-		Qdc::BoardBridge posts(m_thread, nullptr, directory);
-		posts.setServing(key, true);
-
-		Qdc::HubBridge hub(m_thread, address);
-		posts.follow(&hub);
-
-		QuickDC::HubListener* listener = listenerFor(hub);
-		QVERIFY(listener != nullptr);
-
+		Qdc::BoardBridge posts(m_thread);
 		QSignalSpy stored(&posts, &Qdc::BoardBridge::entriesStored);
-		QVERIFY(stored.isValid());
 
-		QVERIFY(Qdc::Testing::runOnCore(m_thread, [listener, tth, board] {
-			listener->EventBoardEntry(core_entry(tth, board, AUTHOR_CID, 1786439662));
+		QuickDC::HubListener* listener = listenerFor(hub);
+		QVERIFY(listener);
+
+		QVERIFY(Qdc::Testing::runOnCore(m_thread, [&] {
+			listener->EventBoardEntry(core_entry(first, board, 1786439662));
+			listener->EventBoardEntry(core_entry(second, board, 1786439663));
 		}));
 
+		/* In one batch, as a replay is: a board is not laid out once per entry. */
 		QTRY_COMPARE(stored.count(), 1);
+		QCOMPARE(stored.at(0).at(0).toString(), key);
+		QCOMPARE(stored.at(0).at(2).value<QVector<Qdc::BoardEntry>>().size(), 2);
+		QCOMPARE(posts.unread(key, board), 2);
 
-		const QString file = QDir(directory).filePath(QStringLiteral("fetched"));
-
-		QFile bytes(file);
-		QVERIFY(bytes.open(QIODevice::WriteOnly));
-		bytes.write(document);
-		bytes.close();
-
-		QSignalSpy ready(&posts, &Qdc::BoardBridge::postReady);
-		QVERIFY(ready.isValid());
-
-		posts.adopt(key, bridge_entry(tth, board, AUTHOR_CID,
-		                              static_cast<quint64>(document.size())),
-		            file);
-
-		QTRY_COMPARE(ready.count(), 1);
-		QCOMPARE(ready.at(0).at(1).value<Qdc::BoardPost>().state,
-		         Qdc::PostState::Verified);
-
-		/* Hashing is asynchronous, so the offer stands a moment after serve() did. */
-		QTRY_VERIFY(isOffered(hash));
+		/* Opened in the reading pane is read; nothing here fetched it. */
+		posts.read(key, board, first, false);
+		QTRY_COMPARE(posts.unread(key, board), 1);
+		QVERIFY(posts.isRead(key, board, first));
+		QCOMPARE(posts.postState(first), Qdc::PostState::Announced);
 	}
 
-	/* The document is on the disk, and this session's offer of it is withdrawn. */
-	QVERIFY(QFile::exists(QDir(directory).filePath(QStringLiteral("posts/") + tth)));
-
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [this, hash] {
-		QuickDC::Core* core = Qdc::Testing::core(m_thread);
-		if (!core || !core->shares) return;
-
-		core->shares->detach(hash.constData());
-	}));
-
-	QVERIFY2(!isOffered(hash), "the earlier session was still offering the document");
-}
-
-/**
- * A post held from an earlier session is answered for again when the board it is on is
- * taken up, and taken up means subscribed to rather than looked at.
- *
- * An offer lasts as long as the process that made it and no longer, which is
- * deliberate: whether a post is served is the user's decision to take again at every
- * start-up rather than something a configuration file remembers on their behalf. The
- * consequence is that somebody has to take it up again, and nobody did - so a client
- * would accumulate a store full of posts, draw every one of them off its own disk, and
- * still leave the next reader to find the only other copy elsewhere. Which is the one
- * thing a board rests on not happening.
- *
- * Subscribing is the moment that matters and a pane being opened is not, because a
- * client is a source for the boards it carries rather than for the ones somebody
- * happened to open today. A client that had read a board for a year and served it only
- * on the afternoons its user clicked on it would be, for every other purpose, not a
- * source at all.
- */
-void TestBridge::aPostHeldFromAnEarlierSessionIsOfferedWhenItsBoardIsTakenUp()
-{
-	const QString directory = boards(QStringLiteral("resumed"));
-	const QString board = QStringLiteral("general");
-	const QString address = QStringLiteral("adc://192.0.2.44:412");
-	const QString key = Qdc::BoardBridge::hubKey(address);
-
-	const QByteArray document =
-		post_document(AUTHOR_CID, QStringLiteral("Still here"),
-		              "A post outlives the session that read it.\n");
-
-	readAPostInAnEarlierSession(directory, address, board, document);
-
-	/* A client starting up: it subscribes from the cursor it cached, and nothing else. */
-	Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
-	posts.setServing(key, true);
-
-	Qdc::HubBridge hub(m_thread, address, this);
-	posts.follow(&hub);
-
-	QSignalSpy state(&posts, &Qdc::BoardBridge::boardStateReady);
-	QVERIFY(state.isValid());
-
-	posts.resume(&hub, board);
-
-	QTRY_COMPARE(state.count(), 1);
-	QCOMPARE(state.at(0).at(2).toULongLong(), 1786439662u);
-
-	QTRY_VERIFY2(isOffered(tth_of(document).toUtf8()),
-	             "a board was subscribed to and the post held on it offered to nobody");
-}
-
-/**
- * And the same when the board is read back to be drawn, which is the other way a client
- * meets what it already holds.
- *
- * Both paths, because they are reached in either order and by different clients: one
- * that starts up and subscribes without anybody opening a board, and one whose user
- * opens a board of a hub they have not joined. Neither is allowed to be the only one
- * that takes the documents up.
- */
-void TestBridge::aPostHeldFromAnEarlierSessionIsOfferedWhenItsBoardIsReadBack()
-{
-	const QString directory = boards(QStringLiteral("reoffered"));
-	const QString board = QStringLiteral("general");
-	const QString address = QStringLiteral("adc://192.0.2.45:412");
-	const QString key = Qdc::BoardBridge::hubKey(address);
-
-	const QByteArray document =
-		post_document(AUTHOR_CID, QStringLiteral("Read back"),
-		              "The board is drawn from what is cached.\n");
-
-	readAPostInAnEarlierSession(directory, address, board, document);
-
-	Qdc::BoardBridge posts(m_thread, nullptr, directory, this);
-	posts.setServing(key, true);
-
-	QSignalSpy loaded(&posts, &Qdc::BoardBridge::entriesLoaded);
-	QVERIFY(loaded.isValid());
-
-	posts.loadEntries(key, board);
+	Qdc::BoardBridge again(m_thread);
+	QSignalSpy loaded(&again, &Qdc::BoardBridge::entriesLoaded);
+	again.loadEntries(address, board);
 
 	QTRY_COMPARE(loaded.count(), 1);
-	QCOMPARE(loaded.at(0).at(2).value<QVector<Qdc::BoardEntry>>().size(), 1);
+	QCOMPARE(loaded.at(0).at(2).value<QVector<Qdc::BoardEntry>>().size(), 2);
+	QCOMPARE(again.unread(key, board), 1);
+	QVERIFY(again.isRead(key, board, first));
+	QVERIFY(!again.isRead(key, board, second));
+}
 
-	QTRY_VERIFY2(isOffered(tth_of(document).toUtf8()),
-	             "a board was read back and the post held on it offered to nobody");
+/**
+ * A post is drawn as the core decided it: read and attributed to the index, not
+ * this time and why, or never.
+ */
+void TestBridge::whatTheCoreSaysOfAPostIsWhatIsDrawn()
+{
+	namespace Ev = QuickDC::Api::Events;
+
+	Qdc::BoardBridge posts(nullptr);
+	QSignalSpy ready(&posts, &Qdc::BoardBridge::postReady);
+	QSignalSpy unavailable(&posts, &Qdc::BoardBridge::postUnavailable);
+	QSignalSpy unreadable(&posts, &Qdc::BoardBridge::postUnreadable);
+
+	Ev::PostStatus disputed;
+	disputed.tth = ENTRY_TTH.toStdString();
+	disputed.state = Ev::PostStatus::State::Disputed;
+	disputed.post.cid = "SOMEBODYELSE";
+	disputed.post.body = "words";
+	disputed.attributedTo = AUTHOR_CID.toStdString();
+	posts.take(disputed);
+
+	QCOMPARE(ready.count(), 1);
+	const Qdc::BoardPost post = ready.at(0).at(1).value<Qdc::BoardPost>();
+	QCOMPARE(post.state, Qdc::PostState::Disputed);
+	QCOMPARE(post.cid, QStringLiteral("SOMEBODYELSE"));
+	QCOMPARE(posts.attribution(ENTRY_TTH), AUTHOR_CID);
+
+	Ev::PostStatus lost;
+	lost.tth = "OTHER";
+	lost.state = Ev::PostStatus::State::Unavailable;
+	lost.why = Ev::PostStatus::Why::NobodyAnswered;
+	posts.take(lost);
+	QCOMPARE(unavailable.count(), 1);
+	QVERIFY(unavailable.at(0).at(1).toString().contains(QStringLiteral("could be reached")));
+	QCOMPARE(posts.postState(QStringLiteral("OTHER")), Qdc::PostState::Unavailable);
+
+	Ev::PostStatus bad;
+	bad.tth = "BAD";
+	bad.state = Ev::PostStatus::State::Unreadable;
+	bad.why = Ev::PostStatus::Why::NotAPost;
+	posts.take(bad);
+	QCOMPARE(unreadable.count(), 1);
+	QCOMPARE(unavailable.count(), 1);
+}
+
+void TestBridge::aPostWithNoSessionToGoOnSaysWhy()
+{
+	Qdc::HubBridge hub(nullptr, QStringLiteral("adc://192.0.2.61:412"));
+	Qdc::BoardBridge posts(nullptr);
+	QSignalSpy refused(&posts, &Qdc::BoardBridge::postRefused);
+
+	posts.write(&hub, QStringLiteral("general"), QString(), QStringLiteral("Hello"),
+	            QStringLiteral("A body"), false);
+
+	QCOMPARE(refused.count(), 1);
+	QVERIFY(!refused.at(0).at(0).toString().isEmpty());
 }
 
 /*

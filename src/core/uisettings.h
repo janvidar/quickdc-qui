@@ -58,16 +58,10 @@ extern const Flag   ChatMediaFetch;
 extern const Number ChatMediaLimit;
 extern const Number ChatMediaKeepDays;
 
-/**
- * Bulletin boards; a hub's own group in the session store may override the first two.
- *
- * Fetching ahead is off because a post is fetched from whoever holds it, which at
- * first is only its author: fetching unasked tells them who read it and when.
- */
-inline constexpr Flag   BoardPrefetch     {"Boards", "Fetch a thread ahead", false};
-inline constexpr Flag   BoardServe        {"Boards", "Offer what I have read", true};
-inline constexpr Number BoardKeepDays     {"Boards", "Keep posts for days", 90};
-inline constexpr Number BoardCache        {"Boards", "Cache size", 256 * 1024 * 1024};
+extern const Flag   BoardPrefetch;
+extern const Flag   BoardServe;
+extern const Number BoardKeepDays;
+extern const Number BoardCache;
 
 /** The colour scheme by name; empty for the built-in default, see defaultTheme(). */
 inline constexpr Text   ThemeName         {"Interface", "Theme", ""};

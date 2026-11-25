@@ -137,69 +137,9 @@ QVector<Qdc::TransferInfo> Qdc::TransferBridge::activeTransfers() const
 	return m_active;
 }
 
-void Qdc::TransferBridge::hidePath(const QString& prefix)
-{
-	if (prefix.isEmpty() || m_hidden.contains(prefix)) return;
-
-	m_hidden.append(prefix);
-
-	/*
-	 * What has already been gathered is dropped here rather than left to age out, so
-	 * that a caller which hides a directory before fetching into it and one which
-	 * hides it afterwards are shown the same list.
-	 */
-	QVector<TransferInfo> rows;
-	rows.reserve(m_active.size());
-
-	for (const TransferInfo& row : m_active)
-	{
-		if (!isUnder(row.filename, m_hidden)) rows.append(row);
-	}
-
-	QVector<QueueEntry> visible;
-	visible.reserve(m_queue.size());
-
-	for (const QueueEntry& entry : m_queue)
-	{
-		if (!isUnder(entry.filename, m_hidden)) visible.append(entry);
-	}
-
-	m_active = rows;
-	m_queue = visible;
-}
-
-QStringList Qdc::TransferBridge::hiddenPaths() const
-{
-	return m_hidden;
-}
-
-bool Qdc::TransferBridge::isUnder(const QString& filename,
-                                  const QStringList& prefixes)
-{
-	if (filename.isEmpty() || prefixes.isEmpty()) return false;
-
-	for (const QString& prefix : prefixes)
-	{
-		if (prefix.isEmpty()) continue;
-		if (filename == prefix) return true;
-
-		/*
-		 * The separator is what makes this a directory rather than a string: without
-		 * it "…/posts" would hide "…/postscript.pdf" as well, which is a file
-		 * somebody chose and must not vanish out of their transfer list.
-		 */
-		const QString within = prefix.endsWith(QLatin1Char('/'))
-			? prefix : prefix + QLatin1Char('/');
-
-		if (filename.startsWith(within)) return true;
-	}
-
-	return false;
-}
-
 QVector<Qdc::TransferInfo> Qdc::TransferBridge::foldByFile(
 	const QVector<TransferInfo>& chunks, const QVector<QueueEntry>& queued,
-	const QVector<TransferInfo>& previous, int sinceMs, const QStringList& hidden)
+	const QVector<TransferInfo>& previous, int sinceMs)
 {
 	QVector<TransferInfo> folded;
 	folded.reserve(chunks.size());
@@ -213,9 +153,6 @@ QVector<Qdc::TransferInfo> Qdc::TransferBridge::foldByFile(
 		/* Only a download has a ".part" to drop; a shared file may be called that. */
 		const QString name =
 			chunk.upload ? chunk.filename : final_name(chunk.filename);
-
-		/* Somebody else's business, and not this list's; see hidePath(). */
-		if (isUnder(name, hidden)) continue;
 
 		/*
 		 * A transfer with no file to name cannot be told from another one, so it
@@ -297,9 +234,6 @@ QVector<Qdc::TransferInfo> Qdc::TransferBridge::foldByFile(
 	for (const TransferInfo& before : previous)
 	{
 		if (placed.contains(before.id)) continue;
-
-		/* A row that has only just become somebody else's business goes now. */
-		if (isUnder(before.filename, hidden)) continue;
 
 		const auto moving = freshById.constFind(before.id);
 
@@ -495,26 +429,10 @@ void Qdc::TransferBridge::absorb(const QuickDC::Api::Events::TransfersSnapshot& 
 	const int since = m_taken.isValid() ? static_cast<int>(m_taken.restart()) : 0;
 	if (!m_taken.isValid()) m_taken.start();
 
-	m_active = foldByFile(active, queued, m_active, since, m_hidden);
+	m_active = foldByFile(active, queued, m_active, since);
 
-	QVector<QueueEntry> visible;
-	visible.reserve(queued.size());
-	quint32 count = taken.activeDownloads;
-
-	for (const QueueEntry& entry : queued)
-	{
-		if (!isUnder(entry.filename, m_hidden))
-		{
-			visible.append(entry);
-			continue;
-		}
-
-		/* A hidden download's connections are not this view's to count either. */
-		count -= qMin(count, entry.activeSources);
-	}
-
-	m_queue = markTransferring(visible, m_active);
-	m_activeCount = count;
+	m_queue = markTransferring(queued, m_active);
+	m_activeCount = taken.activeDownloads;
 	m_reading = false;
 
 	emit snapshotChanged();
@@ -536,22 +454,6 @@ void Qdc::TransferBridge::enqueue(const QString& filename, const QString& tth, q
 {
 	if (!m_thread || filename.isEmpty()) return;
 	m_thread->submit(QuickDC::Api::Commands::Enqueue{filename.toStdString(), tth.toStdString(), size});
-}
-
-void Qdc::TransferBridge::enqueueForReading(const QString& filename, const QString& tth,
-                                            quint64 size, const QString& hubUrl)
-{
-	if (!m_thread || filename.isEmpty() || tth.isEmpty()) return;
-	m_thread->submit(QuickDC::Api::Commands::EnqueueForReading{
-		filename.toStdString(), tth.toStdString(), size, hubUrl.toStdString()});
-}
-
-void Qdc::TransferBridge::addFallbackSource(const QString& tth, const QString& hubUrl,
-                                            const QString& cid)
-{
-	if (!m_thread || tth.isEmpty() || hubUrl.isEmpty() || cid.isEmpty()) return;
-	m_thread->submit(QuickDC::Api::Commands::AddFallbackSource{
-		tth.toStdString(), hubUrl.toStdString(), cid.toStdString()});
 }
 
 void Qdc::TransferBridge::enqueue(const QString& filename, const Qdc::SearchHit& hit)

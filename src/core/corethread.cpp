@@ -3,6 +3,7 @@
  */
 
 #include "corethread.h"
+#include "boardbridge.h"
 #include "completed.h"
 #include "corechannel.h"
 #include "favourites.h"
@@ -439,4 +440,104 @@ void Qdc::Testing::announce(HubDirectory& directory, const QVector<HubListEntry>
 		merged.hubs.push_back({entry, {}});
 	}
 	directory.take(merged);
+}
+
+namespace {
+
+QuickDC::BoardEntry to_core(const Qdc::BoardEntry& entry)
+{
+	QuickDC::BoardEntry converted;
+	converted.tth = entry.tth.toStdString();
+	converted.size = entry.size;
+	converted.board = entry.board.toStdString();
+	converted.cid = entry.cid.toStdString();
+	converted.nick = entry.nick.toStdString();
+	converted.parent = entry.parent.toStdString();
+	converted.thread = entry.thread.toStdString();
+	converted.subject = entry.subject.toStdString();
+	converted.timestamp = entry.timestamp;
+	converted.removed = entry.removed;
+	return converted;
+}
+
+}
+
+void Qdc::Testing::announceBoard(BoardBridge& boards, const QString& hubKey, const BoardInfo& board, bool left)
+{
+	QuickDC::Api::Events::BoardState told;
+	told.hubUrl = hubKey.toStdString();
+	told.board = board.name.toStdString();
+	told.described = true;
+	told.descriptor.name = told.board;
+	told.descriptor.title = board.title.toStdString();
+	told.descriptor.description = board.description.toStdString();
+	told.descriptor.permissions = board.permissions;
+	told.descriptor.maxSize = board.maxSize;
+	told.descriptor.newest = board.newest;
+	told.descriptor.oldest = board.oldest;
+	told.descriptor.posts = board.posts;
+	told.subscribed = !left;
+	told.left = left;
+	boards.take(told);
+}
+
+void Qdc::Testing::announceGone(BoardBridge& boards, const QString& hubKey, const QString& board)
+{
+	QuickDC::Api::Events::BoardState told;
+	told.hubUrl = hubKey.toStdString();
+	told.board = board.toStdString();
+	told.gone = true;
+	boards.take(told);
+}
+
+void Qdc::Testing::announceEntries(BoardBridge& boards, const QString& hubKey, const QString& board,
+                                   const QVector<BoardEntry>& entries, int unread, bool whole)
+{
+	QuickDC::Api::Events::BoardEntries told;
+	told.hubUrl = hubKey.toStdString();
+	told.board = board.toStdString();
+	for (const BoardEntry& entry : entries) told.entries.push_back(to_core(entry));
+	told.whole = whole;
+	told.unread = unread;
+	boards.take(told);
+}
+
+void Qdc::Testing::announceRead(BoardBridge& boards, const QString& hubKey, const QString& board, int unread,
+                                const QStringList& read, bool whole)
+{
+	QuickDC::Api::Events::BoardRead told;
+	told.hubUrl = hubKey.toStdString();
+	told.board = board.toStdString();
+	told.unread = unread;
+	for (const QString& tth : read) told.read.push_back(tth.toStdString());
+	told.whole = whole;
+	boards.take(told);
+}
+
+void Qdc::Testing::announcePost(BoardBridge& boards, const BoardPost& post, const QString& attributedTo)
+{
+	using Status = QuickDC::Api::Events::PostStatus;
+	Status told;
+	told.tth = post.tth.toStdString();
+	told.state = post.state == PostState::Disputed ? Status::State::Disputed : Status::State::Verified;
+	told.post.tth = told.tth;
+	told.post.cid = post.cid.toStdString();
+	told.post.parent = post.parent.toStdString();
+	told.post.subject = post.subject.toStdString();
+	told.post.body = post.body.toStdString();
+	told.post.dated = post.dated;
+	told.post.date = post.date;
+	told.post.richText = post.richText;
+	told.attributedTo = attributedTo.toStdString();
+	boards.take(told);
+}
+
+void Qdc::Testing::announceUnreadable(BoardBridge& boards, const QString& tth)
+{
+	using Status = QuickDC::Api::Events::PostStatus;
+	Status told;
+	told.tth = tth.toStdString();
+	told.state = Status::State::Unreadable;
+	told.why = Status::Why::NotAPost;
+	boards.take(told);
 }

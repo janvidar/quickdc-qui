@@ -97,43 +97,11 @@ public:
 	 * Static and public because it is worth testing on its own, and because the
 	 * rule it implements - what counts as "the same file" - is one that a caller
 	 * comparing a row against a live event has to agree with.
-	 *
-	 * @param hidden path prefixes whose files are left out entirely; see hidePath().
 	 */
 	static QVector<TransferInfo> foldByFile(const QVector<TransferInfo>& chunks,
 	                                        const QVector<QueueEntry>& queued,
 	                                        const QVector<TransferInfo>& previous = {},
-	                                        int sinceMs = 0,
-	                                        const QStringList& hidden = {});
-
-	/**
-	 * Keep the files under 'prefix' out of what a transfer view is shown.
-	 *
-	 * A transfer list is a list of what the user asked for. Not everything this
-	 * client fetches is that: the body of a bulletin somebody is reading is fetched
-	 * by hash the same way as any other file, and opening a thread of ten replies
-	 * would put ten rows in a list whose whole purpose is the film that was asked
-	 * for last night. So a caller that fetches on its own account names the directory
-	 * it fetches into, and its files are absent from activeTransfers(),
-	 * queueSnapshot() and the count of what is moving.
-	 *
-	 * Hiding a row is not hiding the transfer. The file is queued, is fetched, and
-	 * is reported to whoever asked for it by its own signals; what is hidden is one
-	 * view of it. Anything the user asked for is somewhere under a directory they
-	 * chose, so nothing of theirs can fall under one of these.
-	 */
-	void hidePath(const QString& prefix);
-
-	/** The prefixes hidePath() was given, in the order they were given. */
-	QStringList hiddenPaths() const;
-
-	/**
-	 * Whether 'filename' lies under one of 'prefixes': the rule hiding uses.
-	 *
-	 * A path component at a time rather than a bare string prefix, so that a
-	 * directory called "postscripts" is not hidden by one called "posts".
-	 */
-	static bool isUnder(const QString& filename, const QStringList& prefixes);
+	                                        int sinceMs = 0);
 
 	/**
 	 * The download queue, from the same snapshot, whole.
@@ -224,49 +192,6 @@ public slots:
 	 */
 	void enqueue(const QString& filename, const Qdc::SearchHit& hit);
 
-	/**
-	 * Queue a file somebody is waiting to read, and go looking for it at once.
-	 *
-	 * The difference from the plain enqueue() is when the search happens. The
-	 * queue's own rotation sends one search per two minutes across everything in it,
-	 * which is right for a background queue that nobody is watching and useless for
-	 * a document somebody has just clicked on: ten of them would be twenty minutes
-	 * before the last was even looked for, and every one of those turns is one the
-	 * user's own downloads did not get. So a search for this file goes out now,
-	 * without disturbing the rotation, which continues on exactly the schedule it
-	 * would have had.
-	 *
-	 * No source is named. That is deliberate and is the whole reason this is not
-	 * addFallbackSource() as well: a document's readers are visible to whoever
-	 * serves it, so where a search turns up somebody other than the author they are
-	 * preferred, and the author is named only if nobody else answers.
-	 *
-	 * @param size what to bound the file at, which for a post is the caller's own cap
-	 *        rather than any size a hub quoted.
-	 * @param hubUrl the hub the file was learned from, which is the only one asked
-	 *        about it. A post's hash is on one board and its readers are that hub's
-	 *        subscribers, so a search sent anywhere else reaches nobody who can answer
-	 *        and tells that hub's operator which boards this client reads. Empty asks
-	 *        every hub, for a file that was not learned from any one of them.
-	 */
-	void enqueueForReading(const QString& filename, const QString& tth, quint64 size,
-	                       const QString& hubUrl = QString());
-
-	/**
-	 * Name a source for a queued file, where nothing else has answered for it.
-	 *
-	 * Does nothing where the file already has a source, which is what makes this a
-	 * fallback rather than a first choice: the search sent by enqueueForReading()
-	 * is given its chance, and this is where a file nobody else answered for gets
-	 * the one source it is certain of.
-	 *
-	 * @param cid how the queue names a user: the client ID on ADC. A BBS0 index
-	 *        entry carries the CID of the session the hub accepted the post from, so
-	 *        the author of a post is a known source for its body.
-	 */
-	void addFallbackSource(const QString& tth, const QString& hubUrl,
-	                       const QString& cid);
-
 signals:
 	void transferStarted(const Qdc::TransferInfo& transfer);
 
@@ -323,8 +248,6 @@ private:
 	QVector<QueueEntry> m_queue;
 	quint32 m_activeCount = 0;
 
-	/** Whose rows are left out of every reading; see hidePath(). */
-	QStringList m_hidden;
 
 	/** Whether a reading has been asked for and not yet arrived. */
 	bool m_reading = false;

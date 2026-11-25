@@ -54,10 +54,9 @@ class TransferBridge;
  * decide which one a line belongs to - a private message may even be the first
  * sight of a conversation, and opens one.
  *
- * A board is routed the same way and for the same reason, with one rule of its own:
- * a hub describing a board puts a row in the tree and subscribes to nothing. A
- * subscription is a standing instruction to send data, so it is taken out when
- * somebody opens the board and not when the hub mentions it.
+ * A board is drawn from what the core says: it follows every board a hub describes,
+ * and each one it follows has a row under its hub. What is fetched, offered and
+ * kept of a board's posts is the core's to decide.
  */
 class HubsView final : public View {
 	Q_OBJECT
@@ -97,10 +96,8 @@ public:
 	/**
 	 * Stop following one board on a hub, as somebody choosing to leave it does.
 	 *
-	 * The hub is told, the row goes, and the board is remembered as left for as long as
-	 * the connection lasts - a descriptor arrives whenever a field of a board changes,
-	 * and on one anybody is posting to that is every few seconds, so without that it
-	 * would be put straight back.
+	 * The core is told, the row goes, and the core leaves the board for as long as the
+	 * connection lasts, so the next descriptor does not put it straight back.
 	 *
 	 * Distinct from the board being removed by the hub, which takes the same row away
 	 * and is not somebody saying they have finished with it: one that goes and comes
@@ -152,25 +149,11 @@ public:
 	QStringList openBoards(const QString& hubUrl) const;
 
 	/**
-	 * What this client holds of the boards it has been told about, built the first
-	 * time a hub is opened.
-	 *
-	 * Owned here rather than handed in, as the media bridge is, because a board's
-	 * rows hang off the hubs in this tree and nothing else in the window has any use
-	 * for one. Every answer it gives arrives as a signal, so a caller watches it
-	 * rather than asking it.
+	 * What the core says of the boards, built the first time it is wanted. Owned here
+	 * because a board's rows hang off the hubs in this tree and nothing else in the
+	 * window has any use for one.
 	 */
 	BoardBridge* bulletins();
-
-	/**
-	 * Where the index and the documents are kept; "~/.quickdc" unless this says
-	 * otherwise.
-	 *
-	 * A seam, and only a test has any use for it: the user's own directory is not
-	 * somewhere a test may leave a board behind. Has to be called before a hub is
-	 * opened, since that is what builds the bridge.
-	 */
-	void setBoardDirectory(const QString& directory);
 
 	/**
 	 * How a hub password is asked for: given the hub's address, return the
@@ -235,30 +218,6 @@ private:
 		QHash<QString, BoardPane*> boards;
 
 		/**
-		 * The boards somebody has closed on this connection.
-		 *
-		 * Every board a hub describes is followed from the moment it says so, so what
-		 * has to be remembered is the exception rather than the rule. A hub sends a
-		 * fresh descriptor whenever a field changes and the post count is one, so on
-		 * a busy board they arrive continually - and each would put back a row that
-		 * had just been closed if nothing here said not to.
-		 *
-		 * For this connection only. Reconnecting to a hub is being told what it has
-		 * again, and a board left an hour ago is not something to hold against it.
-		 */
-		QSet<QString> left;
-
-		/**
-		 * The boards a subscription has been asked for on this connection.
-		 *
-		 * Dropped when the hub says it has no boards, because that cancels every
-		 * subscription on the connection and is the only thing that says so - and
-		 * dropped again when it says it has them, since a session that has just
-		 * begun holds none either.
-		 */
-		QSet<QString> subscribed;
-
-		/**
 		 * A password is being asked for.
 		 *
 		 * A hub may ask more than once - the core sends an empty attempt first and
@@ -297,49 +256,25 @@ private:
 	void promptForPassword(Entry& entry);
 
 	/**
-	 * What a descriptor says: a board that is new here, one that has changed, or one
-	 * that is gone.
-	 *
-	 * Nothing is subscribed to and nothing is fetched. A descriptor says what there
-	 * is to subscribe to and no more, and a hub sends one for every board a session
-	 * may see - so acting on it would take out a subscription per board on every
-	 * login, for boards nobody has looked at.
+	 * What the core said of a board on this hub: a row for one its hub described that
+	 * has none, and what its hub says it is for one that has.
 	 */
-	void describeBoard(Entry& entry, const BoardInfo& board);
+	void boardState(Entry& entry, const BoardInfo& board, bool described, bool left);
 
 	/** A row and a pane for a board, and nothing said to the hub. */
 	BoardPane* openBoard(Entry& entry, const QString& board);
 
-	/**
-	 * Open again the boards recorded against this hub, with what is cached in each.
-	 *
-	 * The rows come back and the subscriptions do not: what was open says where
-	 * somebody was reading, and reading is what asks the hub to go on sending.
-	 */
+	/** Open again the boards recorded against this hub, with what is held of each. */
 	void restoreBoards(Entry& entry);
 
-	/**
-	 * Ask the hub for a board's entries, from the cursor the cache holds.
-	 *
-	 * Through the board bridge rather than the hub, because the cursor is on disk
-	 * and the disk belongs to the core thread - and because resuming means from the
-	 * highest timestamp held and never from one past it: timestamps are seconds and
-	 * are not unique, so a post accepted in the same second as the last one received
-	 * would fall behind a cursor advanced past it and reach nobody.
-	 *
-	 * Asked whether or not the hub has answered for its boards yet. The command is
-	 * dropped where it has none, and the feature arriving is what asks again.
-	 */
-	void subscribeBoard(Entry& entry, const QString& board);
-
-	/** Show a board, which is also what asks the hub to start sending it. */
+	/** Show a board, which takes it up again where it had been left. */
 	void showBoard(BoardPane* pane);
 
 	/**
 	 * Take a board's row and its pane away.
 	 *
-	 * What a descriptor with the removal flag leaves behind, and what leaving a
-	 * board does. The documents are not touched: they are named by hash, they were
+	 * What a board its hub says is gone leaves behind, and what leaving a board
+	 * does. The documents are not touched: they are named by hash, they were
 	 * verified against it, and a board being gone from a hub says nothing about them.
 	 */
 	void closeBoard(Entry& entry, const QString& board);
@@ -369,34 +304,6 @@ private:
 	/** Which panes hold an entry for this hash, wherever it was indexed. */
 	QList<BoardPane*> panesHolding(const QString& tth) const;
 
-	/**
-	 * Note that a post has been opened in the reading pane.
-	 *
-	 * Read means read: opened by somebody, not fetched. A post whose body could not
-	 * be had was still read, and one fetched ahead of a reader was not.
-	 *
-	 * Handed to the bridge, which writes it down where it survives a restart. A board
-	 * nobody has opened for a week has to still say so when the client comes back, so
-	 * nothing here keeps a read set of its own.
-	 */
-	void markRead(BoardPane* pane, const QString& tth);
-
-	/**
-	 * Read a post whose document is already on this machine, at once and locally.
-	 *
-	 * A body is never fetched without somebody asking, and that is a rule about what a
-	 * request tells other people: it goes to whoever holds the document, which at first
-	 * is only its author, so a fetch nobody asked for is a census of a post's readers.
-	 * Reading a file off this disk is visible to nobody, so a post that is here simply
-	 * appears when it is opened - including the one this user wrote and the hub has
-	 * handed back, which nothing should have to be pressed to see.
-	 *
-	 * A post whose document is not here is left exactly as it was, waiting to be asked
-	 * for. Asked of the bridge out of memory, because this happens while the pane is
-	 * drawing the post.
-	 */
-	void readHeldPost(BoardPane* pane, const QString& hubKey, const QString& tth);
-
 	/** Posts held on a board that nobody has opened. */
 	int unreadOn(BoardPane* pane) const;
 
@@ -409,28 +316,9 @@ private:
 	 */
 	void showBoardMenu(QTreeWidgetItem* item, const QPoint& globalPos);
 
-	/**
-	 * Compose a post document, offer it, and submit it once it has a hash.
-	 *
-	 * In that order, and it cannot be any other: the hash covers the header and the
-	 * body together, so it is not known until the last byte is written - which is
-	 * also why a post names its parent rather than the other way about. The document
-	 * is offered by its hash before the hub is told about it, because until somebody
-	 * has read it the author is its only source and an author who submits a post and
-	 * disconnects has published nothing.
-	 */
+	/** Have the core write a post and submit it; a refusal is said in a message box. */
 	void submitPost(Entry& entry, BoardPane* pane, const QString& parent,
 	                const QString& subject, const QString& body, bool richText);
-
-	/**
-	 * Keep the document of a post composed here, now that its entry has come back.
-	 *
-	 * The store is what a reader is answered from, and a post nobody could read back
-	 * would be an odd thing to have written. Handed a copy, because adopting a
-	 * document takes the file it was given and this client is still offering the
-	 * original.
-	 */
-	void keepComposed(const QString& hubKey, const BoardEntry& entry);
 
 	/** Add a pane to the stack and a row to the tree, and wire its unread count. */
 	void adopt(ChatPane* pane, QTreeWidgetItem* item);
@@ -533,12 +421,6 @@ private:
 	/** Read the download directory when something writes it, not when it is wanted. */
 	void reloadDownloadDirectory();
 
-	/** The same for the boards: read once when something writes the settings. */
-	void reloadBoardPolicy();
-
-	/** Hand one hub's board settings to the bridge that acts on them. */
-	void applyBoardPolicy(const QString& hubUrl);
-
 	/**
 	 * Open, close or move the row for the hub this program runs itself.
 	 *
@@ -556,10 +438,6 @@ private:
 	 * opening one draws its row - and a row drawn before it was set would be drawn as
 	 * somebody else's hub. What was open on the hub is put back here, because
 	 * restoreSession() does that for the hubs it opens and does not open this one.
-	 *
-	 * Called from restoreSession() rather than from the constructor: opening a hub
-	 * builds the board bridge, and setBoardDirectory() is allowed to be called after
-	 * this view is built and before a hub is opened.
 	 */
 	void reloadLocalHub();
 
@@ -572,32 +450,16 @@ private:
 	 */
 	QString localHubUrl() const;
 
-	/** Whether the rest of a thread is fetched when a post on this hub is opened. */
-	bool prefetchesOn(const QString& hubUrl) const;
-
-	/**
-	 * Whether posts read on this hub are answered for by hash.
-	 *
-	 * What makes a board durable - a popular post ends up held by everyone who has
-	 * read it and outlives its author - and a statement to anybody who asks for one:
-	 * *I have read this*. So a hub nobody has bookmarked answers for nothing until
-	 * somebody says otherwise on that hub. Visiting a hub once is not joining it, and
-	 * the extension asks for the difference to be kept.
-	 */
-	bool servesOn(const QString& hubUrl) const;
-
 	/**
 	 * A per hub choice with three answers: follow the general setting, always, or
 	 * never.
 	 *
-	 * Written into the hub's own group in the session store, where an absent value is
-	 * how a hub says it has no opinion - so "follow the general setting" removes the
-	 * key rather than writing false. Or, given 'decide', handed to it to have the core
-	 * write: the answer, or none for following the general setting.
+	 * Ticked from the hub's own group in the session store, 'key' there, and handed
+	 * to 'decide' to have the core write: the answer, or none for following the
+	 * general setting.
 	 */
 	void addHubChoice(QMenu& menu, const QString& title, const QString& hubUrl,
-	                  const QString& key, const std::function<void()>& applied,
-	                  const std::function<void(std::optional<bool>)>& decide = {});
+	                  const QString& key, const std::function<void(std::optional<bool>)>& decide);
 
 	void showPane(ChatPane* pane);
 
@@ -661,27 +523,8 @@ private:
 	/** Where the core said a picture a message showed is, by hash. */
 	QHash<QString, QString> m_mediaHere;
 
-	/**
-	 * The boards, the documents, and the cursor each subscription resumes from.
-	 *
-	 * Built on the first hub being opened rather than in the constructor: it makes
-	 * directories and reads them on the core thread, and a window with no hub in it
-	 * has nothing to keep.
-	 */
+	/** What the core says of the boards; built when first wanted. */
 	BoardBridge* m_bulletins = nullptr;
-
-	/** Where that bridge keeps what it holds; see setBoardDirectory(). */
-	QString m_boardDirectory;
-
-	/* The board settings, kept in hand for the same reason the media ones are. */
-	bool m_prefetchPosts = false;
-	bool m_servePosts = true;
-	quint64 m_postKeepSeconds = 0;
-	quint64 m_postCacheBytes = 0;
-
-	/** Hubs that have decided either of those for themselves. */
-	QHash<QString, bool> m_hubPrefetch;
-	QHash<QString, bool> m_hubServe;
 
 	/**
 	 * The address of the hub this program runs, while it is running one.
@@ -720,15 +563,6 @@ private:
 	 */
 	QHash<QTreeWidgetItem*, BoardPane*> m_boards;
 	QHash<BoardPane*, QTreeWidgetItem*> m_boardItems;
-
-	/**
-	 * Documents composed here whose entry has not come back, by hash.
-	 *
-	 * There is no success message in this protocol - the entry is the acknowledgement
-	 * - so this is what recognises one's own post arriving, and the file is what is
-	 * being offered to whoever reads it first.
-	 */
-	QHash<QString, QString> m_composed;
 };
 
 }

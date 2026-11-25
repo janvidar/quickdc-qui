@@ -11,6 +11,7 @@
 #include <core/transferbridge.h>
 #include <core/hubbridge.h>
 #include <core/recenthubs.h>
+#include <core/testing.h>
 #include <gui/boardmodel.h>
 #include <gui/boardpane.h>
 #include <gui/chatfeed.h>
@@ -176,16 +177,12 @@ private slots:
 	void aBoardRowShowsItsOwnPane();
 	void aBoardThatIsGoneTakesItsRowWithIt();
 	void aBoardRowOffersTheBoardsOwnMenu();
-	void openingABoardIsWhatSubscribesToIt();
+	void aBoardShowsWhatIsHeldOfIt();
 	void aBoardLeftIsNotPutBackByTheNextDescriptor();
-	void aHubWithoutBoardsForgetsWhatWasSubscribed();
 	void postsNobodyHasOpenedReachTheRailBadge();
-	void theBadgeStillCountsWhatWasUnreadAfterARestore();
 	void markingABoardReadFromItsRowClearsTheCount();
 	void theBoardsOpenOnAHubComeBackWithIt();
 	void closingAHubLeavesNoBoardRowBehind();
-	void aComposedPostIsTheDocumentItsHashCovers();
-	void aPostWhoseDocumentIsHereIsReadWithoutAFetchPress();
 	void aDocumentThatIsNotAPostTakesItsEntryOffTheBoard();
 	void whatWasTypedSurvivesLeavingTheSettings();
 	void aDoctoredHubNameCannotReverseItsRow();
@@ -204,13 +201,12 @@ private:
 	static Qdc::BoardEntry entry(const QString& tth, quint64 timestamp,
 	                             const QString& board = QStringLiteral("general"));
 
-	/**
-	 * A directory of this test's own for the boards.
-	 *
-	 * The bridge writes under "~/.quickdc" unless it is told otherwise, and that is the
-	 * user's own directory rather than somewhere a test may leave an index behind.
-	 */
-	QString boardScratch(const QString& name) const;
+	/** What the core says of a board on the hub 'hub' shows, as it says it once a row reads back. */
+	static void describe(Qdc::HubsView& hubs, Qdc::HubPane* hub, const Qdc::BoardInfo& board,
+	                     bool left = false);
+
+	/** The name the boards of the hub 'hub' shows are filed under. */
+	static QString keyOf(Qdc::HubPane* hub);
 
 	static QTreeWidget* hubTree(Qdc::HubsView& hubs);
 
@@ -292,9 +288,21 @@ Qdc::BoardEntry TestHubs::entry(const QString& tth, quint64 timestamp,
 	return held;
 }
 
-QString TestHubs::boardScratch(const QString& name) const
+QString TestHubs::keyOf(Qdc::HubPane* hub)
 {
-	return QDir(m_dir.path()).filePath(QStringLiteral("boards-") + name);
+	return Qdc::BoardBridge::hubKey(hub->hub()->url());
+}
+
+void TestHubs::describe(Qdc::HubsView& hubs, Qdc::HubPane* hub, const Qdc::BoardInfo& board, bool left)
+{
+	const bool had = hubs.openBoards(hub->hub()->url()).contains(board.name);
+	QSignalSpy loaded(hubs.bulletins(), &Qdc::BoardBridge::entriesLoaded);
+
+	Qdc::Testing::announceBoard(*hubs.bulletins(), keyOf(hub), board, left);
+
+	/* A new row reads back what is held; that answer is waited for so it cannot land on what a test says next. */
+	if (!had && hubs.openBoards(hub->hub()->url()).contains(board.name))
+		QTRY_COMPARE(loaded.count(), 1);
 }
 
 QTreeWidget* TestHubs::hubTree(Qdc::HubsView& hubs)
@@ -3398,7 +3406,6 @@ void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 	config.setBool(ConfigStore::Application, localHub, enabled, true);
 
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("localhub")));
 
 	hubs.restoreSession();
 
@@ -3522,7 +3529,6 @@ void TestHubs::aDescribedBoardBecomesARowUnderItsHub()
 {
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("described")));
 
 	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.40:412")));
 
@@ -3536,7 +3542,7 @@ void TestHubs::aDescribedBoardBecomesARowUnderItsHub()
 	QVERIFY(hubRow);
 	QCOMPARE(hubRow->childCount(), 0);
 
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	QCOMPARE(hubRow->childCount(), 1);
 
@@ -3583,14 +3589,13 @@ void TestHubs::aBoardRowShowsItsOwnPane()
 {
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("shown")));
 
 	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.41:412")));
 
 	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(hub && hub->hub());
 
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	Qdc::BoardPane* pane = boardPane(hubs);
 	QVERIFY(pane);
@@ -3618,7 +3623,6 @@ void TestHubs::aBoardThatIsGoneTakesItsRowWithIt()
 {
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("removed")));
 
 	const QString url = QStringLiteral("adc://192.0.2.42:412");
 	QVERIFY(hubs.openHub(url));
@@ -3626,7 +3630,7 @@ void TestHubs::aBoardThatIsGoneTakesItsRowWithIt()
 	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(hub && hub->hub());
 
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	QTreeWidget* rows = hubTree(hubs);
 	QCOMPARE(rows->topLevelItem(0)->childCount(), 1);
@@ -3634,11 +3638,7 @@ void TestHubs::aBoardThatIsGoneTakesItsRowWithIt()
 	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
 	QCOMPARE(hubs.openBoards(url), QStringList{QStringLiteral("general")});
 
-	Qdc::BoardInfo gone;
-	gone.name = QStringLiteral("general");
-	gone.removed = true;
-
-	emit hub->hub()->boardDescribed(gone);
+	Qdc::Testing::announceGone(*hubs.bulletins(), keyOf(hub), QStringLiteral("general"));
 
 	QCOMPARE(rows->topLevelItem(0)->childCount(), 0);
 	QVERIFY(!boardPane(hubs));
@@ -3652,7 +3652,6 @@ void TestHubs::aBoardRowOffersTheBoardsOwnMenu()
 {
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("menu")));
 
 	hubs.resize(900, 600);
 	hubs.show();
@@ -3663,7 +3662,7 @@ void TestHubs::aBoardRowOffersTheBoardsOwnMenu()
 	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(hub && hub->hub());
 
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	QTreeWidget* rows = hubTree(hubs);
 	QTreeWidgetItem* boardRow = rows->topLevelItem(0)->child(0);
@@ -3715,178 +3714,79 @@ void TestHubs::aBoardRowOffersTheBoardsOwnMenu()
 	QVERIFY(!offered.contains(QStringLiteral("Follow the general setting")));
 }
 
-void TestHubs::openingABoardIsWhatSubscribesToIt()
+void TestHubs::aBoardShowsWhatIsHeldOfIt()
 {
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("resume")));
 
 	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.44:412")));
 
 	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(hub && hub->hub());
 
-	Qdc::BoardBridge* bulletins = hubs.bulletins();
-	QVERIFY(bulletins);
-
-	QSignalSpy stored(bulletins, &Qdc::BoardBridge::entriesStored);
-	QSignalSpy states(bulletins, &Qdc::BoardBridge::boardStateReady);
-
-	const QString first = QStringLiteral("KX3TQ7ZVN5PLQGKD3NDBK6ZTZG5PYQXSNMFYVJH");
-	const QString second = QStringLiteral("7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6PLQ");
-
-	emit hub->hub()->boardEntriesReceived(
-		{entry(first, 1000), entry(second, 2000)});
-
-	QTRY_COMPARE(stored.count(), 1);
-
-	/*
-	 * Nothing has been subscribed to at this point and nothing has been asked of the
-	 * hub: entries were written down, which is all that follows from them arriving.
-	 */
-	QCOMPARE(states.count(), 0);
-
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-
-	/*
-	 * The descriptor is what subscribes. A board is a thing that arrives, and one that
-	 * only begins to fill in once somebody has looked at it has nothing to show at the
-	 * moment it is first looked at.
-	 *
-	 * Twice over: a descriptor asks where the board stands, since it is the one thing
-	 * that can turn a complete view into one with a hole in it, and the subscription it
-	 * takes out answers with the cursor it resumed from.
-	 */
-	QTRY_COMPARE(states.count(), 2);
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	Qdc::BoardPane* pane = boardPane(hubs);
 	QVERIFY(pane);
 
-	/* What was cached is read back into the pane without the hub being asked. */
-	QTRY_COMPARE(pane->threads()->postCount(), 2);
+	const QString first = QStringLiteral("KX3TQ7ZVN5PLQGKD3NDBK6ZTZG5PYQXSNMFYVJH");
+	const QString second = QStringLiteral("7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6PLQ");
 
-	/*
-	 * From the highest timestamp held and never from one past it. Timestamps are
-	 * seconds and are not unique, so a post the hub accepted in the same second as the
-	 * last entry received would fall behind a cursor advanced past it and reach nobody.
-	 */
-	QCOMPARE(states.last().at(1).toString(), QStringLiteral("general"));
-	QCOMPARE(states.last().at(2).toULongLong(), quint64(2000));
+	/* What the core holds of the board, read back into the pane as it is told. */
+	Qdc::Testing::announceEntries(*hubs.bulletins(), keyOf(hub), QStringLiteral("general"),
+	                              {entry(first, 1000), entry(second, 2000)}, 2, true);
+	QCOMPARE(pane->threads()->postCount(), 2);
 
-	/* And opening it asks for nothing again: it has been arriving all along. */
+	/* And what is said of the board afterwards is drawn on the row that is there. */
+	Qdc::BoardInfo renamed = board(QStringLiteral("general"));
+	renamed.title = QStringLiteral("Talk");
+	describe(hubs, hub, renamed);
+
 	QTreeWidget* rows = hubTree(hubs);
-	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
-
-	QCOMPARE(states.count(), 2);
-
-	rows->setCurrentItem(rows->topLevelItem(0));
-	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
-
-	QCOMPARE(states.count(), 2);
-}
-
-void TestHubs::aHubWithoutBoardsForgetsWhatWasSubscribed()
-{
-	Qdc::ConfigBridge config(m_thread);
-	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("withdrawn")));
-
-	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.45:412")));
-
-	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
-	QVERIFY(hub && hub->hub());
-
-	QSignalSpy states(hubs.bulletins(), &Qdc::BoardBridge::boardStateReady);
-
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-
-	/* Where the board stands, and the subscription the descriptor took out. */
-	QTRY_COMPARE(states.count(), 2);
-
-	/*
-	 * The hub saying it has no boards cancels every subscription on the connection and
-	 * is the only thing that says so, so what this side believes it holds goes with it.
-	 */
-	emit hub->hub()->bulletinSupportChanged(false);
-	QCOMPARE(states.count(), 2);
-
-	/*
-	 * And a session that has just found the feature holds none either, so every board
-	 * the hub has already named is asked for again rather than assumed to be still
-	 * arriving - without waiting for anybody to look at one.
-	 */
-	emit hub->hub()->bulletinSupportChanged(true);
-
-	QTRY_COMPARE(states.count(), 3);
-	QCOMPARE(states.last().at(1).toString(), QStringLiteral("general"));
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 1);
+	QVERIFY(rows->topLevelItem(0)->child(0)->text(0).startsWith(QStringLiteral("Talk")));
 }
 
 void TestHubs::aBoardLeftIsNotPutBackByTheNextDescriptor()
 {
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("left")));
-
-	hubs.resize(900, 600);
-	hubs.show();
-	QVERIFY(QTest::qWaitForWindowExposed(&hubs));
 
 	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.46:412")));
 
 	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(hub && hub->hub());
 
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	QTreeWidget* rows = hubTree(hubs);
-	QTRY_COMPARE(rows->topLevelItem(0)->childCount(), 1);
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 1);
 
-	/*
-	 * Left through the call the menu entry makes rather than through the menu itself.
-	 * Driving a popup with synthetic key events is what a menu's own test is for; here
-	 * it was only a way of reaching this, and it reached it about five times in six -
-	 * a key that goes to a popup which is not the active window under load goes nowhere,
-	 * and the case then failed for a reason that had nothing to do with what it checks.
-	 */
+	/* Left through the call the menu entry makes rather than through the menu itself. */
 	hubs.leaveBoard(QStringLiteral("adc://192.0.2.46:412"), QStringLiteral("general"));
-
 	QCOMPARE(rows->topLevelItem(0)->childCount(), 0);
 
-	/*
-	 * A hub sends a fresh descriptor whenever a field of the board changes, and the
-	 * newest timestamp and the post count are both fields - so on a board anybody is
-	 * posting to one arrives every few seconds. None of them is a reason to put back a
-	 * row somebody has just closed.
-	 */
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-
-	QCoreApplication::processEvents();
+	/* The core says it was left; the descriptors that keep coming do not put it back. */
+	describe(hubs, hub, board(QStringLiteral("general")), true);
+	describe(hubs, hub, board(QStringLiteral("general")), true);
 	QCOMPARE(rows->topLevelItem(0)->childCount(), 0);
 
-	/*
-	 * Until the connection goes. Reconnecting is being told what a hub has all over
-	 * again, and a board left an hour ago is not something to hold against it.
-	 */
-	emit hub->hub()->bulletinSupportChanged(false);
-	emit hub->hub()->bulletinSupportChanged(true);
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-
-	QTRY_COMPARE(rows->topLevelItem(0)->childCount(), 1);
+	/* Until a new connection, where it is no longer left. */
+	describe(hubs, hub, board(QStringLiteral("general")));
+	QCOMPARE(rows->topLevelItem(0)->childCount(), 1);
 }
 
 void TestHubs::postsNobodyHasOpenedReachTheRailBadge()
 {
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("unread")));
 
 	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.46:412")));
 
 	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(hub && hub->hub());
 
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	Qdc::BoardPane* pane = boardPane(hubs);
 	QVERIFY(pane);
@@ -3896,9 +3796,9 @@ void TestHubs::postsNobodyHasOpenedReachTheRailBadge()
 	const QString first = QStringLiteral("VN6PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXA");
 	const QString second = QStringLiteral("XSNMFYVJH4TXAVN6PLQ7ZQGKD3NDBK6ZTZG5PYQ");
 
-	emit hub->hub()->boardEntriesReceived({entry(first, 3000), entry(second, 3001)});
-
-	QTRY_COMPARE(hubs.badgeCount(), 2);
+	Qdc::Testing::announceEntries(*hubs.bulletins(), keyOf(hub), QStringLiteral("general"),
+	                              {entry(first, 3000), entry(second, 3001)}, 2);
+	QCOMPARE(hubs.badgeCount(), 2);
 
 	QTreeWidget* rows = hubTree(hubs);
 	QTreeWidgetItem* boardRow = rows->topLevelItem(0)->child(0);
@@ -3906,115 +3806,29 @@ void TestHubs::postsNobodyHasOpenedReachTheRailBadge()
 	/* The count is on the row as well, where the hub's own name carries one. */
 	QVERIFY(boardRow->text(0).endsWith(QStringLiteral("(2)")));
 
-	/*
-	 * Opening a post in the reading pane is what reads it. Not fetching it: a post
-	 * whose body nobody could be found for was still read, and one fetched ahead of a
-	 * reader was not.
-	 */
-	pane->read(first);
-	QTRY_COMPARE(hubs.badgeCount(), 1);
+	/* What reads as read is the core's to say; the row and the badge follow it. */
+	Qdc::Testing::announceRead(*hubs.bulletins(), keyOf(hub), QStringLiteral("general"), 1,
+	                           {first}, false);
+	QCOMPARE(hubs.badgeCount(), 1);
 
-	pane->read(second);
-	QTRY_COMPARE(hubs.badgeCount(), 0);
+	Qdc::Testing::announceRead(*hubs.bulletins(), keyOf(hub), QStringLiteral("general"), 0,
+	                           {second}, false);
+	QCOMPARE(hubs.badgeCount(), 0);
+	QVERIFY(hubs.bulletins()->isRead(keyOf(hub), QStringLiteral("general"), first));
 
 	QCOMPARE(boardRow->text(0), QStringLiteral("General discussion"));
-
-	/* And a post read twice is not read twice. */
-	pane->read(first);
-	QCOMPARE(hubs.badgeCount(), 0);
-}
-
-/**
- * The badge still counts what nobody has read after the client has been restarted.
- *
- * Read state lives in the index on disk, so a post opened in one session is still read
- * in the next and a board nobody has looked at for a week still says so. A read set that
- * lasted as long as the window would count both posts here.
- */
-void TestHubs::theBadgeStillCountsWhatWasUnreadAfterARestore()
-{
-	using Qdc::ConfigStore;
-
-	Qdc::ConfigBridge config(m_thread);
-
-	const QString url = QStringLiteral("adc://192.0.2.51:412");
-	const QString directory = boardScratch(QStringLiteral("restored"));
-
-	const QString first = QStringLiteral("N6PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAV");
-	const QString second = QStringLiteral("6PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN");
-
-	{
-		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-		hubs.setBoardDirectory(directory);
-
-		QVERIFY(hubs.openHub(url));
-
-		Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
-		QVERIFY(hub && hub->hub());
-
-		emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-
-		Qdc::BoardPane* pane = boardPane(hubs);
-		QVERIFY(pane);
-
-		emit hub->hub()->boardEntriesReceived({entry(first, 4000),
-		                                       entry(second, 4001)});
-
-		QTRY_COMPARE(hubs.badgeCount(), 2);
-
-		/* One of the two opened in the reading pane, which is what reads it. */
-		pane->read(first);
-		QTRY_COMPARE(hubs.badgeCount(), 1);
-	}
-
-	/*
-	 * The list of windows is narrowed to this one hub, as the session test above does
-	 * it: what is being checked is what a hub comes back saying, not which hubs come
-	 * back.
-	 */
-	config.setNumber(ConfigStore::Application, QStringLiteral("Windows"),
-	                 QStringLiteral("Total"), 1);
-	config.setString(ConfigStore::Application, QStringLiteral("Windows"),
-	                 QStringLiteral("Hub 0"), url);
-	config.save(ConfigStore::Application);
-
-	Qdc::HubsView reopened(m_thread, nullptr, m_filelists, nullptr, &config);
-	reopened.setBoardDirectory(directory);
-
-	QVERIFY(reopened.restoreSession());
-
-	/*
-	 * The row is back with what was cached in it, and it counts the post nobody opened
-	 * and only that one. Nothing has asked the hub for anything: this is the disk
-	 * answering.
-	 */
-	QTRY_COMPARE(reopened.badgeCount(), 1);
-
-	Qdc::BoardPane* pane = boardPane(reopened);
-	QVERIFY(pane);
-	QCOMPARE(pane->threads()->postCount(), 2);
-
-	QTreeWidget* rows = hubTree(reopened);
-	QVERIFY(rows->topLevelItem(0)->child(0)->text(0)
-		.endsWith(QStringLiteral("(1)")));
-
-	/* And reading the other one leaves nothing to count, in this session or the next. */
-	pane->read(second);
-	QTRY_COMPARE(reopened.badgeCount(), 0);
 }
 
 /**
  * "Mark everything read" on a board's row clears the count for the whole board.
  *
- * One statement about the board rather than one about each post on it - see
- * BoardBridge::markAllRead() - and the row and the badge follow it without anybody
- * having opened a post.
+ * One statement about the board rather than one about each post on it, and the row
+ * and the badge follow what the core says of it without anybody having opened a post.
  */
 void TestHubs::markingABoardReadFromItsRowClearsTheCount()
 {
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("dismissed")));
 
 	hubs.resize(900, 600);
 	hubs.show();
@@ -4025,14 +3839,14 @@ void TestHubs::markingABoardReadFromItsRowClearsTheCount()
 	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(hub && hub->hub());
 
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	const QString first = QStringLiteral("PLQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6");
 	const QString second = QStringLiteral("LQ7ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6P");
 
-	emit hub->hub()->boardEntriesReceived({entry(first, 5000), entry(second, 5001)});
-
-	QTRY_COMPARE(hubs.badgeCount(), 2);
+	Qdc::Testing::announceEntries(*hubs.bulletins(), keyOf(hub), QStringLiteral("general"),
+	                              {entry(first, 5000), entry(second, 5001)}, 2);
+	QCOMPARE(hubs.badgeCount(), 2);
 
 	QTreeWidget* rows = hubTree(hubs);
 	QTreeWidgetItem* boardRow = rows->topLevelItem(0)->child(0);
@@ -4095,19 +3909,17 @@ void TestHubs::theBoardsOpenOnAHubComeBackWithIt()
 	Qdc::ConfigBridge config(m_thread);
 
 	const QString url = QStringLiteral("adc://192.0.2.47:412");
-	const QString directory = boardScratch(QStringLiteral("session"));
 
 	{
 		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-		hubs.setBoardDirectory(directory);
 
 		QVERIFY(hubs.openHub(url));
 
 		Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 		QVERIFY(hub && hub->hub());
 
-		emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-		emit hub->hub()->boardDescribed(board(QStringLiteral("dev.adc")));
+		describe(hubs, hub, board(QStringLiteral("general")));
+		describe(hubs, hub, board(QStringLiteral("dev.adc")));
 
 		QCOMPARE(hubs.openBoards(url).size(), 2);
 	}
@@ -4130,7 +3942,6 @@ void TestHubs::theBoardsOpenOnAHubComeBackWithIt()
 	config.save(ConfigStore::Application);
 
 	Qdc::HubsView reopened(m_thread, nullptr, m_filelists, nullptr, &config);
-	reopened.setBoardDirectory(directory);
 
 	QVERIFY(reopened.restoreSession());
 
@@ -4155,7 +3966,6 @@ void TestHubs::closingAHubLeavesNoBoardRowBehind()
 {
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("closed")));
 
 	const QString url = QStringLiteral("adc://192.0.2.48:412");
 	QVERIFY(hubs.openHub(url));
@@ -4163,7 +3973,7 @@ void TestHubs::closingAHubLeavesNoBoardRowBehind()
 	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(hub && hub->hub());
 
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	QTreeWidget* rows = hubTree(hubs);
 	QCOMPARE(rows->topLevelItem(0)->childCount(), 1);
@@ -4171,9 +3981,9 @@ void TestHubs::closingAHubLeavesNoBoardRowBehind()
 	rows->setCurrentItem(rows->topLevelItem(0)->child(0));
 
 	const QString first = QStringLiteral("QGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6PLQ7Z");
-	emit hub->hub()->boardEntriesReceived({entry(first, 4000)});
-
-	QTRY_COMPARE(hubs.badgeCount(), 1);
+	Qdc::Testing::announceEntries(*hubs.bulletins(), keyOf(hub), QStringLiteral("general"),
+	                              {entry(first, 4000)}, 1);
+	QCOMPARE(hubs.badgeCount(), 1);
 
 	hubs.closeHub(url);
 
@@ -4196,229 +4006,12 @@ void TestHubs::closingAHubLeavesNoBoardRowBehind()
 	Qdc::HubPane* again = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(again && again->hub());
 
-	emit again->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, again, board(QStringLiteral("general")));
 
 	QCOMPARE(rows->topLevelItem(0)->childCount(), 1);
 	QVERIFY(boardPane(hubs));
 
 	hubs.closeHub(url);
-}
-
-void TestHubs::aComposedPostIsTheDocumentItsHashCovers()
-{
-	Qdc::ConfigBridge config(m_thread);
-
-	const QString cid = QStringLiteral("IPJJWEPPPLCA3PF2ZCRRYO4F2ZX2EV2JMW2KC3I");
-
-	config.setString(Qdc::ConfigStore::Application, QStringLiteral("User"),
-	                 QStringLiteral("Client ID"), cid);
-
-	Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("composed")));
-
-	QVERIFY(hubs.openHub(QStringLiteral("adc://192.0.2.49:412")));
-
-	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
-	QVERIFY(hub && hub->hub());
-
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-
-	Qdc::BoardPane* pane = boardPane(hubs);
-	QVERIFY(pane);
-
-	const QString body =
-		QStringLiteral("The hub will be **offline** on Saturday.\n\nSee you then.");
-
-	/*
-	 * A post is kept beside the rest of QuickDC's own files, so the home directory is
-	 * pointed at the temporary one for the length of this test rather than writing into
-	 * the home of whoever is running it.
-	 */
-	{
-		HomeRedirect home(m_dir.path());
-		emit pane->threadSubmitted(QStringLiteral("Hub upgrade on Saturday"), body, true);
-	}
-
-	/*
-	 * Written down before the hub is told anything, because until the first reader has
-	 * fetched it the author is the post's only source - and an author who submits a post
-	 * and then cannot send it has published nothing.
-	 */
-	const QString folder = m_dir.path() + QStringLiteral("/.quickdc/outbox");
-
-	const QStringList written = QDir(folder).entryList({QStringLiteral("post-*")},
-	                                                   QDir::Files);
-	QCOMPARE(written.size(), 1);
-
-	QFile document(folder + QLatin1Char('/') + written.first());
-	QVERIFY(document.open(QIODevice::ReadOnly));
-
-	const QByteArray bytes = document.readAll();
-	document.close();
-
-	const int newline = bytes.indexOf('\n');
-	QVERIFY(newline > 0);
-
-	/*
-	 * One ADC message, and the escaping the grammar asks for and no more: the hash is
-	 * taken over every byte of this, so a document written any other way is a different
-	 * post - and one a reader is required to refuse rather than repair.
-	 */
-	const QByteArray header = bytes.left(newline);
-
-	QVERIFY2(header.startsWith(QByteArray("IBB0 ID") + cid.toUtf8()
-	                           + " SJHub\\supgrade\\son\\sSaturday DA"),
-	         qPrintable(QString::fromUtf8(header)));
-
-	/* And the flag that says the body is the markdown subset, last as it is listed. */
-	QVERIFY(header.endsWith(" RT1"));
-
-	/*
-	 * The body is everything after the first newline, raw: only the header is ADC, and
-	 * the first newline is where ADC stops. So the blank line between the paragraphs is
-	 * in the document as it was typed.
-	 */
-	QCOMPARE(bytes.mid(newline + 1), body.toUtf8());
-}
-
-/**
- * A post whose document is on this machine appears when it is opened, with nothing
- * pressed.
- *
- * This is the case a client gets wrong most easily and most visibly: the document is
- * here - it may well be one this user wrote and the hub has just handed back - and the
- * board still says the post has not been fetched and offers to fetch it. A body is never
- * fetched without a reader asking because the request tells whoever answers that the post
- * has been read; reading a file off this disk tells nobody anything, so the rule does not
- * reach it.
- *
- * The board is reopened on the same directory before the post is read, so what is being
- * checked is what the disk answers rather than what this session happened to remember.
- */
-void TestHubs::aPostWhoseDocumentIsHereIsReadWithoutAFetchPress()
-{
-	Qdc::ConfigBridge config(m_thread);
-
-	const QString url = QStringLiteral("adc://192.0.2.57:412");
-	const QString directory = boardScratch(QStringLiteral("held"));
-	const QString key = Qdc::BoardBridge::hubKey(url);
-
-	/*
-	 * A post document, written out here rather than composed through the pane: one ADC
-	 * header, the newline that ends it, and a body. The author is the CID the entries
-	 * below carry, so the two claims agree and the post is plainly verified.
-	 */
-	const QByteArray document =
-		"IBB0 IDIPJJWEPPPLCA3PF2ZCRRYO4F2ZX2EV2JMW2KC3I SJUpgrade\n"
-		"The hub will be offline on Saturday.\n";
-
-	const QString file = QDir(m_dir.path()).filePath(QStringLiteral("post-document"));
-
-	QFile bytes(file);
-	QVERIFY(bytes.open(QIODevice::WriteOnly));
-	bytes.write(document);
-	bytes.close();
-
-	/*
-	 * The root those bytes hash to, written out rather than computed: this suite may not
-	 * reach a core header, which is part of what it is here to check, and the document
-	 * above is a constant so its root is one too. Getting it wrong is not a silent
-	 * failure - the document would not be the post the entry names, and the pane would
-	 * say so instead of showing a body.
-	 */
-	const QString tth = QStringLiteral("U6UM6DUUAR3TSK5HNKQUTP2RMD5NFLCWEFQYQHI");
-
-	const QString absent = QStringLiteral("ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6PLQ7");
-
-	{
-		Qdc::HubsView hubs(m_thread, nullptr, m_filelists, nullptr, &config);
-		hubs.setBoardDirectory(directory);
-
-		QVERIFY(hubs.openHub(url));
-
-		Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
-		QVERIFY(hub && hub->hub());
-
-		emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-
-		QVERIFY(boardPane(hubs));
-
-		emit hub->hub()->boardEntriesReceived({entry(tth, 6000),
-		                                       entry(absent, 6001)});
-
-		QSignalSpy ready(hubs.bulletins(), &Qdc::BoardBridge::postReady);
-		QVERIFY(ready.isValid());
-
-		/*
-		 * The document arrives the way one written on this machine does: it is adopted,
-		 * which takes the file it is handed into the store.
-		 */
-		hubs.bulletins()->adopt(key, entry(tth, 6000), file);
-
-		QTRY_COMPARE(ready.count(), 1);
-	}
-
-	/* The board is opened again, and the only thing that remembers is the disk. */
-	Qdc::HubsView reopened(m_thread, nullptr, m_filelists, nullptr, &config);
-	reopened.setBoardDirectory(directory);
-
-	QVERIFY(reopened.openHub(url));
-
-	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(reopened.currentPane());
-	QVERIFY(hub && hub->hub());
-
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
-
-	Qdc::BoardPane* pane = boardPane(reopened);
-	QVERIFY(pane);
-
-	QTRY_COMPARE(pane->threads()->postCount(), 2);
-	QTRY_VERIFY(reopened.bulletins()->isHeld(tth));
-
-	/* And being held is not being verified: what it came to is decided by reading it. */
-	QCOMPARE(pane->threads()->stateOf(tth), Qdc::PostState::Announced);
-
-	QSignalSpy asked(pane, &Qdc::BoardPane::bodyRequested);
-	QSignalSpy refused(reopened.bulletins(), &Qdc::BoardBridge::postUnavailable);
-
-	QVERIFY(asked.isValid());
-
-	/* Opening it is enough. Nothing is pressed and nothing is asked of anybody. */
-	pane->read(tth);
-
-	QTextBrowser* body = pane->findChild<QTextBrowser*>(QStringLiteral("boardBody"));
-	QVERIFY(body);
-
-	QTRY_VERIFY(!body->isHidden());
-	QVERIFY(body->toPlainText().contains(QStringLiteral("offline on Saturday")));
-
-	QCOMPARE(pane->threads()->stateOf(tth), Qdc::PostState::Verified);
-	QCOMPARE(asked.count(), 0);
-	QCOMPARE(refused.count(), 0);
-
-	/*
-	 * The other post's document is not here, and opening it reads nothing: a fetch is
-	 * what tells its author that somebody has read it, so that one waits to be asked
-	 * for.
-	 */
-	QVERIFY(!reopened.bulletins()->isHeld(absent));
-
-	pane->read(absent);
-
-	QTRY_VERIFY(body->isHidden());
-	QCoreApplication::processEvents();
-
-	QCOMPARE(pane->threads()->stateOf(absent), Qdc::PostState::Announced);
-	QCOMPARE(asked.count(), 0);
-	QCOMPARE(refused.count(), 0);
-
-	/*
-	 * Told apart from a post that has been read by there being no words and a button to
-	 * press, which is the whole of what the pane says about it now.
-	 */
-	QPushButton* fetch = pane->findChild<QPushButton*>(QStringLiteral("boardFetch"));
-	QVERIFY(fetch);
-	QVERIFY(fetch->isEnabled());
 }
 
 /**
@@ -4438,42 +4031,25 @@ void TestHubs::aDocumentThatIsNotAPostTakesItsEntryOffTheBoard()
 
 	const QString url = QStringLiteral("adc://192.0.2.58:412");
 
-	hubs.setBoardDirectory(boardScratch(QStringLiteral("unreadable")));
-
-	/*
-	 * Bytes with no post header in them, and the root they hash to written out beside
-	 * them: this suite may not reach a core header, and both are constants. Getting the
-	 * root wrong is not a silent failure - the document would not be the one the entry
-	 * names, and the fetch would end in the other case instead.
-	 */
-	const QByteArray document = "This is not a post document at all.\n"
-	                            "It has no header a reader can parse.\n";
 
 	const QString tth = QStringLiteral("T5V7MGEELBQFNZE3TZNA2LQ3JO4ECB3NDQSGPNA");
 	const QString other = QStringLiteral("ZQGKD3NDBK6ZTZG5PYQXSNMFYVJH4TXAVN6PLQ7");
-
-	const QString file = QDir(m_dir.path()).filePath(QStringLiteral("not-a-post"));
-
-	QFile bytes(file);
-	QVERIFY(bytes.open(QIODevice::WriteOnly));
-	bytes.write(document);
-	bytes.close();
 
 	QVERIFY(hubs.openHub(url));
 
 	Qdc::HubPane* hub = qobject_cast<Qdc::HubPane*>(hubs.currentPane());
 	QVERIFY(hub && hub->hub());
 
-	emit hub->hub()->boardDescribed(board(QStringLiteral("general")));
+	describe(hubs, hub, board(QStringLiteral("general")));
 
 	Qdc::BoardPane* pane = boardPane(hubs);
 	QVERIFY(pane);
 
-	emit hub->hub()->boardEntriesReceived({entry(tth, 7000), entry(other, 7001)});
+	Qdc::Testing::announceEntries(*hubs.bulletins(), keyOf(hub), QStringLiteral("general"),
+	                              {entry(tth, 7000), entry(other, 7001)}, 2);
+	QCOMPARE(pane->threads()->postCount(), 2);
 
-	QTRY_COMPARE(pane->threads()->postCount(), 2);
-
-	/* Opened, as a reader would open it, and then read off the disk it is already on. */
+	/* Opened, as a reader would open it, and the core finds its document is no post. */
 	pane->read(tth);
 
 	/*
@@ -4485,15 +4061,11 @@ void TestHubs::aDocumentThatIsNotAPostTakesItsEntryOffTheBoard()
 	QSignalSpy later(hubs.bulletins(), &Qdc::BoardBridge::postUnavailable);
 	QVERIFY(refused.isValid());
 
-	hubs.bulletins()->adopt(Qdc::BoardBridge::hubKey(url), entry(tth, 7000), file);
+	Qdc::Testing::announceUnreadable(*hubs.bulletins(), tth);
 
-	QTRY_COMPARE(refused.count(), 1);
+	QCOMPARE(refused.count(), 1);
 	QCOMPARE(later.count(), 0);
-
-	/* The document is here, which is exactly why the post cannot come back. */
-	QVERIFY(hubs.bulletins()->isHeld(tth));
-
-	QTRY_COMPARE(pane->threads()->postCount(), 1);
+	QCOMPARE(pane->threads()->postCount(), 1);
 
 	QVERIFY(!pane->threads()->listable(tth));
 	QVERIFY(!pane->threads()->indexOf(tth).isValid());

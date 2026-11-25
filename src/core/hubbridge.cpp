@@ -19,16 +19,6 @@ namespace {
 constexpr int HIT_BATCH = 64;
 constexpr int HIT_BATCH_MS = 50;
 
-/**
- * The same, for index entries.
- *
- * Larger than the batch a search uses, because a burst of entries is larger: a
- * subscription resumed from zero replays every post a hub has ever accepted on the
- * board, in the order it accepted them, as fast as the socket will carry them. The
- * interval is the same, so a live board still shows a post as it arrives.
- */
-constexpr int ENTRY_BATCH = 256;
-constexpr int ENTRY_BATCH_MS = 50;
 
 /**
  * Whether a network status means the session is over.
@@ -169,37 +159,6 @@ Qdc::SearchHit convert(const QuickDC::Api::SearchHit& found)
 	return hit;
 }
 
-Qdc::BoardInfo convert(const QuickDC::Board& board)
-{
-	Qdc::BoardInfo info;
-	info.name         = from(board.name);
-	info.title        = from(board.title);
-	info.description  = from(board.description);
-	info.permissions  = static_cast<quint32>(board.permissions);
-	info.maxSize      = board.maxSize;
-	info.newest       = board.newest;
-	info.oldest       = board.oldest;
-	info.posts        = board.posts;
-	info.removed      = board.removed;
-	return info;
-}
-
-Qdc::BoardEntry convert(const QuickDC::BoardEntry& entry)
-{
-	Qdc::BoardEntry copied;
-	copied.tth        = from(entry.tth);
-	copied.size       = entry.size;
-	copied.board      = from(entry.board);
-	copied.cid        = from(entry.cid);
-	copied.nick       = from(entry.nick);
-	copied.parent     = from(entry.parent);
-	copied.thread     = from(entry.thread);
-	copied.subject    = from(entry.subject);
-	copied.timestamp  = entry.timestamp;
-	copied.removed    = entry.removed;
-	return copied;
-}
-
 QString normalise_url(const QString& url)
 {
 	return QString::fromStdString(QuickDC::canonicalHubUrl(url.toStdString()));
@@ -281,12 +240,6 @@ void Qdc::HubBridge::handle(const QuickDC::Api::Events::HubNetStatus& e)
 	{
 		m_richText = false;
 		emit richTextSupportChanged(false);
-	}
-
-	if (session_ended(status) && m_bulletins)
-	{
-		m_bulletins = false;
-		bulletinsLost();
 	}
 
 	emit netStatusChanged(status);
@@ -404,31 +357,10 @@ void Qdc::HubBridge::handle(const QuickDC::Api::Events::ChatMedia& e)
 		emit chatMediaReady(from(e.tth), from(e.path));
 }
 
+/* The core follows a hub's boards itself; what is drawn of them comes through BoardBridge. */
 template<>
-void Qdc::HubBridge::handle(const QuickDC::Api::Events::BoardsAvailable& e)
+void Qdc::HubBridge::handle(const QuickDC::Api::Events::BoardsAvailable&)
 {
-	if (e.available == m_bulletins) return;
-	m_bulletins = e.available;
-
-	if (!m_bulletins)
-	{
-		bulletinsLost();
-		return;
-	}
-
-	emit bulletinSupportChanged(true);
-}
-
-template<>
-void Qdc::HubBridge::handle(const QuickDC::Api::Events::BoardDescribed& e)
-{
-	emit boardDescribed(convert(e.board));
-}
-
-template<>
-void Qdc::HubBridge::handle(const QuickDC::Api::Events::BoardEntryArrived& e)
-{
-	collect(convert(e.entry));
 }
 
 template<>
@@ -500,24 +432,6 @@ bool Qdc::HubBridge::isSecure() const
 bool Qdc::HubBridge::supportsRichText() const
 {
 	return m_richText;
-}
-
-bool Qdc::HubBridge::supportsBulletins() const
-{
-	return m_bulletins;
-}
-
-QStringList Qdc::HubBridge::subscribedBoards() const
-{
-	QStringList boards(m_subscribed.constBegin(), m_subscribed.constEnd());
-	boards.sort();
-
-	return boards;
-}
-
-bool Qdc::HubBridge::isSubscribed(const QString& board) const
-{
-	return m_subscribed.contains(board);
 }
 
 void Qdc::HubBridge::setFollowRedirects(bool follow)
@@ -631,69 +545,43 @@ void Qdc::HubBridge::sendPassword(const QString& password)
 	m_thread->submit(QuickDC::Api::Commands::SendPassword{m_handle, password.toStdString()});
 }
 
-/**
- * Nothing about a board goes to a hub that has not announced boards.
- *
- * The hub's answer is authoritative for the connection, whatever this client
- * offered, and the session refuses these in any case - so the point of asking here
- * is that this side does not go on believing it asked for something that was never
- * sent. Not reported as an error: a hub with no boards is the ordinary case, and the
- * interface asking is what was mistaken.
- */
-void Qdc::HubBridge::subscribeBoard(const QString& board, quint64 timestamp)
+void Qdc::HubBridge::subscribeBoard(const QString& board, bool fromStart)
 {
-	if (!m_opened || !m_bulletins || board.isEmpty()) return;
+	if (!m_opened || board.isEmpty()) return;
 
-	m_subscribed.insert(board);
-	m_thread->submit(QuickDC::Api::Commands::SubscribeBoard{m_handle, board.toStdString(), timestamp});
+	m_thread->submit(QuickDC::Api::Commands::SubscribeBoard{m_handle, board.toStdString(), fromStart});
 }
 
 void Qdc::HubBridge::unsubscribeBoard(const QString& board)
 {
-	if (!m_opened || !m_bulletins || board.isEmpty()) return;
+	if (!m_opened || board.isEmpty()) return;
 
-	m_subscribed.remove(board);
 	m_thread->submit(QuickDC::Api::Commands::UnsubscribeBoard{m_handle, board.toStdString()});
 }
 
 void Qdc::HubBridge::requestBoardEntry(const QString& board, const QString& tth)
 {
-	if (!m_opened || !m_bulletins || board.isEmpty() || tth.isEmpty()) return;
+	if (!m_opened || board.isEmpty() || tth.isEmpty()) return;
 
 	m_thread->submit(QuickDC::Api::Commands::RequestBoardEntry{
 		m_handle, board.toStdString(), tth.toStdString()});
 }
 
-void Qdc::HubBridge::submitPost(const QString& tth, quint64 size,
-                                const QString& board, const QString& subject,
-                                const QString& parent)
+bool Qdc::HubBridge::writePost(quint64 request, const QString& board, const QString& parent,
+                               const QString& subject, const QString& body, bool richText)
 {
-	if (!m_opened || !m_bulletins || tth.isEmpty() || board.isEmpty()) return;
+	if (!m_opened || board.isEmpty()) return false;
 
-	m_thread->submit(QuickDC::Api::Commands::SubmitPost{m_handle, tth.toStdString(), size,
-		board.toStdString(), subject.toStdString(), parent.toStdString()});
+	return m_thread->submit(QuickDC::Api::Commands::WritePost{request, m_handle, board.toStdString(),
+		parent.toStdString(), subject.toStdString(), body.toStdString(), richText});
 }
 
 void Qdc::HubBridge::withdrawPost(const QString& tth, const QString& board)
 {
-	if (!m_opened || !m_bulletins || tth.isEmpty() || board.isEmpty()) return;
+	if (!m_opened || tth.isEmpty() || board.isEmpty()) return;
 
 	m_thread->submit(QuickDC::Api::Commands::WithdrawPost{
 		m_handle, tth.toStdString(), board.toStdString()});
-}
-
-void Qdc::HubBridge::bulletinsLost()
-{
-	/*
-	 * Whatever has arrived and not yet been handed over is handed over first. Those
-	 * entries were sent and are as real as any other; the subscription being gone
-	 * says nothing about them.
-	 */
-	deliverBoardEntries();
-
-	m_subscribed.clear();
-
-	emit bulletinSupportChanged(false);
 }
 
 void Qdc::HubBridge::collect(const SearchHit& hit)
@@ -739,45 +627,3 @@ void Qdc::HubBridge::deliverSearchResults()
 	emit searchResultsReceived(going);
 }
 
-void Qdc::HubBridge::collect(const BoardEntry& entry)
-{
-	m_pendingEntries.append(entry);
-
-	/*
-	 * Enough of them to be worth handing over now. The rest of a replay follows in
-	 * the next batch; what matters is that a board is not laid out once per entry in
-	 * it, not that any batch is exactly full.
-	 */
-	if (m_pendingEntries.size() >= ENTRY_BATCH)
-	{
-		deliverBoardEntries();
-		return;
-	}
-
-	if (!m_entryTimer)
-	{
-		m_entryTimer = new QTimer(this);
-		m_entryTimer->setSingleShot(true);
-		m_entryTimer->setInterval(ENTRY_BATCH_MS);
-
-		connect(m_entryTimer, &QTimer::timeout, this,
-		        &HubBridge::deliverBoardEntries);
-	}
-
-	/*
-	 * Started rather than restarted, so that a replay which keeps arriving is still
-	 * handed over regularly instead of being held back for as long as it lasts.
-	 */
-	if (!m_entryTimer->isActive()) m_entryTimer->start();
-}
-
-void Qdc::HubBridge::deliverBoardEntries()
-{
-	if (m_entryTimer) m_entryTimer->stop();
-	if (m_pendingEntries.isEmpty()) return;
-
-	QVector<BoardEntry> going;
-	going.swap(m_pendingEntries);
-
-	emit boardEntriesReceived(going);
-}
