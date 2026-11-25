@@ -16,6 +16,7 @@
 
 #include <QList>
 #include <QStringList>
+#include <QVector>
 
 #include <functional>
 
@@ -26,8 +27,11 @@ namespace Qdc {
 class Completed;
 class CoreThread;
 class Favourites;
+class HubDirectory;
 class RecentHubs;
 struct CompletedDownload;
+struct HubListEntry;
+struct HubListSource;
 struct RecentHub;
 
 namespace Testing {
@@ -48,6 +52,8 @@ QuickDC::Core* core(CoreThread* thread);
 void announce(Favourites& kept, const QStringList& urls);
 void announce(RecentHubs& recent, const QList<RecentHub>& hubs);
 void announce(Completed& completed, const QList<CompletedDownload>& downloads);
+void announce(HubDirectory& directory, const QVector<HubListEntry>& hubs,
+              const QList<HubListSource>& sources);
 
 }
 }

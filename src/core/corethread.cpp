@@ -6,6 +6,7 @@
 #include "completed.h"
 #include "corechannel.h"
 #include "favourites.h"
+#include "hubdirectory.h"
 #include "recenthubs.h"
 
 #include <api/core.h>
@@ -408,4 +409,34 @@ void Qdc::Testing::announce(Completed& completed, const QList<CompletedDownload>
 		told.downloads.push_back({one.filename.toStdString(), one.tth.toStdString(), one.size,
 		                          static_cast<uint64_t>(one.finished.toSecsSinceEpoch())});
 	completed.take(told);
+}
+
+void Qdc::Testing::announce(HubDirectory& directory, const QVector<HubListEntry>& hubs,
+                            const QList<HubListSource>& sources)
+{
+	QuickDC::Api::Events::HubListSources listed;
+	for (const HubListSource& one : sources)
+		listed.sources.push_back({one.url.toStdString(),
+		                          one.fetched.isValid() ? static_cast<uint64_t>(one.fetched.toSecsSinceEpoch()) : 0,
+		                          static_cast<uint64_t>(one.hubs), one.cached, one.fetching,
+		                          one.error.toStdString()});
+	directory.take(listed);
+
+	QuickDC::Api::Events::HubDirectory merged;
+	for (const HubListEntry& hub : hubs)
+	{
+		QuickDC::HubListEntry entry;
+		entry.name = hub.name.toStdString();
+		entry.address = hub.address.toStdString();
+		entry.description = hub.description.toStdString();
+		entry.country = hub.country.toStdString();
+		entry.users = hub.users;
+		entry.shared = hub.shared;
+		entry.minshare = hub.minshare;
+		entry.minslots = hub.minslots;
+		entry.maxhubs = hub.maxhubs;
+		entry.maxusers = hub.maxusers;
+		merged.hubs.push_back({entry, {}});
+	}
+	directory.take(merged);
 }

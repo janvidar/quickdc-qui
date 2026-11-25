@@ -8,7 +8,7 @@
 #include <core/corethread.h>
 #include <core/filelistbridge.h>
 #include <core/hubbridge.h>
-#include <core/hublistbridge.h>
+#include <core/hubdirectory.h>
 #include <core/networkwatch.h>
 #include <core/mediabridge.h>
 #include <core/searchbridge.h>
@@ -77,8 +77,6 @@ private slots:
 	void nothingAViewAsksForWaitsForABusyCore();
 	void bridgesAreBuiltAndTornDownWithoutWaiting();
 	void theCoreKnowsAHubByTheNameTheViewsFileItUnder();
-	void aHublistNobodyServesIsReportedAsFailed();
-	void aHublistBridgeGoneBeforeTheAnswerHearsNothing();
 
 	void bulletinsGoWithTheSessionAndTakeSubscriptionsWithThem();
 	void entriesArriveInOneBatchRatherThanOneSignalEach();
@@ -855,7 +853,7 @@ void TestBridge::bridgesAreBuiltAndTornDownWithoutWaiting()
 		Qdc::TransferBridge transfers(m_thread);
 		Qdc::MediaBridge media(m_thread, &config);
 		Qdc::FilelistBridge filelists(m_thread);
-		Qdc::HubListBridge hublists(m_thread);
+		Qdc::HubDirectory directory(m_thread);
 		Qdc::HubBridge hub(m_thread, QStringLiteral("adc://192.0.2.2:412"));
 	}
 
@@ -868,51 +866,6 @@ void TestBridge::bridgesAreBuiltAndTornDownWithoutWaiting()
 	/* The jobs they left behind still run, and leave the reactor answering. */
 	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 	QVERIFY(m_thread->isCoreRunning());
-}
-
-/**
- * A fetch goes to the core as a command and comes back as an event, so the one
- * thing a view can see of the crossing is that the answer arrives, once, for the
- * address it asked about - and that asking again while it is on its way does not
- * make a second one.
- */
-void TestBridge::aHublistNobodyServesIsReportedAsFailed()
-{
-	Qdc::HubListBridge hublists(m_thread);
-	QSignalSpy failed(&hublists, &Qdc::HubListBridge::failed);
-	QSignalSpy fetched(&hublists, &Qdc::HubListBridge::fetched);
-
-	const QString url = QStringLiteral("http://127.0.0.1:1/hublist.xml.bz2");
-	hublists.fetch(url);
-	hublists.fetch(url);
-	QVERIFY(hublists.isFetching(url));
-
-	QVERIFY(failed.wait(10000));
-	QCOMPARE(failed.count(), 1);
-	QCOMPARE(failed.first().at(0).toString(), url);
-	QVERIFY(failed.first().at(1).toString().contains(url));
-	QCOMPARE(fetched.count(), 0);
-	QVERIFY(!hublists.isFetching(url));
-
-	/* Nothing more is on its way for it. */
-	QTest::qWait(200);
-	QCOMPARE(failed.count(), 1);
-}
-
-/* The answer to a bridge that has gone arrives at nothing, and nothing breaks. */
-void TestBridge::aHublistBridgeGoneBeforeTheAnswerHearsNothing()
-{
-	{
-		Qdc::HubListBridge hublists(m_thread);
-		hublists.fetch(QStringLiteral("http://127.0.0.1:1/gone.xml"));
-	}
-
-	Qdc::HubListBridge other(m_thread);
-	QSignalSpy failed(&other, &Qdc::HubListBridge::failed);
-
-	QTest::qWait(500);
-	QCOMPARE(failed.count(), 0);
-	QVERIFY(Qdc::Testing::runOnCore(m_thread, [] { }));
 }
 
 /**

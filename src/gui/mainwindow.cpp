@@ -63,7 +63,7 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	, m_recent(new RecentHubs(thread, this))
 	, m_drop(new DropBridge(thread, this))
 	, m_watch(new NetworkWatch(this))
-	, m_directory(new HubDirectory(thread, m_config, QString(), this))
+	, m_directory(new HubDirectory(thread, this))
 	, m_hubs(new HubsView(thread, m_favourites, m_filelists, m_transfers, m_config,
 	                      m_completed))
 	, m_home(new HomeView(m_config, m_favourites, m_recent, m_directory,
@@ -213,7 +213,6 @@ Qdc::MainWindow::~MainWindow()
 	delete m_searches;
 	m_searches = nullptr;
 
-	/* Fetches over the core thread, so it goes while the core is still up. */
 	delete m_directory;
 	m_directory = nullptr;
 

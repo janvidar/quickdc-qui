@@ -8,7 +8,6 @@
 #include <core/favourites.h>
 #include <core/hubdirectory.h>
 #include <core/hubbridge.h>
-#include <core/hublistbridge.h>
 #include <core/recenthubs.h>
 #include <core/testing.h>
 #include <gui/homeview.h>
@@ -20,15 +19,11 @@
 #include <gui/hublistmodel.h>
 
 #include <QDir>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
 #include <QPainter>
-#include <QSaveFile>
 #include <QSignalSpy>
 #include <QSortFilterProxyModel>
 #include <QStackedWidget>
@@ -42,16 +37,14 @@
 #include <QTest>
 
 /**
- * Finding a hub: the public lists, the cache under them, and the two stores of
+ * Finding a hub: the public lists, and the two stores of
  * hubs somebody has already been to or kept.
  *
- * Nothing here reaches a name server or another host, and that is deliberate rather
- * than incidental: every source in these tests is either given no core to fetch with
- * or has its list put into the cache directly, which is what HubDirectory::cacheFileFor()
- * is public for. The one exception knocks on a closed port of the loopback address on
- * purpose, because a download failing inside the core is the only way to see what the
- * core says to a view when one does. A hublist that arrives whole needs a server, so
- * that half is the core's to test and the core tests it.
+ * The directory is the core's - its sources, the merge, the cache, when each list is
+ * fetched - and is tested there and by qdc's scenario. Here it is what a view draws:
+ * a bridge given a directory as though the core had announced it, and one real core
+ * whose only source knocks on a closed port of the loopback address, which is how a
+ * failure inside the core reaches a view. Nothing here reaches another host.
  *
  * What a list says is a stranger's text, so how it is drawn belongs here too: the
  * status line under the table, the rows of the two other tabs, and the header of a
@@ -67,18 +60,10 @@ private slots:
 	void recentHubsAreWhatTheCoreRecorded();
 	void favouritesAreWhatTheCoreKeeps();
 
-	void aDirectoryWithNoConfigurationWritesTheDefaults();
-	void aDirectoryReadsItsSourcesInOrder();
-	void aWithdrawnListIsTakenOutOfAStoredConfiguration();
-	void noWithdrawnListIsStillShipped();
-	void severalListsMergeIntoOne();
-	void aHubKeepsTheAddressThatSaysWhichCertificateToExpect();
-	void aHubIsOneRowHoweverItsListsSpellIt();
-	void aCacheWrittenForAnotherSourceIsIgnored();
 
-	void aBadAddressIsRefusedWithoutTheCore();
-	void aFetchWithoutACoreSaysSo();
-	void aRefusedConnectionFailsThroughTheCore();
+
+	void theDirectoryIsWhatTheCoreAnnounces();
+	void aRefusedConnectionIsShownAsTheSourcesError();
 
 	void theModelSortsOnNumbersAndFiltersOnEveryColumn();
 
@@ -118,15 +103,9 @@ private:
 	 */
 	static bool drawsMarkup(const QString& tooltip);
 
-	/** Put a list where a source's cache goes, as if it had been fetched. */
-	void cache(const Qdc::HubDirectory& directory, const QString& url,
-	           const QVector<Qdc::HubListEntry>& hubs,
-	           const QDateTime& when = QDateTime::currentDateTime());
-
-	/** Name the sources in the configuration, so a test decides what is read. */
-	void configureSources(const QStringList& urls);
-
-	QString cacheDir() const;
+	/** Have 'directory' hold 'hubs' as though the core had merged them from the one list at 'url'. */
+	static void listed(Qdc::HubDirectory& directory, const QString& url,
+	                   const QVector<Qdc::HubListEntry>& hubs);
 
 	/** Let go of every hub the core keeps, and wait for 'kept' to hear it. */
 	void forgetFavourites(Qdc::Favourites& kept);
@@ -195,61 +174,6 @@ bool TestHubList::drawsMarkup(const QString& tooltip)
 	return false;
 }
 
-QString TestHubList::cacheDir() const
-{
-	return QDir(m_dir.path()).filePath(QStringLiteral("hublists"));
-}
-
-void TestHubList::configureSources(const QStringList& urls)
-{
-	QList<QPair<QString, QString>> values;
-	QStringList stale;
-
-	/* More keys than any test writes, so a shorter list does not leave a tail
-	   behind for the next one to read. */
-	for (int n = 0; n < 8; ++n) stale.append(QStringLiteral("List %1").arg(n));
-
-	for (int n = 0; n < urls.size(); ++n)
-		values.append({QStringLiteral("List %1").arg(n), urls.at(n)});
-
-	values.append({QStringLiteral("Total"), QString::number(urls.size())});
-
-	m_config->replaceGroup(Qdc::ConfigStore::Application,
-	                       QStringLiteral("Hublists"), stale, values);
-	m_config->save(Qdc::ConfigStore::Application);
-}
-
-void TestHubList::cache(const Qdc::HubDirectory& directory, const QString& url,
-                        const QVector<Qdc::HubListEntry>& hubs,
-                        const QDateTime& when)
-{
-	QJsonArray listed;
-
-	for (const Qdc::HubListEntry& hub : hubs)
-	{
-		QJsonObject object;
-		object.insert(QStringLiteral("address"), hub.address);
-		object.insert(QStringLiteral("name"), hub.name);
-		object.insert(QStringLiteral("description"), hub.description);
-		object.insert(QStringLiteral("country"), hub.country);
-		object.insert(QStringLiteral("users"), static_cast<qint64>(hub.users));
-
-		listed.append(object);
-	}
-
-	QJsonObject root;
-	root.insert(QStringLiteral("url"), url);
-	root.insert(QStringLiteral("fetched"), when.toSecsSinceEpoch());
-	root.insert(QStringLiteral("hubs"), listed);
-
-	QDir().mkpath(cacheDir());
-
-	QSaveFile file(directory.cacheFileFor(url));
-	QVERIFY(file.open(QIODevice::WriteOnly));
-	file.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
-	QVERIFY(file.commit());
-}
-
 namespace {
 
 Qdc::RecentHub visited(const QString& url, const QString& name = QString(), qint64 at = 1769000000)
@@ -261,6 +185,17 @@ Qdc::RecentHub visited(const QString& url, const QString& name = QString(), qint
 	return hub;
 }
 
+}
+
+void TestHubList::listed(Qdc::HubDirectory& directory, const QString& url,
+                         const QVector<Qdc::HubListEntry>& hubs)
+{
+	Qdc::HubListSource source;
+	source.url = url;
+	source.fetched = QDateTime::currentDateTime();
+	source.hubs = static_cast<int>(hubs.size());
+
+	Qdc::Testing::announce(directory, hubs, {source});
 }
 
 void TestHubList::forgetFavourites(Qdc::Favourites& kept)
@@ -325,237 +260,67 @@ void TestHubList::favouritesAreWhatTheCoreKeeps()
 	QTRY_VERIFY(kept.urls().isEmpty());
 }
 
-void TestHubList::aDirectoryWithNoConfigurationWritesTheDefaults()
+/* A bridge built once the core is up starts with what the core announced, and asks it to be current. */
+void TestHubList::theDirectoryIsWhatTheCoreAnnounces()
 {
-	/*
-	 * Before any other test here names its own sources, because there is one store
-	 * and one core in this suite, shared by every test in it.
-	 */
-	QVERIFY2(!m_config->contains(Qdc::ConfigStore::Application,
-	                             QStringLiteral("Hublists"), QStringLiteral("Total")),
-	         "this test has to run before the sources are configured");
+	Qdc::HubDirectory watching(m_thread);
+	watching.resetSources();
+	QTRY_COMPARE(watching.sources().size(), 3);
+	QCOMPARE(watching.sources().at(0).url, QStringLiteral("https://dchublist.org/hublist.xml.bz2"));
 
-	{
-		/* No core, so nothing is fetched whatever the sources say. */
-		Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-
-		QStringList urls;
-		for (const Qdc::HubListSource& source : directory.sources())
-			urls.append(source.url);
-
-		QCOMPARE(urls, Qdc::HubDirectory::defaultSources());
-	}
-
-	/* Written out, so that they can be found and edited. */
-	QCOMPARE(m_config->getNumber(Qdc::ConfigStore::Application,
-	                             QStringLiteral("Hublists"), QStringLiteral("Total")),
-	         static_cast<int>(Qdc::HubDirectory::defaultSources().size()));
-
-	/* And a store that says nought is respected rather than filled in again. */
-	m_config->setNumber(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
-	                    QStringLiteral("Total"), 0);
-	m_config->save(Qdc::ConfigStore::Application);
-
-	Qdc::HubDirectory empty(nullptr, m_config, cacheDir());
-	QVERIFY(empty.sources().isEmpty());
-	QCOMPARE(empty.hubCount(), 0);
+	/* What the core holds is in a bridge built afterwards from the first moment, without asking. */
+	Qdc::HubDirectory later(m_thread);
+	QCOMPARE(later.sources().size(), 3);
+	QCOMPARE(later.hubCount(), 0);
+	QVERIFY(!later.isFetching());
 }
 
-void TestHubList::aDirectoryReadsItsSourcesInOrder()
-{
-	configureSources({QStringLiteral("http://second.example.org/hublist.xml"),
-	                  QStringLiteral("http://first.example.org/hublist.xml")});
-
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-
-	QCOMPARE(directory.sources().size(), 2);
-	QCOMPARE(directory.sources().at(0).url,
-	         QStringLiteral("http://second.example.org/hublist.xml"));
-
-	/* Nothing has been fetched, and nothing pretends otherwise. */
-	QVERIFY(!directory.lastUpdated().isValid());
-	QVERIFY(!directory.isFetching());
-	QCOMPARE(directory.hubCount(), 0);
-}
-
-void TestHubList::severalListsMergeIntoOne()
-{
-	const QString first = QStringLiteral("http://a.example.org/hublist.xml");
-	const QString second = QStringLiteral("http://b.example.org/hublist.xml");
-
-	configureSources({first, second});
-
-	Qdc::HubListEntry alpha;
-	alpha.name = QStringLiteral("Alpha");
-	alpha.address = QStringLiteral("adcs://alpha.example.org:412");
-	alpha.description = QStringLiteral("The first hub");
-	alpha.users = 10;
-
-	/* Named without a scheme or a port by the first list. */
-	Qdc::HubListEntry beta;
-	beta.name = QStringLiteral("Beta");
-	beta.address = QStringLiteral("beta.example.org");
-	beta.users = 5;
-
-	/* And with both by the second, which also knows more about it. */
-	Qdc::HubListEntry betaAgain;
-	betaAgain.address = QStringLiteral("dchub://beta.example.org:411");
-	betaAgain.description = QStringLiteral("The second hub");
-	betaAgain.country = QStringLiteral("NO");
-	betaAgain.users = 50;
-
-	Qdc::HubListEntry gamma;
-	gamma.name = QStringLiteral("Gamma");
-	gamma.address = QStringLiteral("dchub://gamma.example.org:411");
-	gamma.users = 1;
-
-	{
-		Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
-		cache(seed, first, {alpha, beta});
-		cache(seed, second, {betaAgain, gamma});
-	}
-
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-
-	/* Three hubs, not four: the same hub spelled two ways is one row. */
-	QCOMPARE(directory.hubCount(), 3);
-	QVERIFY(directory.lastUpdated().isValid());
-	QCOMPARE(directory.sources().at(0).hubs, 2);
-
-	const QVector<Qdc::HubListEntry> hubs = directory.hubs();
-
-	const Qdc::HubListEntry* merged = nullptr;
-	for (const Qdc::HubListEntry& hub : hubs)
-	{
-		if (hub.address == QStringLiteral("beta.example.org")) merged = &hub;
-	}
-
-	QVERIFY2(merged, "the hub the first list named should be the one kept");
-
-	/* The first list's description of it, filled in from the second where the
-	   first said nothing, and the larger of the two user counts. */
-	QCOMPARE(merged->name, QStringLiteral("Beta"));
-	QCOMPARE(merged->description, QStringLiteral("The second hub"));
-	QCOMPARE(merged->country, QStringLiteral("NO"));
-	QCOMPARE(merged->users, 50u);
-}
-
-void TestHubList::aCacheWrittenForAnotherSourceIsIgnored()
-{
-	const QString url = QStringLiteral("http://mine.example.org/hublist.xml");
-	configureSources({url});
-
-	Qdc::HubListEntry hub;
-	hub.name = QStringLiteral("Somebody else's");
-	hub.address = QStringLiteral("dchub://elsewhere.example.org:411");
-
-	Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
-
-	/* The file goes where this source's cache goes, but says it is another's -
-	   which is what a stale file or a digest collision would look like. */
-	QJsonObject root;
-	root.insert(QStringLiteral("url"),
-	            QStringLiteral("http://theirs.example.org/hublist.xml"));
-	root.insert(QStringLiteral("fetched"),
-	            QDateTime::currentDateTime().toSecsSinceEpoch());
-	root.insert(QStringLiteral("hubs"), QJsonArray());
-
-	QDir().mkpath(cacheDir());
-
-	QSaveFile file(seed.cacheFileFor(url));
-	QVERIFY(file.open(QIODevice::WriteOnly));
-	file.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
-	QVERIFY(file.commit());
-
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-	QCOMPARE(directory.hubCount(), 0);
-	QVERIFY(!directory.sources().at(0).fetched.isValid());
-}
-
-void TestHubList::aBadAddressIsRefusedWithoutTheCore()
-{
-	Qdc::HubListBridge bridge(nullptr);
-
-	QSignalSpy failures(&bridge, &Qdc::HubListBridge::failed);
-	QVERIFY(failures.isValid());
-
-	/* A hub address, not a hublist address; and a file, which is not fetched. */
-	bridge.fetch(QStringLiteral("adcs://hub.example.org:412"));
-	bridge.fetch(QStringLiteral("/home/somebody/hublist.xml"));
-
-	/* Answered after the call returns, always, so that a caller asking for several
-	   is not called back part way through its own loop. */
-	QCOMPARE(failures.count(), 0);
-	QVERIFY(QTest::qWaitFor([&failures] { return failures.count() >= 2; }, 2000));
-
-	QVERIFY(failures.at(0).at(1).toString().contains(QStringLiteral("http")));
-	QVERIFY(!bridge.isFetching());
-}
-
-void TestHubList::aFetchWithoutACoreSaysSo()
-{
-	Qdc::HubListBridge bridge(nullptr);
-
-	QSignalSpy failures(&bridge, &Qdc::HubListBridge::failed);
-
-	bridge.fetch(QStringLiteral("https://lists.example.org/hublist.xml.bz2"));
-
-	QVERIFY(QTest::qWaitFor([&failures] { return failures.count() == 1; }, 2000));
-
-	QCOMPARE(failures.at(0).at(0).toString(),
-	         QStringLiteral("https://lists.example.org/hublist.xml.bz2"));
-	QVERIFY(failures.at(0).at(1).toString().contains(QStringLiteral("core")));
-}
-
-/**
- * A download the core refuses is reported to the view as a failure.
- *
- * A download that fails inside the core is, in an ordinary run, the only thing that
- * reaches HubListFetch::report() at all - and so the only closure carried from the core
- * thread to this one. The address is port 1 of the loopback address, so this fails by
- * connection refused within a moment: nothing listens there, and a literal address is
- * never handed to a resolver, which keeps the suite offline and quick.
- *
- * The fetch has to go off to the core rather than be refused here, which is the difference
- * that makes this a test of the path above. The wait is bounded, and generous next to a
- * connect to a port on this machine, so that nothing arriving fails the test instead of
- * hanging it. The wording is the core side half's, put in front of the core's own reason,
- * and it is asserted because HubListBridge::fetch() answers an address it will not use
- * with a reason of its own - an answer from there would say nothing about a closure
- * crossing a thread.
- *
- * Worth being exact about what this does not cover. The abort that made
- * HubListFetch::report() a template was only ever seen on the other failure - a name that
- * cannot be looked up - and does not reproduce through a refused connection however many
- * times it is run. So this pins the reporting path and the sentence it produces, and
- * nothing about that abort. Covering it would mean a test that depends on name resolution
- * and still only fails about two runs in three, which is not a test this suite should
- * carry.
+/*
+ * A source the core could not fetch is drawn with the core's reason. Port 1 of the
+ * loopback address, so the fetch fails by connection refused within a moment and the
+ * suite stays offline.
  */
-void TestHubList::aRefusedConnectionFailsThroughTheCore()
+void TestHubList::aRefusedConnectionIsShownAsTheSourcesError()
 {
-	Qdc::HubListBridge bridge(m_thread);
+	Qdc::HubDirectory directory(m_thread);
+	directory.resetSources();
+	for (const QString& url : {QStringLiteral("https://dchublist.org/hublist.xml.bz2"),
+	                           QStringLiteral("https://te-home.net/?do=hublist&get=hublist.xml.bz2"),
+	                           QStringLiteral("https://hublist.eu/hublist.xml.bz2")})
+		directory.removeSource(url);
+	QTRY_VERIFY(directory.sources().isEmpty());
 
 	const QString url = QStringLiteral("http://127.0.0.1:1/hublist.xml");
+	directory.addSource(url);
 
-	QSignalSpy failures(&bridge, &Qdc::HubListBridge::failed);
-	QVERIFY(failures.isValid());
+	QTRY_VERIFY_WITH_TIMEOUT(directory.sources().size() == 1
+		&& !directory.sources().at(0).error.isEmpty(), 15000);
+	QCOMPARE(directory.sources().at(0).url, url);
+	QVERIFY(!directory.isFetching());
+	QCOMPARE(directory.hubCount(), 0);
 
-	bridge.fetch(url);
+	Qdc::HubBrowser browser(&directory, nullptr, nullptr);
+	QLabel* status = browser.findChild<QLabel*>(QStringLiteral("mutedText"));
+	QVERIFY(status);
+	QVERIFY2(asShown(status->toolTip()).startsWith(url + QStringLiteral(" — ")), qPrintable(status->toolTip()));
+	QVERIFY2(status->text().contains(QStringLiteral("could not be fetched")), qPrintable(status->text()));
 
-	QVERIFY(bridge.isFetching(url));
+	/*
+	 * Asked to be current a moment after the failure, the core leaves the source alone:
+	 * nothing is announced between the refresh and the answer to a command sent after it,
+	 * which the core carries out and announces in order.
+	 */
+	QSignalSpy changes(&directory, &Qdc::HubDirectory::sourcesChanged);
+	Qdc::Favourites kept(m_thread);
+	forgetFavourites(kept);
+	directory.refresh();
+	kept.add(QStringLiteral("after.example.org"));
+	QTRY_VERIFY(kept.contains(QStringLiteral("after.example.org")));
+	QCOMPARE(changes.count(), 0);
+	forgetFavourites(kept);
 
-	QVERIFY2(failures.wait(15000),
-	         "the core never reported the refused download as failed");
-
-	QCOMPARE(failures.count(), 1);
-	QCOMPARE(failures.at(0).at(0).toString(), url);
-
-	QVERIFY2(failures.at(0).at(1).toString()
-			.contains(QStringLiteral("could not be fetched")),
-	         qPrintable(failures.at(0).at(1).toString()));
-
-	QVERIFY(!bridge.isFetching());
+	directory.removeSource(url);
+	QTRY_VERIFY(directory.sources().isEmpty());
 }
 
 void TestHubList::theModelSortsOnNumbersAndFiltersOnEveryColumn()
@@ -619,8 +384,6 @@ void TestHubList::theModelSortsOnNumbersAndFiltersOnEveryColumn()
 void TestHubList::theBrowserListsWhatTheDirectoryHolds()
 {
 	const QString url = QStringLiteral("http://browser.example.org/hublist.xml");
-	configureSources({url});
-
 	Qdc::HubListEntry one;
 	one.name = QStringLiteral("Films");
 	one.address = QStringLiteral("dchub://films.example.org:411");
@@ -631,10 +394,8 @@ void TestHubList::theBrowserListsWhatTheDirectoryHolds()
 	two.address = QStringLiteral("dchub://music.example.org:411");
 	two.users = 20;
 
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-	cache(directory, url, {one, two});
-
-	Qdc::HubDirectory filled(nullptr, m_config, cacheDir());
+	Qdc::HubDirectory filled(nullptr);
+	listed(filled, url, {one, two});
 	QCOMPARE(filled.hubCount(), 2);
 
 	Qdc::Favourites favourites(nullptr);
@@ -774,17 +535,13 @@ void TestHubList::theBrowserStaysOnTheTabItIsShowing()
 void TestHubList::theBrowserBookmarksAndUnbookmarks()
 {
 	const QString url = QStringLiteral("http://bookmark.example.org/hublist.xml");
-	configureSources({url});
-
 	Qdc::HubListEntry hub;
 	hub.name = QStringLiteral("Keepable");
 	hub.address = QStringLiteral("adcs://keepable.example.org:412");
 	hub.users = 12;
 
-	Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
-	cache(seed, url, {hub});
-
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+	Qdc::HubDirectory directory(nullptr);
+	listed(directory, url, {hub});
 	Qdc::Favourites favourites(m_thread);
 	forgetFavourites(favourites);
 
@@ -855,8 +612,6 @@ void TestHubList::theBrowserForgetsARecentHub()
 void TestHubList::theStarColumnKeepsAPublicHub()
 {
 	const QString url = QStringLiteral("http://star.example.org/hublist.xml");
-	configureSources({url});
-
 	Qdc::HubListEntry hub;
 	hub.name = QStringLiteral("Starrable");
 
@@ -867,10 +622,8 @@ void TestHubList::theStarColumnKeepsAPublicHub()
 	/* 411 whatever the scheme; see urlNormalisationFillsInSchemeAndPort. */
 	hub.users = 7;
 
-	Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
-	cache(seed, url, {hub});
-
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+	Qdc::HubDirectory directory(nullptr);
+	listed(directory, url, {hub});
 	Qdc::Favourites favourites(m_thread);
 	forgetFavourites(favourites);
 
@@ -911,8 +664,6 @@ void TestHubList::theStarColumnKeepsAPublicHub()
 void TestHubList::theStarColumnIsFixedAndStaysOutOfTheSort()
 {
 	const QString url = QStringLiteral("http://sorted.example.org/hublist.xml");
-	configureSources({url});
-
 	Qdc::HubListEntry small;
 	small.name = QStringLiteral("Small");
 	small.address = QStringLiteral("adc://small.example.org:412");
@@ -923,10 +674,8 @@ void TestHubList::theStarColumnIsFixedAndStaysOutOfTheSort()
 	large.address = QStringLiteral("adc://large.example.org:412");
 	large.users = 300;
 
-	Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
-	cache(seed, url, {small, large});
-
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+	Qdc::HubDirectory directory(nullptr);
+	listed(directory, url, {small, large});
 	Qdc::HubBrowser browser(&directory, nullptr, nullptr);
 
 	QTableView* table = browser.findChild<QTableView*>(QStringLiteral("publicHubs"));
@@ -1100,16 +849,20 @@ void TestHubList::theStatusLineDrawsWhatASourceSaidAsText()
 		QStringLiteral("http://lists.example.org/<b>hublist</b>.xml");
 	const QString plain = QStringLiteral("http://other.example.org/hublist.xml");
 
-	configureSources({doctored, plain});
-
 	Qdc::HubListEntry hub;
 	hub.name = QStringLiteral("Listed");
 	hub.address = QStringLiteral("adcs://listed.example.org:412");
 
-	Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
-	cache(seed, plain, {hub});
+	Qdc::HubListSource unfetched;
+	unfetched.url = doctored;
 
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
+	Qdc::HubListSource fetched;
+	fetched.url = plain;
+	fetched.fetched = QDateTime::currentDateTime();
+	fetched.hubs = 1;
+
+	Qdc::HubDirectory directory(nullptr);
+	Qdc::Testing::announce(directory, {hub}, {unfetched, fetched});
 	Qdc::HubBrowser browser(&directory, nullptr, nullptr);
 
 	/* The one muted label in the browser; see HubBrowser's constructor. */
@@ -1231,174 +984,6 @@ void TestHubList::aFinishedDownloadShowsItsWholePathAsText()
 	/* Whole, because a path is read in order to go and find the file with it: escaped
 	   and not reduced, so nothing of it is cut and no ellipsis stands in for the rest. */
 	QCOMPARE(asShown(tooltip), entry.filename);
-}
-
-/*
- * A list this program shipped and has since withdrawn is taken out of the file
- * it was written into.
- *
- * Withdrawing it from the defaults alone would fix nothing for anybody who had
- * already started the program once - the defaults are consulted only when the
- * configuration names no sources at all, so every existing installation would go
- * on fetching a server that has stopped answering and logging the failure at
- * every start.
- */
-void TestHubList::aWithdrawnListIsTakenOutOfAStoredConfiguration()
-{
-	const QStringList retired = Qdc::HubDirectory::retiredSources();
-	QVERIFY2(!retired.isEmpty(), "nothing is withdrawn, so there is nothing to test");
-
-	const QString kept = QStringLiteral("https://example.org/hublist.xml.bz2");
-	const QString mine = QStringLiteral("https://example.net/mine.xml.bz2");
-
-	/* A stored list holding a withdrawn one between two that stay. */
-	m_config->setString(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
-	                    QStringLiteral("List 0"), kept);
-	m_config->setString(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
-	                    QStringLiteral("List 1"), retired.first());
-	m_config->setString(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
-	                    QStringLiteral("List 2"), mine);
-	m_config->setNumber(Qdc::ConfigStore::Application, QStringLiteral("Hublists"),
-	                    QStringLiteral("Total"), 3);
-	m_config->save(Qdc::ConfigStore::Application);
-
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-
-	QStringList urls;
-	for (const Qdc::HubListSource& source : directory.sources())
-		urls.append(source.url);
-
-	/* Gone, and the others kept in the order they were in. */
-	QCOMPARE(urls, QStringList({kept, mine}));
-
-	/*
-	 * And taken out of the file rather than merely skipped, or it is read past on
-	 * every start and anyone opening the file sees a list nothing uses.
-	 */
-	QCOMPARE(m_config->getNumber(Qdc::ConfigStore::Application,
-	                             QStringLiteral("Hublists"), QStringLiteral("Total")), 2);
-	QCOMPARE(m_config->getString(Qdc::ConfigStore::Application,
-	                             QStringLiteral("Hublists"), QStringLiteral("List 0")), kept);
-	QCOMPARE(m_config->getString(Qdc::ConfigStore::Application,
-	                             QStringLiteral("Hublists"), QStringLiteral("List 1")), mine);
-
-	/* The tail of the longer list it replaced is gone with it. */
-	QVERIFY(!m_config->contains(Qdc::ConfigStore::Application,
-	                            QStringLiteral("Hublists"), QStringLiteral("List 2")));
-
-	/* Read back a second time, nothing is rewritten and nothing has moved. */
-	Qdc::HubDirectory again(nullptr, m_config, cacheDir());
-
-	QStringList second;
-	for (const Qdc::HubListSource& source : again.sources())
-		second.append(source.url);
-
-	QCOMPARE(second, QStringList({kept, mine}));
-}
-
-/* Nothing withdrawn is still offered as a default. */
-void TestHubList::noWithdrawnListIsStillShipped()
-{
-	for (const QString& gone : Qdc::HubDirectory::retiredSources())
-		QVERIFY2(!Qdc::HubDirectory::defaultSources().contains(gone),
-		         "a list is both shipped and withdrawn");
-}
-
-/*
- * Where one list names a hub with the fingerprint of its certificate and another
- * leaves it off, the one that can be checked is the one kept.
- *
- * The exception to the rule that the first list wins. That rule is about which
- * list describes a hub better, and this is not a description: without the
- * keyprint there is nothing to check a self-signed certificate against, and both
- * addresses reach the same hub either way.
- */
-void TestHubList::aHubKeepsTheAddressThatSaysWhichCertificateToExpect()
-{
-	const QString first = QStringLiteral("http://a.example.org/hublist.xml");
-	const QString second = QStringLiteral("http://b.example.org/hublist.xml");
-
-	configureSources({first, second});
-
-	const QString bare = QStringLiteral("adcs://secure.example.org:412");
-	const QString pinned = bare + QStringLiteral("/?kp=SHA256/AAAABBBBCCCCDDDD");
-
-	Qdc::HubListEntry without;
-	without.name = QStringLiteral("Secure");
-	without.address = bare;
-
-	Qdc::HubListEntry with;
-	with.address = pinned;
-
-	{
-		Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
-		cache(seed, first, {without});
-		cache(seed, second, {with});
-	}
-
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-
-	/* One row: the keyprint says how to check the hub, not which hub it is. */
-	QCOMPARE(directory.hubCount(), 1);
-
-	const Qdc::HubListEntry kept = directory.hubs().at(0);
-
-	QCOMPARE(kept.address, pinned);
-
-	/* And the first list's description of it survives being given the address. */
-	QCOMPARE(kept.name, QStringLiteral("Secure"));
-}
-
-/*
- * The same hub under two spellings is one row, whichever part differs.
- *
- * A host name is not case sensitive and the lists disagree about it; a keyprint
- * and a trailing slash are not part of which hub this is at all. Left in the key
- * they file one hub under several rows, and a hub whose certificate has been
- * replaced under one row per certificate.
- */
-void TestHubList::aHubIsOneRowHoweverItsListsSpellIt()
-{
-	const QString first = QStringLiteral("http://a.example.org/hublist.xml");
-	const QString second = QStringLiteral("http://b.example.org/hublist.xml");
-
-	configureSources({first, second});
-
-	Qdc::HubListEntry plain;
-	plain.name = QStringLiteral("Mixed"); 
-	plain.address = QStringLiteral("dchub://MixedCase.Example.Org:411");
-
-	Qdc::HubListEntry lowered;
-	lowered.address = QStringLiteral("dchub://mixedcase.example.org:411");
-
-	Qdc::HubListEntry slashed;
-	slashed.address = QStringLiteral("dchub://mixedcase.example.org:411/");
-
-	/* Two certificates for one hub, which is what a replaced one looks like. */
-	Qdc::HubListEntry rotated;
-	rotated.address = QStringLiteral("adcs://rotate.example.org:412/?kp=SHA256/OLDOLDOLD");
-
-	Qdc::HubListEntry rotatedAgain;
-	rotatedAgain.address = QStringLiteral("adcs://rotate.example.org:412/?kp=SHA256/NEWNEWNEW");
-
-	{
-		Qdc::HubDirectory seed(nullptr, m_config, cacheDir());
-		cache(seed, first, {plain, rotated});
-		cache(seed, second, {lowered, slashed, rotatedAgain});
-	}
-
-	Qdc::HubDirectory directory(nullptr, m_config, cacheDir());
-
-	/* Five entries naming two hubs. */
-	QCOMPARE(directory.hubCount(), 2);
-
-	/* Between two keyprints the first list still wins: nothing here knows which
-	   certificate is the current one. */
-	bool sawOld = false;
-	for (const Qdc::HubListEntry& hub : directory.hubs())
-		if (hub.address.contains(QStringLiteral("OLDOLDOLD"))) sawOld = true;
-
-	QVERIFY2(sawOld, "the first list's keyprint should have been kept");
 }
 
 QTEST_MAIN(TestHubList)

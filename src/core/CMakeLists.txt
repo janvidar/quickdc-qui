@@ -29,8 +29,6 @@ add_library(qdcbridge STATIC
     hubbridge.h
     hubdirectory.cpp
     hubdirectory.h
-    hublistbridge.cpp
-    hublistbridge.h
     mediabridge.cpp
     mediabridge.h
     networkwatch.cpp

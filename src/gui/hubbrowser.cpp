@@ -237,6 +237,8 @@ Qdc::HubBrowser::HubBrowser(HubDirectory* directory, Favourites* favourites,
 			refreshStatus();
 		});
 
+		connect(m_directory, &HubDirectory::sourcesChanged, this, &HubBrowser::refreshStatus);
+
 		connect(m_directory, &HubDirectory::fetchingChanged, this, [this](bool fetching) {
 			m_refresh->setEnabled(!fetching);
 			refreshStatus();
@@ -560,9 +562,9 @@ void Qdc::HubBrowser::refreshIfPublic()
 	if (currentTab() != PublicTab) return;
 
 	/*
-	 * Every time, because what that costs is decided inside the directory: it
-	 * fetches a source whose cache has gone stale and leaves the rest alone, so
-	 * this is a request to be current rather than a request to download.
+	 * Every time, because what that costs is decided by the core: it fetches a
+	 * source whose cache has gone stale and leaves the rest alone, so this is a
+	 * request to be current rather than a request to download.
 	 */
 	refreshPublicLists(false);
 }

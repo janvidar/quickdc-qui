@@ -255,7 +255,7 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
       output, `wait`/`expect`, exit status, `--home`; hubs, chat and settings.
 - [x] F2. Offline scenarios on loopback: join a local hub, chat, private message,
       search, file list, download (active, passive, TLS), as ctest tests.
-- [ ] F3. (batch a done 2026-11-25: connection mode, share folders, favourites/recent/completed; batch b done 2026-11-25: search attribution, picture policy) Core policy out of the GUI, each step covered by a CLI scenario before
+- [ ] F3. (batch a done 2026-11-25: connection mode, share folders, favourites/recent/completed; batch b done 2026-11-25: search attribution, picture policy; batch c done 2026-11-25: the public hub directory) Core policy out of the GUI, each step covered by a CLI scenario before
       the GUI is switched to it: search results matched to their search in the
       core; picture auto-fetch policy and limits; the board store, fetching ahead
       and withdrawn posts; the public hub directory (merge, cache); favourites,
@@ -618,3 +618,46 @@ The CLI (`qdc`, in the quickdc repository beside the core, not under test/):
   failed before. Still open: a peer connection with an unknown token stays open
   and idle instead of closing; the queue can still hold one peer under two keys
   (SID vs CID, or a hub URL written differently) - not this bug, but a hazard.
+- 2026-11-25: F3c done: the public hub directory in the core. Api:
+  `AddHubListSource` / `RemoveHubListSource` / `ResetHubListSources` and
+  `RefreshHubDirectory{force}`, answered by `HubListSources{request, sources}` -
+  each `HubListSource{url, fetched, hubs, cached, fetching, error}` - and, where
+  the merge changed, `HubDirectory{request, sources, hubs}` with each
+  `DirectoryHub{hub, listedBy}` naming its lists by index into the event's own
+  `sources`; both are in `ReportState` and `Core::state()`. Status changes go in
+  the small event, so a fetch starting does not resend thousands of hubs.
+  `core/network/hubdirectory.*` holds what the GUI's HubDirectory did: the
+  sources in [Hublists] (defaults written the first time, a Total of nought
+  respected, the withdrawn list dropped and the file rewritten on every load -
+  the core reads the file, so that moved too), a fetch per source on the core's
+  loop apart from FetchHubList's, the merge (precedence by order, blanks filled
+  from later lists, the larger user count, the keyprinted address, one row per
+  hub however spelled), and the cache: one file per source named by the SHA-1 of
+  its address under `<home>/hublists`, the JSON the GUI wrote, so existing caches
+  and settings are read as they are and no migration is needed (a reader for
+  JSON rather than for that writer, since the files are on disks already).
+  Nothing is fetched until a front end asks: `RefreshHubDirectory` fetches what
+  has no list, an empty one or one older than 12 hours, and not a source asked
+  in the last 15 minutes; `force` fetches all; an added source is fetched unless
+  its cache is fresh; a removed one loses its cache and any fetch on its way. The
+  GUI's HubDirectory is a bridge over the two events (seeded from the channel's
+  latest, `changed()` only when the merge changed, `sourcesChanged()` for the
+  status line); HubListBridge, the merge, the cache, the source list and the
+  JSON are gone from the GUI, `Testing::announce` stands in for the core in view
+  tests, and the merge and cache tests moved to `hubdirectory.tcc` (12 cases).
+  qdc: `hublist-add/remove/reset/refresh [force]`, `serve <port> <dir>` (a small
+  HTTP server in the harness on loopback, bound before the line returns, so the
+  scenario needs neither the internet nor python), `expect-served`, and
+  `restart` (the core built again over the same home, what it said forgotten).
+  Scenario hub-directory: two served lists merged with both credited, a list on
+  a closed port reported with the reason while the others list, the withdrawn
+  list left out, a restart showing the directory from the cache with nothing
+  fetched and a fresh cache not fetched again, force, remove and add, reset; 78
+  runs (30 in a row, 2x24 in parallel) without a failure. The smoke driver's
+  public run now goes through the window's directory: 3 lists, 360 hubs merged
+  and shown, one cache file each, a public hub joined.
+  Found: `Core::homeDirectory` was "~/.quickdc" unexpanded for the application,
+  and F3b's pasted pictures went through std::filesystem with it, so a paste in
+  the application would have been kept, and swept, in a directory literally
+  named "~" under the working directory. The home is now resolved where it is
+  set. 1430 green; sanitizer build 1383 green.
