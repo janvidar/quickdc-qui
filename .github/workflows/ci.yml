@@ -1,0 +1,172 @@
+#
+## Continuous integration for quickdc-qui: the GUI over the core, with every
+## submodule at the commit the superproject pins.
+##
+## Runs on the public GitHub mirror; Gitea reads .github/workflows too. The
+## submodule URLs are relative, so a recursive checkout fetches the mirrors
+## beside this repository.
+##
+## Windows is in the matrix before it builds: its job may fail until the port
+## is done (docs/distribution.md, phase 2), and its log is the list of what is
+## left.
+#
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: '6.5.3'
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            experimental: false
+          - os: macos-14
+            experimental: false
+          - os: windows-2022
+            experimental: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build zlib1g-dev libbz2-dev libssl-dev \
+            libgl1-mesa-dev libxkbcommon-x11-0 libfontconfig1 libegl1 desktop-file-utils
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja openssl@3
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install -y ninja
+          vcpkg install openssl:x64-windows zlib:x64-windows bzip2:x64-windows
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+
+      - name: Configure
+        shell: bash
+        run: |
+          extra=()
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            extra+=(-DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake")
+          fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DQUICKDC_REQUIRE_AUTOTESTS=ON "${extra[@]}"
+
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build 2>&1 | tee build.log
+          if grep -q 'warning:' build.log; then
+            echo "::error::build produced warnings"
+            grep 'warning:' build.log
+            exit 1
+          fi
+
+      - name: Test
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -LE net --output-on-failure -j4 --timeout 300
+
+  sanitizers:
+    name: sanitizers (ubuntu)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build zlib1g-dev libbz2-dev libssl-dev \
+            libgl1-mesa-dev libxkbcommon-x11-0 libfontconfig1 libegl1 desktop-file-utils
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DQUICKDC_REQUIRE_AUTOTESTS=ON -DQUICKDC_SANITIZE=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+          ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/lsan.supp
+        run: ctest --test-dir build -LE net --output-on-failure -j4 --timeout 300
+
+  # Emulated networks in rootless podman. Nightly and by hand: it takes minutes,
+  # and the scenarios that need DROP's server skip without dropd.
+  net:
+    name: net (podman)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build zlib1g-dev libbz2-dev libssl-dev podman
+
+      - name: Configure
+        run: |
+          cmake -S quickdc -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DQUICKDC_BUILD_CLI=ON -DQUICKDC_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --target qdc
+
+      - name: Test
+        env:
+          NET_KEEP: failed
+        run: ctest --test-dir build -L net --output-on-failure -j2 --timeout 600
