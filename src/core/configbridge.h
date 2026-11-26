@@ -125,6 +125,8 @@ public:
 	 */
 	void setConnectionMode(NetworkMode mode, bool useUpnp, bool forceActive);
 
+	PeerPort peerPort() const;
+
 signals:
 	/** A store was written. */
 	void saved(Qdc::ConfigStore store);
@@ -142,6 +144,9 @@ signals:
 
 	/** The core said what connection mode is in force; see connectionMode(). */
 	void connectionModeChanged();
+
+	/** The peer port moved, or came up or went down; see peerPort(). */
+	void peerPortChanged();
 
 private:
 	void onCoreEvent(const QuickDC::Api::Event& event);

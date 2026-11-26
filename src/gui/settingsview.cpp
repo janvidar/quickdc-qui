@@ -15,7 +15,6 @@
 
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDateTime>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -23,25 +22,55 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QLocale>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
-#include <QTabWidget>
+#include <QStackedWidget>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace {
 
-/*
- * Every key and default comes from Qdc::Settings (src/core/uisettings.h), which takes
- * the core's from its own schema: a field left unset shows what is really in force.
- */
+/* Every key and default comes from Qdc::Settings, which takes the core's own schema. */
 namespace S = Qdc::Settings;
 
 constexpr int KIB = 1024;
 constexpr int MIB = 1024 * 1024;
+
+/* A page is a column this wide at most; a form spread over a wide window is hard to read. */
+constexpr int PAGE_WIDTH = 640;
+constexpr int TEXT_WIDTH = 340;
+constexpr int NUMBER_WIDTH = 140;
+
+QFormLayout* makeForm(QWidget* on)
+{
+	QFormLayout* form = new QFormLayout(on);
+	form->setContentsMargins(0, 0, 0, 0);
+	form->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+	form->setLabelAlignment(Qt::AlignLeft);
+	return form;
+}
+
+QSpinBox* makeNumber(QWidget* parent, int low, int high, const QString& suffix = QString())
+{
+	QSpinBox* spin = new QSpinBox(parent);
+	spin->setRange(low, high);
+	spin->setSuffix(suffix);
+	spin->setMinimumWidth(NUMBER_WIDTH);
+	spin->setKeyboardTracking(false);
+	spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
+	return spin;
+}
+
+QLineEdit* makeText(QWidget* parent, int maxLength = 255)
+{
+	QLineEdit* edit = new QLineEdit(parent);
+	edit->setMaxLength(maxLength);
+	edit->setMinimumWidth(TEXT_WIDTH);
+	return edit;
+}
 
 }
 
@@ -51,80 +80,53 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge
 	, m_config(config)
 	, m_shares(shares)
 	, m_drop(drop)
-	, m_tabs(new QTabWidget(this))
-	, m_nickname(new QLineEdit(this))
-	, m_description(new QLineEdit(this))
-	, m_email(new QLineEdit(this))
-	, m_clientId(new QLabel(this))
-	, m_mode(new QComboBox(this))
-	, m_port(new QSpinBox(this))
-	, m_bind(new QLineEdit(this))
-	, m_address(new QLineEdit(this))
-	, m_reachability(new ReachabilityPanel(this))
-	, m_slots(new QSpinBox(this))
-	, m_maxDownloads(new QSpinBox(this))
-	, m_chunkSize(new QSpinBox(this))
-	, m_downloadDir(new QLineEdit(this))
-	, m_theme(new QComboBox(this))
-	, m_shareList(new QListWidget(this))
-	, m_removeShare(new QPushButton(tr("Remove"), this))
-	, m_renameShare(new QPushButton(tr("Rename…"), this))
-	, m_save(new QPushButton(tr("Save"), this))
-	, m_revert(new QPushButton(tr("Revert"), this))
+	, m_pages(new QListWidget(this))
+	, m_stack(new QStackedWidget(this))
 	, m_status(new QLabel(this))
 {
-	m_tabs->setDocumentMode(true);
-	m_tabs->addTab(makePage(buildIdentity()), tr("Identity"));
-	m_tabs->addTab(makePage(buildConnection()), tr("Connection"));
-	m_tabs->addTab(makePage(buildLocalHub()), tr("Local hub"));
-	m_tabs->addTab(makePage(buildTransfers()), tr("Transfers"));
-	m_tabs->addTab(makePage(buildSharing()), tr("Sharing"));
-	m_tabs->addTab(makePage(buildChat()), tr("Chat"));
-	m_tabs->addTab(makePage(buildBoards()), tr("Boards"));
-	m_tabs->addTab(makePage(buildAppearance()), tr("Appearance"));
+	m_pages->setObjectName(QStringLiteral("settingsPages"));
+	m_pages->setFixedWidth(180);
+	m_pages->setFrameShape(QFrame::NoFrame);
+	connect(m_pages, &QListWidget::currentRowChanged, m_stack, &QStackedWidget::setCurrentIndex);
 
-	m_status->setContentsMargins(4, 0, 4, 0);
+	addPage(tr("Identity"), buildIdentity());
+	addPage(tr("Connection"), buildConnection());
+	addPage(tr("Local hub"), buildLocalHub());
+	addPage(tr("Transfers"), buildTransfers());
+	addPage(tr("Sharing"), buildSharing());
+	addPage(tr("Chat"), buildChat());
+	addPage(tr("Boards"), buildBoards());
+	addPage(tr("Appearance"), buildAppearance());
+	m_pages->setCurrentRow(0);
+
 	m_status->setObjectName(QStringLiteral("mutedText"));
+	m_status->setContentsMargins(16, 0, 16, 12);
+	m_status->hide();
 
-	QHBoxLayout* buttons = new QHBoxLayout;
-	buttons->setContentsMargins(16, 0, 16, 12);
-	buttons->addWidget(m_status, 1);
-	buttons->addWidget(m_revert);
-	buttons->addWidget(m_save);
+	QVBoxLayout* right = new QVBoxLayout;
+	right->setContentsMargins(0, 0, 0, 0);
+	right->setSpacing(0);
+	right->addWidget(m_stack, 1);
+	right->addWidget(m_status);
 
-	QVBoxLayout* layout = new QVBoxLayout(this);
+	QHBoxLayout* layout = new QHBoxLayout(this);
 	layout->setContentsMargins(0, 0, 0, 0);
 	layout->setSpacing(0);
-	layout->addWidget(m_tabs, 1);
-	layout->addLayout(buttons);
-
-	connect(m_save, &QPushButton::clicked, this, [this] { save(); });
-	connect(m_revert, &QPushButton::clicked, this, &SettingsView::load);
-
-	clearVerdict();
+	layout->addWidget(m_pages);
+	layout->addLayout(right, 1);
 
 	if (m_drop)
 	{
-		connect(m_drop, &DropBridge::verdictChanged, this, &SettingsView::showVerdict);
-		connect(m_drop, &DropBridge::checkFailed, this, &SettingsView::showCheckFailed);
+		connect(m_drop, &DropBridge::verdictChanged, m_reachability, &ReachabilityPanel::setVerdict);
+		connect(m_drop, &DropBridge::checkFailed, m_reachability, &ReachabilityPanel::setFailure);
 
-		/*
-		 * Said only for a run that actually began, and never on the way out of the
-		 * button. A request the bridge decides not to make - one already in flight,
-		 * or no server named - reports nothing back, so a page that announced the
-		 * asking would be left saying it was checking for the life of the window.
-		 * Every run that starts ends in a verdict or a failure, and both of those
-		 * clear the line.
-		 */
-		connect(m_drop, &DropBridge::checkStarted, this, [this](bool) {
-			m_reachability->setChecking(true);
-		});
+		/* Only for a run that began: one the bridge declines reports nothing, and would leave this up. */
+		connect(m_drop, &DropBridge::checkStarted, this, [this](bool) { m_reachability->setChecking(true); });
 
-		showVerdict(m_drop->verdict(false));
-		showVerdict(m_drop->verdict(true));
+		m_reachability->setVerdict(m_drop->verdict(false));
+		m_reachability->setVerdict(m_drop->verdict(true));
 
-		connect(m_reachability, &ReachabilityPanel::checkRequested,
-		        m_drop, &DropBridge::recheck);
+		connect(m_reachability, &ReachabilityPanel::checkRequested, m_drop, &DropBridge::recheck);
 	}
 	else
 	{
@@ -133,17 +135,28 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge
 
 	if (!m_config)
 	{
-		m_tabs->setEnabled(false);
-		m_save->setEnabled(false);
-		m_revert->setEnabled(false);
+		m_stack->setEnabled(false);
 		m_status->setText(tr("The configuration is not available."));
+		m_status->show();
 		return;
 	}
 
 	connect(m_config, &ConfigBridge::saveFailed, this, [this](ConfigStore store) {
-		if (store == ConfigStore::Application)
-			m_status->setText(tr("The configuration could not be written."));
+		if (store != ConfigStore::Application) return;
+		m_status->setText(tr("The configuration could not be written."));
+		m_status->show();
 	});
+
+	/* A setting changed elsewhere - qdc, another window, the core itself - shows here too. */
+	QTimer* reload = new QTimer(this);
+	reload->setSingleShot(true);
+	reload->setInterval(0);
+	connect(reload, &QTimer::timeout, this, &SettingsView::load);
+	connect(m_config, &ConfigBridge::changed, reload, [reload](ConfigStore store, const QString&, const QString&) {
+		if (store == ConfigStore::Application) reload->start();
+	});
+	connect(m_config, &ConfigBridge::connectionModeChanged, reload, qOverload<>(&QTimer::start));
+	connect(m_config, &ConfigBridge::peerPortChanged, this, &SettingsView::showPeerPort);
 
 	load();
 }
@@ -158,53 +171,128 @@ Qdc::Glyph Qdc::SettingsView::glyph() const
 	return Glyph::Settings;
 }
 
-QLabel* Qdc::SettingsView::makeNote(const QString& text)
+void Qdc::SettingsView::addPage(const QString& name, QWidget* content)
 {
-	return Qdc::makeNote(text, this);
-}
+	content->setMinimumWidth(PAGE_WIDTH - 80);
+	content->setMaximumWidth(PAGE_WIDTH);
 
-QWidget* Qdc::SettingsView::makePage(QWidget* page)
-{
-	if (QLayout* form = page->layout())
-		form->setContentsMargins(16, 16, 16, 16);
+	QWidget* holder = new QWidget(this);
+	QLabel* heading = new QLabel(name, holder);
+	heading->setObjectName(QStringLiteral("settingsHeading"));
+
+	QVBoxLayout* column = new QVBoxLayout(holder);
+	column->setContentsMargins(28, 20, 28, 20);
+	column->addWidget(heading);
+	column->addWidget(content, 0, Qt::AlignLeft | Qt::AlignTop);
+	column->addStretch(1);
 
 	QScrollArea* scroll = new QScrollArea(this);
-	scroll->setWidget(page);
+	scroll->setWidget(holder);
 	scroll->setWidgetResizable(true);
 	scroll->setFrameShape(QFrame::NoFrame);
 
-	return scroll;
+	m_stack->addWidget(scroll);
+
+	QListWidgetItem* item = new QListWidgetItem(name, m_pages);
+	item->setSizeHint(QSize(0, 34));
+}
+
+QWidget* Qdc::SettingsView::advancedSection(QWidget* content)
+{
+	QWidget* section = new QWidget(content->parentWidget());
+
+	QToolButton* toggle = new QToolButton(section);
+	toggle->setText(tr("More settings"));
+	toggle->setCheckable(true);
+	toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+	toggle->setArrowType(Qt::RightArrow);
+	toggle->setAutoRaise(true);
+
+	content->setParent(section);
+	content->hide();
+
+	connect(toggle, &QToolButton::toggled, section, [toggle, content](bool open) {
+		toggle->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+		content->setVisible(open);
+	});
+
+	QVBoxLayout* layout = new QVBoxLayout(section);
+	layout->setContentsMargins(0, 8, 0, 0);
+	layout->addWidget(toggle, 0, Qt::AlignLeft);
+	layout->addWidget(content);
+	return section;
+}
+
+QLabel* Qdc::SettingsView::makeHint(const QString& text, QWidget* parent)
+{
+	QLabel* hint = Qdc::makeNote(text, parent);
+	hint->setWordWrap(true);
+	return hint;
+}
+
+void Qdc::SettingsView::bind(QLineEdit* field, const Settings::Text& setting)
+{
+	m_loaders.push_back([this, field, setting] {
+		if (!field->hasFocus()) field->setText(m_config->read(setting));
+	});
+
+	connect(field, &QLineEdit::editingFinished, this, [this, field, setting] {
+		const QString value = field->text().trimmed();
+		if (!m_loading && value != m_config->read(setting)) m_config->write(setting, value);
+	});
+}
+
+void Qdc::SettingsView::bind(QSpinBox* field, const Settings::Number& setting, int scale)
+{
+	m_loaders.push_back([this, field, setting, scale] {
+		if (!field->hasFocus()) field->setValue(qMax(field->minimum(), m_config->read(setting) / scale));
+	});
+
+	connect(field, &QSpinBox::valueChanged, this, [this, setting, scale](int value) {
+		if (!m_loading && value * scale != m_config->read(setting)) m_config->write(setting, value * scale);
+	});
+}
+
+void Qdc::SettingsView::bind(QCheckBox* field, const Settings::Flag& setting)
+{
+	m_loaders.push_back([this, field, setting] { field->setChecked(m_config->read(setting)); });
+
+	connect(field, &QCheckBox::toggled, this, [this, setting](bool on) {
+		if (!m_loading && on != m_config->read(setting)) m_config->write(setting, on);
+	});
 }
 
 QWidget* Qdc::SettingsView::buildIdentity()
 {
 	QWidget* page = new QWidget(this);
 
-	m_nickname->setMaxLength(63);
-	m_nickname->setPlaceholderText(tr("How other users see you"));
+	QLineEdit* nickname = makeText(page, 63);
+	nickname->setObjectName(QStringLiteral("identityNickname"));
+	QLineEdit* description = makeText(page);
+	description->setObjectName(QStringLiteral("identityDescription"));
+	QLineEdit* email = makeText(page, 127);
+	email->setObjectName(QStringLiteral("identityEmail"));
 
-	m_description->setMaxLength(255);
-	m_email->setMaxLength(127);
-
+	m_clientId = new QLabel(page);
 	m_clientId->setTextInteractionFlags(Qt::TextSelectableByMouse);
-
+	m_clientId->setToolTip(tr("Derived from this installation's private key"));
 	QFont mono = m_clientId->font();
 	mono.setFamily(QStringLiteral("monospace"));
 	m_clientId->setFont(mono);
 
-	QFormLayout* form = new QFormLayout(page);
-	form->addRow(tr("Nickname"), m_nickname);
-	form->addRow(tr("Description"), m_description);
-	form->addRow(tr("E-mail"), m_email);
+	QFormLayout* form = makeForm(page);
+	form->addRow(tr("Nickname"), nickname);
+	form->addRow(tr("Description"), description);
+	form->addRow(tr("E-mail"), email);
 	form->addRow(tr("Client ID"), m_clientId);
 
-	form->addRow(makeNote(tr(
-		"The client ID is derived from a private key and identifies this "
-		"installation.")));
-
-	connect(m_nickname, &QLineEdit::textEdited, this, &SettingsView::markModified);
-	connect(m_description, &QLineEdit::textEdited, this, &SettingsView::markModified);
-	connect(m_email, &QLineEdit::textEdited, this, &SettingsView::markModified);
+	bind(nickname, S::Nickname);
+	bind(description, S::Description);
+	bind(email, S::Email);
+	m_loaders.push_back([this] {
+		const QString cid = m_config->read(S::ClientId);
+		m_clientId->setText(cid.isEmpty() ? tr("assigned on first connection") : cid);
+	});
 
 	return page;
 }
@@ -213,190 +301,143 @@ QWidget* Qdc::SettingsView::buildConnection()
 {
 	QWidget* page = new QWidget(this);
 
-	/*
-	 * How much to work out without asking. Three answers rather than the two the
-	 * protocol has, because "active" is a thing to be rather than a thing to set:
-	 * the first two both intend it, and differ only in who chooses the plumbing.
-	 */
-	m_mode->addItem(tr("Automatic — set this up and check it for me"),
-	                static_cast<int>(NetworkMode::Automatic));
-	m_mode->addItem(tr("Advanced — I will choose the port and forwarding"),
-	                static_cast<int>(NetworkMode::Advanced));
-	m_mode->addItem(tr("Passive — I only connect out"),
-	                static_cast<int>(NetworkMode::Passive));
+	m_mode = new QComboBox(page);
+	m_mode->setObjectName(QStringLiteral("connectionMode"));
+	m_mode->addItem(tr("Automatic"), static_cast<int>(NetworkMode::Automatic));
+	m_mode->addItem(tr("Advanced"), static_cast<int>(NetworkMode::Advanced));
+	m_mode->addItem(tr("Passive"), static_cast<int>(NetworkMode::Passive));
+	m_mode->setItemData(0, tr("Choose a port, forward it and check it for me"), Qt::ToolTipRole);
+	m_mode->setItemData(1, tr("I choose the port and the forwarding"), Qt::ToolTipRole);
+	m_mode->setItemData(2, tr("Only connect out"), Qt::ToolTipRole);
 
-	m_port->setRange(1, 65535);
+	m_modeHint = makeHint(QString(), page);
+
+	m_automaticPort = new QLabel(page);
+	m_automaticPort->setObjectName(QStringLiteral("connectionPortInUse"));
+
+	m_port = makeNumber(page, 1, 65535);
 	m_port->setObjectName(QStringLiteral("connectionPort"));
-	m_bind->setPlaceholderText(QString::fromUtf8(S::Bind.fallback));
-	m_address->setPlaceholderText(tr("Detected automatically"));
+	m_portStatus = new QLabel(page);
+	m_portStatus->setObjectName(QStringLiteral("connectionPortStatus"));
 
-	/*
-	 * One container per mode, rather than a page of fields shown and hidden one at a
-	 * time. A form layout keeps the label and the field it belongs to as two separate
-	 * items, so hiding the field leaves its label standing over nothing - and the two
-	 * modes that decide the plumbing themselves would each show a column of names with
-	 * no values beside them. A container with its own form is one thing to hide, and
-	 * the labels go with it.
-	 *
-	 * Advanced has two of them because its claim belongs below the measurement it
-	 * defeats and its plumbing above it, and a container can only be in one place.
-	 */
-	m_automaticFields = new QWidget(page);
-	m_advancedFields = new QWidget(page);
-	m_advancedClaim = new QWidget(page);
-	m_passiveFields = new QWidget(page);
+	QHBoxLayout* portRow = new QHBoxLayout;
+	m_portRow = portRow;
+	portRow->setContentsMargins(0, 0, 0, 0);
+	portRow->addWidget(m_port);
+	portRow->addWidget(m_portStatus);
+	portRow->addStretch(1);
 
-	m_useUpnp = new QCheckBox(
-		tr("Ask the router to forward this port (UPnP-IGD)"), m_advancedFields);
+	m_useUpnp = new QCheckBox(tr("Ask the router to forward the port (UPnP)"), page);
 	m_useUpnp->setObjectName(QStringLiteral("connectionUpnp"));
-	m_useUpnp->setToolTip(tr("Search the local network for an internet gateway and ask "
-	                         "it to forward the port above to this machine"));
-	connect(m_useUpnp, &QCheckBox::toggled, this, &SettingsView::markModified);
+	m_useUpnp->setToolTip(tr("Announces this machine to the local network to find the router"));
 
-	m_forceActive = new QCheckBox(
-		tr("Tell hubs a peer can connect here, whatever was measured"), m_advancedClaim);
+	QWidget* more = new QWidget(page);
+	QLineEdit* bindTo = makeText(more, 63);
+	bindTo->setObjectName(QStringLiteral("connectionBind"));
+	bindTo->setPlaceholderText(QString::fromUtf8(S::Bind.fallback));
+	QLineEdit* address = makeText(more, 63);
+	address->setObjectName(QStringLiteral("connectionAddress"));
+	address->setPlaceholderText(tr("Detected automatically"));
+	m_forceActive = new QCheckBox(tr("Always tell hubs I can be connected to"), more);
 	m_forceActive->setObjectName(QStringLiteral("connectionForceActive"));
-	m_forceActive->setToolTip(tr("Announce active mode on every hub without waiting for "
-	                             "a measurement or a peer to establish it"));
-	connect(m_forceActive, &QCheckBox::toggled, this, &SettingsView::markModified);
+	m_forceActive->setToolTip(tr("Whatever the check says. If it is wrong, peers fail to reach you."));
 
-	/*
-	 * What automatic does on the user's behalf, said because it does it without asking
-	 * again: a server outside is contacted and has a connection made back here, which
-	 * is a disclosure the mode makes on every start rather than a field somebody filled
-	 * in. The name is the one the core says it asks, so that a page saying who is asked
-	 * cannot come to name somebody else.
-	 */
-	QFormLayout* automatic = new QFormLayout(m_automaticFields);
-	automatic->setContentsMargins(0, 0, 0, 0);
+	QFormLayout* moreForm = makeForm(more);
+	moreForm->addRow(tr("Bind to"), bindTo);
+	moreForm->addRow(tr("External address"), address);
+	moreForm->addRow(QString(), m_forceActive);
+	m_advancedMore = advancedSection(more);
 
-	m_automaticNote = makeNote(QString());
-	automatic->addRow(m_automaticNote);
-	describeAutomatic();
+	m_reachability = new ReachabilityPanel(page);
 
-	if (m_config)
-		connect(m_config, &ConfigBridge::connectionModeChanged,
-		        this, &SettingsView::describeAutomatic);
+	m_connectionForm = makeForm(page);
+	m_connectionForm->addRow(tr("Connection"), m_mode);
+	m_connectionForm->addRow(m_modeHint);
+	m_connectionForm->addRow(tr("Port"), m_automaticPort);
+	m_connectionForm->addRow(tr("Port"), portRow);
+	m_connectionForm->addRow(QString(), m_useUpnp);
+	m_connectionForm->addRow(m_reachability);
+	m_connectionForm->addRow(m_advancedMore);
 
-	QFormLayout* advanced = new QFormLayout(m_advancedFields);
-	advanced->setContentsMargins(0, 0, 0, 0);
-	advanced->addRow(tr("Port"), m_port);
-	advanced->addRow(tr("Bind to"), m_bind);
-	advanced->addRow(tr("External address"), m_address);
+	bind(m_port, S::Port);
+	bind(bindTo, S::Bind);
+	bind(address, S::Address);
 
-	advanced->addRow(QString(), m_useUpnp);
+	connect(m_mode, &QComboBox::activated, this, [this] {
+		applyConnectionMode();
+		submitConnectionMode();
+	});
+	connect(m_useUpnp, &QCheckBox::toggled, this, &SettingsView::submitConnectionMode);
+	connect(m_forceActive, &QCheckBox::toggled, this, &SettingsView::submitConnectionMode);
 
-	advanced->addRow(makeNote(tr(
-		"Forwarding is asked for by searching the local network for a gateway, which "
-		"tells every host on it that this machine is here and what it runs. A router "
-		"that grants a mapping does not know whether anything above it honours one, so "
-		"the check below is what settles whether it helped - and where it did not, the "
-		"mapping is given up again rather than left open.")));
-
-	advanced->addRow(makeNote(tr(
-		"Everything here applies as soon as it is saved, the port and the bind "
-		"addresses included: the peer port is opened again where they now say.")));
-
-	advanced->addRow(makeNote(tr(
-		"The check below runs against the same server automatic uses, so that a port "
-		"and a forwarding somebody chose are answered for rather than taken on trust. "
-		"It tells that server the address this machine connects from and the port it "
-		"listens on, and has it connect back to prove the answer. A server of your own "
-		"can be named in the configuration file.")));
-
-	/*
-	 * What passive costs, in the words the measuring library uses for the same
-	 * conclusion - see combine() in libdrop-cpp/src/decide.cpp - and what it does not
-	 * cost, because a mode somebody may quite reasonably want is a trade and not a
-	 * warning.
-	 */
-	QFormLayout* passive = new QFormLayout(m_passiveFields);
-	passive->setContentsMargins(0, 0, 0, 0);
-
-	passive->addRow(makeNote(tr(
-		"No port is forwarded and nothing is told to connect here. Other clients will "
-		"not be able to connect to you directly, and transfers with other passive users "
-		"will not work at all, because neither side can dial the other. Searching, "
-		"chatting and downloading from active users work as they do in the other "
-		"modes.")));
-
-	QFormLayout* form = new QFormLayout(page);
-	form->addRow(tr("Connection"), m_mode);
-	form->addRow(m_automaticFields);
-	form->addRow(m_passiveFields);
-	form->addRow(m_advancedFields);
-
-	form->addRow(makeNote(tr(
-		"The client tag hubs see is built from the version and whether this is "
-		"active or passive, and cannot be changed.")));
-
-	form->addRow(m_reachability);
-
-	form->addRow(makeNote(tr(
-		"An answer describes the network as it was at the moment it was measured. Move "
-		"to another one - a different WiFi, a cable, a VPN coming up - and the address "
-		"and the verdict may both be wrong until it is checked again.")));
-
-	QFormLayout* claim = new QFormLayout(m_advancedClaim);
-	claim->setContentsMargins(0, 0, 0, 0);
-	claim->addRow(QString(), m_forceActive);
-
-	claim->addRow(makeNote(tr(
-		"Turning this on tells every hub that a peer can connect here, whatever the "
-		"check above concluded and whatever peers have reported. The rows above and this "
-		"setting can disagree on screen, and this setting is the one the hubs are told "
-		"about. It is meant for a network where the check cannot work but you know that "
-		"incoming connections do arrive: a check against one server is one server's "
-		"opinion, and there is no second one configured to confirm it. When the claim is "
-		"wrong, every peer that acts on it by dialling this client fails to reach it and "
-		"the transfer fails at their end, so what you see is a download that never "
-		"starts rather than a setting to turn off.")));
-
-	form->addRow(m_advancedClaim);
-
-	connect(m_bind, &QLineEdit::textEdited, this, &SettingsView::markModified);
-	connect(m_address, &QLineEdit::textEdited, this, &SettingsView::markModified);
-	connect(m_mode, &QComboBox::currentIndexChanged, this, &SettingsView::markModified);
-	connect(m_mode, &QComboBox::currentIndexChanged,
-	        this, &SettingsView::applyConnectionMode);
-	connect(m_port, &QSpinBox::valueChanged, this, &SettingsView::markModified);
-
-	applyConnectionMode();
+	m_loaders.push_back([this] {
+		const ConnectionMode connection = m_config->connectionMode();
+		m_mode->setCurrentIndex(qMax(0, m_mode->findData(static_cast<int>(connection.mode))));
+		m_useUpnp->setChecked(connection.useUpnp);
+		m_forceActive->setChecked(connection.forceActive);
+	});
 
 	return page;
 }
 
-void Qdc::SettingsView::describeAutomatic()
+void Qdc::SettingsView::submitConnectionMode()
 {
-	const QString server = m_config ? m_config->connectionMode().reachabilityServer
-	                                : QString();
+	if (m_loading || !m_config) return;
 
-	m_automaticNote->setText(tr(
-		"Automatic chooses the port, asks the router to forward it, and checks the "
-		"result against %1. That check tells %1 the address this machine connects from "
-		"and the port it listens on, and has it connect back to prove the answer; "
-		"Advanced is where a different server, or none at all, is named.")
-		.arg(server));
+	const NetworkMode mode = static_cast<NetworkMode>(m_mode->currentData().toInt());
+	const ConnectionMode now = m_config->connectionMode();
+	if (mode == now.mode && m_useUpnp->isChecked() == now.useUpnp
+	    && m_forceActive->isChecked() == now.forceActive) return;
+
+	m_config->setConnectionMode(mode, m_useUpnp->isChecked(), m_forceActive->isChecked());
 }
 
 void Qdc::SettingsView::applyConnectionMode()
 {
 	const NetworkMode mode = static_cast<NetworkMode>(m_mode->currentData().toInt());
+	const QString server = m_config ? m_config->connectionMode().reachabilityServer : QString();
 
 	const bool advanced = mode == NetworkMode::Advanced;
-	const bool passive = mode == NetworkMode::Passive;
+	m_connectionForm->setRowVisible(m_automaticPort, mode == NetworkMode::Automatic);
+	m_connectionForm->setRowVisible(m_portRow, advanced);
+	m_connectionForm->setRowVisible(m_useUpnp, advanced);
+	m_connectionForm->setRowVisible(m_advancedMore, advanced);
+	m_reachability->setShowPorts(mode != NetworkMode::Passive);
 
-	m_automaticFields->setVisible(mode == NetworkMode::Automatic);
-	m_advancedFields->setVisible(advanced);
-	m_advancedClaim->setVisible(advanced);
-	m_passiveFields->setVisible(passive);
+	if (mode == NetworkMode::Automatic)
+		m_modeHint->setText(server.isEmpty() ? tr("Picks a port and asks the router to forward it.")
+		                                     : tr("Picks a port, asks the router to forward it, and checks it with %1.").arg(server));
+	else if (mode == NetworkMode::Passive)
+		m_modeHint->setText(tr("Peers cannot connect to you, so transfers with other passive users do not work."));
+	m_modeHint->setVisible(mode != NetworkMode::Advanced);
+}
 
-	/*
-	 * Passive keeps the addresses and loses the ports. An address is worth showing
-	 * whatever the mode - it is how somebody tells one network from another - while an
-	 * inbound port in a mode that offers none is an answer to a question nobody asked.
-	 */
-	m_reachability->setShowPorts(!passive);
+void Qdc::SettingsView::showPeerPort()
+{
+	if (!m_config) return;
+
+	const PeerPort port = m_config->peerPort();
+
+	if (!port.bound)
+	{
+		m_portStatus->setText(tr("Not listening"));
+		m_automaticPort->setText(tr("Not listening"));
+	}
+	else if (port.configured && port.bound != port.configured)
+	{
+		m_portStatus->setText(tr("%1 is in use, listening on %2").arg(port.configured).arg(port.bound));
+		m_automaticPort->setText(tr("%1 (%2 is in use)").arg(port.bound).arg(port.configured));
+	}
+	else
+	{
+		m_portStatus->setText(tr("Listening"));
+		m_automaticPort->setText(QString::number(port.bound));
+	}
+
+	if (m_localHubHint)
+		m_localHubHint->setText(port.bound
+			? tr("Anyone who can reach port %1 can join; there is no password.").arg(port.bound)
+			: tr("Anyone who can reach the client's port can join; there is no password."));
 }
 
 QWidget* Qdc::SettingsView::buildLocalHub()
@@ -404,133 +445,72 @@ QWidget* Qdc::SettingsView::buildLocalHub()
 	QWidget* page = new QWidget(this);
 
 	m_localHub = new QCheckBox(tr("Run a hub on this computer"), page);
-	m_localHub->setToolTip(tr("Answer as a hub on the port this client already "
-	                          "listens on, so that other people can connect here"));
-	connect(m_localHub, &QCheckBox::toggled, this, &SettingsView::markModified);
+	m_localHub->setObjectName(QStringLiteral("localHubEnabled"));
 
 	m_localHubFields = new QWidget(page);
 
-	m_localHubName = new QLineEdit(m_localHubFields);
-	m_localHubName->setMaxLength(63);
-	m_localHubName->setPlaceholderText(QString::fromUtf8(S::HubName.fallback));
-	connect(m_localHubName, &QLineEdit::textEdited, this, &SettingsView::markModified);
+	QLineEdit* name = makeText(m_localHubFields, 63);
+	name->setPlaceholderText(QString::fromUtf8(S::HubName.fallback));
+	QLineEdit* description = makeText(m_localHubFields);
+	description->setPlaceholderText(QString::fromUtf8(S::HubDescription.fallback));
 
-	m_localHubDescription = new QLineEdit(m_localHubFields);
-	m_localHubDescription->setMaxLength(255);
-	m_localHubDescription->setPlaceholderText(QString::fromUtf8(S::HubDescription.fallback));
-	connect(m_localHubDescription, &QLineEdit::textEdited,
-	        this, &SettingsView::markModified);
+	QWidget* limits = new QWidget(m_localHubFields);
+	QSpinBox* users = makeNumber(limits, 1, 65536);
+	users->setObjectName(QStringLiteral("localHubUsers"));
+	QSpinBox* history = makeNumber(limits, 0, 65536, tr(" lines"));
+	history->setSpecialValueText(tr("none"));
+	QSpinBox* perAddress = makeNumber(limits, 1, 65536);
+	QSpinBox* handshakes = makeNumber(limits, 1, 65536);
+	QSpinBox* handshakeTimeout = makeNumber(limits, 0, 86400, tr(" s"));
+	handshakeTimeout->setSpecialValueText(tr("no limit"));
+	QSpinBox* idleTimeout = makeNumber(limits, 0, 86400, tr(" s"));
+	idleTimeout->setSpecialValueText(tr("no limit"));
+	QSpinBox* linger = makeNumber(limits, 0, 86400, tr(" s"));
+	linger->setSpecialValueText(tr("no limit"));
+	QSpinBox* sendQueue = makeNumber(limits, 4, 16 * KIB, tr(" KiB"));
+	sendQueue->setSingleStep(4);
+	sendQueue->setObjectName(QStringLiteral("localHubSendQueue"));
+	sendQueue->setToolTip(tr("Beyond this, only the most important messages go to that person"));
+	QCheckBox* checkClaims = new QCheckBox(tr("Check that clients can be connected to"), limits);
 
-	m_localHubUsers = new QSpinBox(m_localHubFields);
-	m_localHubUsers->setRange(1, 65536);
-	m_localHubUsers->setToolTip(tr("How many people may be on the hub at once"));
-	connect(m_localHubUsers, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+	QFormLayout* limitForm = makeForm(limits);
+	limitForm->addRow(tr("Users at most"), users);
+	limitForm->addRow(tr("Chat shown on arrival"), history);
+	limitForm->addRow(tr("Connections per address"), perAddress);
+	limitForm->addRow(tr("Logins at once"), handshakes);
+	limitForm->addRow(tr("Login timeout"), handshakeTimeout);
+	limitForm->addRow(tr("Idle timeout"), idleTimeout);
+	limitForm->addRow(tr("Kick grace"), linger);
+	limitForm->addRow(tr("Send queue per user"), sendQueue);
+	limitForm->addRow(QString(), checkClaims);
 
-	m_localHubHistory = new QSpinBox(m_localHubFields);
-	m_localHubHistory->setRange(0, 65536);
-	m_localHubHistory->setSuffix(tr(" lines"));
-	m_localHubHistory->setSpecialValueText(tr("keep none"));
-	m_localHubHistory->setToolTip(tr("What somebody arriving is shown of what was "
-	                                 "said before they got here"));
-	connect(m_localHubHistory, &QSpinBox::valueChanged,
-	        this, &SettingsView::markModified);
+	m_localHubHint = makeHint(QString(), m_localHubFields);
 
-	m_localHubPerAddress = new QSpinBox(m_localHubFields);
-	m_localHubPerAddress->setRange(1, 65536);
-	m_localHubPerAddress->setToolTip(tr("Connections allowed from one address at a time"));
-	connect(m_localHubPerAddress, &QSpinBox::valueChanged,
-	        this, &SettingsView::markModified);
-
-	m_localHubHandshakes = new QSpinBox(m_localHubFields);
-	m_localHubHandshakes->setRange(1, 65536);
-	m_localHubHandshakes->setToolTip(tr("Connections allowed to sit part way through "
-	                                    "logging in at once"));
-	connect(m_localHubHandshakes, &QSpinBox::valueChanged,
-	        this, &SettingsView::markModified);
-
-	m_localHubHandshakeTimeout = new QSpinBox(m_localHubFields);
-	m_localHubHandshakeTimeout->setRange(0, 86400);
-	m_localHubHandshakeTimeout->setSuffix(tr(" seconds"));
-	m_localHubHandshakeTimeout->setSpecialValueText(tr("no limit"));
-	m_localHubHandshakeTimeout->setToolTip(tr("How long a connection may take over "
-	                                          "logging in before it is dropped"));
-	connect(m_localHubHandshakeTimeout, &QSpinBox::valueChanged,
-	        this, &SettingsView::markModified);
-
-	m_localHubIdleTimeout = new QSpinBox(m_localHubFields);
-	m_localHubIdleTimeout->setRange(0, 86400);
-	m_localHubIdleTimeout->setSuffix(tr(" seconds"));
-	m_localHubIdleTimeout->setSpecialValueText(tr("no limit"));
-	m_localHubIdleTimeout->setToolTip(tr("How long somebody logged in may be silent "
-	                                     "for before they are dropped"));
-	connect(m_localHubIdleTimeout, &QSpinBox::valueChanged,
-	        this, &SettingsView::markModified);
-
-	m_localHubLinger = new QSpinBox(m_localHubFields);
-	m_localHubLinger->setRange(0, 86400);
-	m_localHubLinger->setSuffix(tr(" seconds"));
-	m_localHubLinger->setSpecialValueText(tr("no limit"));
-	m_localHubLinger->setToolTip(tr("How long somebody being kicked is given to read "
-	                                "the reason before the connection goes anyway"));
-	connect(m_localHubLinger, &QSpinBox::valueChanged, this, &SettingsView::markModified);
-
-	m_localHubSendQueue = new QSpinBox(m_localHubFields);
-
-	m_localHubSendQueue->setRange(4, 16 * KIB);
-	m_localHubSendQueue->setSingleStep(4);
-	m_localHubSendQueue->setSuffix(tr(" KiB"));
-	m_localHubSendQueue->setToolTip(tr("How much may be waiting to go to one person "
-	                                   "before they are skipped for anything but the "
-	                                   "most important messages"));
-	connect(m_localHubSendQueue, &QSpinBox::valueChanged,
-	        this, &SettingsView::markModified);
-
-	m_localHubCheckClaims = new QCheckBox(
-		tr("Check that a client can be connected to"), m_localHubFields);
-	m_localHubCheckClaims->setToolTip(tr("Try the address somebody says they can be "
-	                                     "reached on, so that they can be told when "
-	                                     "they are wrong about it"));
-	connect(m_localHubCheckClaims, &QCheckBox::toggled,
-	        this, &SettingsView::markModified);
-
-	QFormLayout* form = new QFormLayout(m_localHubFields);
-	form->setContentsMargins(0, 0, 0, 0);
-	form->addRow(tr("Hub name"), m_localHubName);
-	form->addRow(tr("Description"), m_localHubDescription);
-	form->addRow(tr("Most people at once"), m_localHubUsers);
-	form->addRow(tr("Show new arrivals"), m_localHubHistory);
-	form->addRow(tr("From one address"), m_localHubPerAddress);
-	form->addRow(tr("Logging in at once"), m_localHubHandshakes);
-	form->addRow(tr("Allowed to log in for"), m_localHubHandshakeTimeout);
-	form->addRow(tr("Drop after silence of"), m_localHubIdleTimeout);
-	form->addRow(tr("After a kick, wait"), m_localHubLinger);
-	form->addRow(tr("Queue for one person"), m_localHubSendQueue);
-	form->addRow(QString(), m_localHubCheckClaims);
+	QFormLayout* form = makeForm(m_localHubFields);
+	form->addRow(tr("Name"), name);
+	form->addRow(tr("Description"), description);
+	form->addRow(m_localHubHint);
+	form->addRow(advancedSection(limits));
 
 	connect(m_localHub, &QCheckBox::toggled, m_localHubFields, &QWidget::setEnabled);
-	m_localHubFields->setEnabled(m_localHub->isChecked());
 
 	QVBoxLayout* column = new QVBoxLayout(page);
+	column->setContentsMargins(0, 0, 0, 0);
 	column->addWidget(m_localHub);
 	column->addWidget(m_localHubFields);
 
-	column->addWidget(makeNote(tr(
-		"A hub here answers on the same port this client already listens on, which is "
-		"set on the Connection tab, so there is no separate address to give out. "
-		"Anyone who can reach that port can join, and there is no password: the hub "
-		"decides who may connect by address and by how many are already on it, and by "
-		"nothing else.")));
-
-	column->addWidget(makeNote(tr(
-		"Saving this page applies it straight away, without restarting. Turning the "
-		"hub off disconnects whoever is on it at the time.")));
-
-	column->addWidget(makeNote(tr(
-		"Bulletin boards on a hub run here are configured in the file rather than on "
-		"this page, one section per board, and a hub with none configured offers none. "
-		"The Boards tab is about the boards this client reads on other people's hubs.")));
-
-	column->addStretch(1);
+	bind(m_localHub, S::HubEnabled);
+	bind(name, S::HubName);
+	bind(description, S::HubDescription);
+	bind(users, S::HubMaxUsers);
+	bind(history, S::HubMaxHistory);
+	bind(perAddress, S::HubMaxPerAddress);
+	bind(handshakes, S::HubMaxHandshakes);
+	bind(handshakeTimeout, S::HubHandshakeTimeout);
+	bind(idleTimeout, S::HubIdleTimeout);
+	bind(linger, S::HubLingerTimeout);
+	bind(sendQueue, S::HubMaxSendQueue, KIB);
+	bind(checkClaims, S::HubCheckClaims);
 
 	return page;
 }
@@ -539,68 +519,41 @@ QWidget* Qdc::SettingsView::buildTransfers()
 {
 	QWidget* page = new QWidget(this);
 
-	m_slots->setRange(0, 999);
-	m_slots->setToolTip(tr("How many users may download from you at once"));
+	QSpinBox* uploadSlots = makeNumber(page, 0, 999);
+	uploadSlots->setObjectName(QStringLiteral("transfersSlots"));
+	uploadSlots->setToolTip(tr("How many people may download from you at once"));
+	QSpinBox* downloads = makeNumber(page, 1, 999);
+	downloads->setObjectName(QStringLiteral("transfersDownloads"));
+	downloads->setToolTip(tr("How many peers to download from at once"));
 
-	m_maxDownloads->setRange(1, 999);
-	m_maxDownloads->setToolTip(tr("How many peers to fetch from at once"));
-
-	m_chunkSize->setRange(64, 65536);
-	m_chunkSize->setSingleStep(64);
-	m_chunkSize->setSuffix(tr(" KiB"));
-	m_chunkSize->setToolTip(tr("The least that is asked of one peer at a time; a "
-	                           "peer that turns out to be fast is asked for more"));
-
+	m_downloadDir = makeText(page, 4096);
+	m_downloadDir->setObjectName(QStringLiteral("transfersDirectory"));
 	m_downloadDir->setPlaceholderText(QString::fromUtf8(S::DownloadDirectory.fallback));
-
 	QPushButton* browse = new QPushButton(tr("Browse…"), page);
-	connect(browse, &QPushButton::clicked, this,
-	        &SettingsView::chooseDownloadDirectory);
+	connect(browse, &QPushButton::clicked, this, &SettingsView::chooseDownloadDirectory);
 
-	QHBoxLayout* downloadRow = new QHBoxLayout;
-	downloadRow->setContentsMargins(0, 0, 0, 0);
-	downloadRow->addWidget(m_downloadDir, 1);
-	downloadRow->addWidget(browse);
+	QHBoxLayout* directoryRow = new QHBoxLayout;
+	directoryRow->setContentsMargins(0, 0, 0, 0);
+	directoryRow->addWidget(m_downloadDir);
+	directoryRow->addWidget(browse);
 
-	QFormLayout* form = new QFormLayout(page);
-	form->addRow(tr("Upload slots"), m_slots);
-	form->addRow(tr("Concurrent downloads"), m_maxDownloads);
-	form->addRow(tr("Smallest chunk"), m_chunkSize);
-	form->addRow(tr("Save downloads to"), downloadRow);
+	QWidget* more = new QWidget(page);
+	QSpinBox* chunk = makeNumber(more, 64, 65536, tr(" KiB"));
+	chunk->setObjectName(QStringLiteral("transfersChunk"));
+	chunk->setSingleStep(64);
+	chunk->setToolTip(tr("The least asked of a peer at a time; fast peers are asked for more"));
+	makeForm(more)->addRow(tr("Smallest chunk"), chunk);
 
-	/*
-	 * Said because the field is now a floor rather than the size, and somebody who
-	 * set it expecting the latter would otherwise have no way to know.
-	 */
-	form->addRow(makeNote(tr(
-		"A chunk is sized to the source it is asked of: enough for a second or two "
-		"of transfer at whatever that peer has been managing, never less than the "
-		"figure above. Every chunk costs a round trip, so asking a fast peer for a "
-		"small one leaves the connection waiting between chunks instead of "
-		"transferring.")));
+	QFormLayout* form = makeForm(page);
+	form->addRow(tr("Upload slots"), uploadSlots);
+	form->addRow(tr("Downloads at once"), downloads);
+	form->addRow(tr("Save downloads to"), directoryRow);
+	form->addRow(advancedSection(more));
 
-	/*
-	 * Said rather than shown as a disabled field. Nothing in the core throttles:
-	 * the bandwidth manager only counts bytes, so a limit here would be stored and
-	 * ignored.
-	 */
-	form->addRow(makeNote(tr(
-		"There is no transfer rate limit yet. QuickDC measures its own throughput "
-		"but has nothing that slows a transfer down, so a limit set here would "
-		"have no effect and is not offered.")));
-
-	/*
-	 * Said here rather than in a tooltip, because somebody looking for the folder
-	 * their unfinished downloads are in will not find one and is owed the reason.
-	 */
-	form->addRow(makeNote(tr(
-		"An unfinished download is kept beside its final name with \".part\" "
-		"added, so there is no separate folder for incomplete files.")));
-
-	connect(m_slots, &QSpinBox::valueChanged, this, &SettingsView::markModified);
-	connect(m_maxDownloads, &QSpinBox::valueChanged, this, &SettingsView::markModified);
-	connect(m_chunkSize, &QSpinBox::valueChanged, this, &SettingsView::markModified);
-	connect(m_downloadDir, &QLineEdit::textEdited, this, &SettingsView::markModified);
+	bind(uploadSlots, S::Slots);
+	bind(downloads, S::MaxDownloads);
+	bind(chunk, S::ChunkSize, KIB);
+	bind(m_downloadDir, S::DownloadDirectory);
 
 	return page;
 }
@@ -608,59 +561,39 @@ QWidget* Qdc::SettingsView::buildTransfers()
 QWidget* Qdc::SettingsView::buildSharing()
 {
 	QWidget* page = new QWidget(this);
+	page->setMinimumWidth(PAGE_WIDTH);
 
+	m_shareList = new QListWidget(page);
+	m_shareList->setObjectName(QStringLiteral("sharingFolders"));
 	m_shareList->setSelectionMode(QAbstractItemView::SingleSelection);
+	m_shareList->setMinimumHeight(240);
 
-	/*
-	 * A floor only. The list has the tab to itself and is the thing being read on
-	 * it, so it is given whatever height the window has to spare.
-	 */
-	m_shareList->setMinimumHeight(96);
-
-	QPushButton* addShareButton = new QPushButton(tr("Add folder…"), page);
-	connect(addShareButton, &QPushButton::clicked, this, &SettingsView::addShare);
-	connect(m_removeShare, &QPushButton::clicked,
-	        this, &SettingsView::removeSelectedShare);
-	connect(m_renameShare, &QPushButton::clicked,
-	        this, &SettingsView::renameSelectedShare);
+	QPushButton* add = new QPushButton(tr("Add folder…"), page);
+	m_renameShare = new QPushButton(tr("Rename…"), page);
+	m_removeShare = new QPushButton(tr("Remove"), page);
+	connect(add, &QPushButton::clicked, this, &SettingsView::addShare);
+	connect(m_renameShare, &QPushButton::clicked, this, &SettingsView::renameSelectedShare);
+	connect(m_removeShare, &QPushButton::clicked, this, &SettingsView::removeSelectedShare);
 
 	const auto followSelection = [this] {
 		const bool chosen = m_shareList->currentRow() >= 0;
 		m_removeShare->setEnabled(chosen);
 		m_renameShare->setEnabled(chosen);
 	};
-
 	connect(m_shareList, &QListWidget::currentRowChanged, this, followSelection);
 	followSelection();
 
-	QVBoxLayout* shareButtons = new QVBoxLayout;
-	shareButtons->setContentsMargins(0, 0, 0, 0);
-	shareButtons->addWidget(addShareButton);
-	shareButtons->addWidget(m_renameShare);
-	shareButtons->addWidget(m_removeShare);
-	shareButtons->addStretch(1);
+	QVBoxLayout* buttons = new QVBoxLayout;
+	buttons->setContentsMargins(0, 0, 0, 0);
+	buttons->addWidget(add);
+	buttons->addWidget(m_renameShare);
+	buttons->addWidget(m_removeShare);
+	buttons->addStretch(1);
 
-	QHBoxLayout* shareRow = new QHBoxLayout;
-	shareRow->setContentsMargins(0, 0, 0, 0);
-	shareRow->addWidget(m_shareList, 1);
-	shareRow->addLayout(shareButtons);
-
-	/*
-	 * A column rather than a form: the list is the page, so it is given a heading of
-	 * its own and the height, instead of sitting in a field beside a label.
-	 */
-	QVBoxLayout* column = new QVBoxLayout(page);
-	column->addWidget(new QLabel(tr("Shared folders"), page));
-	column->addLayout(shareRow, 1);
-
-	/*
-	 * Said rather than left to be discovered: somebody who adds a folder and then
-	 * looks for it on the hub straight away will think the share is broken.
-	 */
-	column->addWidget(makeNote(tr(
-		"A change here is shared at once. The files in a folder just added can be "
-		"found by others as soon as they have been hashed, which for a large folder "
-		"takes a while.")));
+	QHBoxLayout* row = new QHBoxLayout(page);
+	row->setContentsMargins(0, 0, 0, 0);
+	row->addWidget(m_shareList, 1);
+	row->addLayout(buttons);
 
 	if (m_shares)
 	{
@@ -674,6 +607,7 @@ QWidget* Qdc::SettingsView::buildSharing()
 		});
 	}
 
+	m_loaders.push_back([this] { refreshShareList(); });
 	return page;
 }
 
@@ -681,40 +615,23 @@ QWidget* Qdc::SettingsView::buildChat()
 {
 	QWidget* page = new QWidget(this);
 
-	m_fetchMedia = new QCheckBox(tr("Fetch pictures sent in chat automatically"), page);
-	connect(m_fetchMedia, &QCheckBox::toggled, this, &SettingsView::markModified);
-	m_fetchMedia->setToolTip(tr("Ask whoever sent a picture for the file, as soon as "
-	                            "the message arrives"));
+	QCheckBox* fetch = new QCheckBox(tr("Fetch pictures sent in chat"), page);
+	fetch->setObjectName(QStringLiteral("chatFetch"));
+	QSpinBox* limit = makeNumber(page, 0, 1024, tr(" MiB"));
+	limit->setSpecialValueText(tr("no limit"));
+	limit->setToolTip(tr("Larger pictures are left for you to fetch by hand"));
+	QSpinBox* keep = makeNumber(page, 0, 3650, tr(" days"));
+	keep->setSpecialValueText(tr("for ever"));
 
-	m_mediaLimit = new QSpinBox(page);
-	m_mediaLimit->setRange(0, 1024);
-	m_mediaLimit->setSuffix(tr(" MiB"));
-	m_mediaLimit->setSpecialValueText(tr("no limit"));
-	m_mediaLimit->setToolTip(tr("Larger pictures are left for you to fetch by hand"));
-	connect(m_mediaLimit, &QSpinBox::valueChanged, this, &SettingsView::markModified);
+	QFormLayout* form = makeForm(page);
+	form->addRow(QString(), fetch);
+	form->addRow(tr("Fetch pictures up to"), limit);
+	form->addRow(tr("Keep pictures I send"), keep);
+	form->addRow(makeHint(tr("Fetching a picture tells its sender you are online. Each hub can override this."), page));
 
-	m_mediaKeep = new QSpinBox(page);
-	m_mediaKeep->setRange(0, 3650);
-	m_mediaKeep->setSuffix(tr(" days"));
-	m_mediaKeep->setSpecialValueText(tr("keep for ever"));
-	m_mediaKeep->setToolTip(tr("Pictures you paste in are kept this long, in case "
-	                           "somebody follows a link to one later"));
-	connect(m_mediaKeep, &QSpinBox::valueChanged, this, &SettingsView::markModified);
-
-	QFormLayout* form = new QFormLayout(page);
-	form->addRow(QString(), m_fetchMedia);
-	form->addRow(tr("Fetch pictures up to"), m_mediaLimit);
-	form->addRow(tr("Keep pictures you send for"), m_mediaKeep);
-
-	/*
-	 * Said here rather than in a tooltip, because both facts change what somebody would
-	 * choose: fetching announces you to whoever sent the picture, and any hub can be
-	 * decided about on its own.
-	 */
-	form->addRow(makeNote(tr(
-		"Fetching a picture asks the person who sent it for the file, which tells "
-		"them you are there. A single hub can be set to do this or not from its own "
-		"page, whatever is chosen here.")));
+	bind(fetch, S::ChatMediaFetch);
+	bind(limit, S::ChatMediaLimit, MIB);
+	bind(keep, S::ChatMediaKeepDays);
 
 	return page;
 }
@@ -723,66 +640,25 @@ QWidget* Qdc::SettingsView::buildBoards()
 {
 	QWidget* page = new QWidget(this);
 
-	m_prefetchPosts = new QCheckBox(
-		tr("Fetch the rest of a thread when I open a post"), page);
-	m_prefetchPosts->setToolTip(tr("Ask for the replies before they are read, so that "
-	                               "they are there when you get to them"));
-	connect(m_prefetchPosts, &QCheckBox::toggled, this, &SettingsView::markModified);
+	QCheckBox* prefetch = new QCheckBox(tr("Fetch the rest of a thread when I open a post"), page);
+	QCheckBox* serve = new QCheckBox(tr("Offer posts I have read to others"), page);
+	QSpinBox* keep = makeNumber(page, 0, 3650, tr(" days"));
+	keep->setSpecialValueText(tr("for ever"));
+	QSpinBox* cache = makeNumber(page, 0, 2047, tr(" MiB"));
+	cache->setObjectName(QStringLiteral("boardsCache"));
+	cache->setSpecialValueText(tr("no limit"));
 
-	m_servePosts = new QCheckBox(tr("Offer posts I have read to other people"), page);
-	m_servePosts->setToolTip(tr("Answer for a post by its hash, so that somebody else "
-	                            "can read it from here"));
-	connect(m_servePosts, &QCheckBox::toggled, this, &SettingsView::markModified);
+	QFormLayout* form = makeForm(page);
+	form->addRow(QString(), prefetch);
+	form->addRow(QString(), serve);
+	form->addRow(tr("Keep posts for"), keep);
+	form->addRow(tr("Keep at most"), cache);
+	form->addRow(makeHint(tr("Opening or offering a post can tell others you have read it. Each hub can override this."), page));
 
-	m_postKeep = new QSpinBox(page);
-	m_postKeep->setRange(0, 3650);
-	m_postKeep->setSuffix(tr(" days"));
-	m_postKeep->setSpecialValueText(tr("keep for ever"));
-	m_postKeep->setToolTip(tr("Posts read longer ago than this are thrown away"));
-	connect(m_postKeep, &QSpinBox::valueChanged, this, &SettingsView::markModified);
-
-	m_postCache = new QSpinBox(page);
-
-	/*
-	 * Shown in mebibytes and stored in bytes, so the top of the range is what the store
-	 * can hold rather than a figure about boards: a preference is a number, and two
-	 * gibibytes of posts is more than anything this will be asked to keep.
-	 */
-	m_postCache->setRange(0, 2047);
-	m_postCache->setSuffix(tr(" MiB"));
-	m_postCache->setSpecialValueText(tr("no limit"));
-	m_postCache->setToolTip(tr("The most this will hold of the posts themselves"));
-	connect(m_postCache, &QSpinBox::valueChanged, this, &SettingsView::markModified);
-
-	QFormLayout* form = new QFormLayout(page);
-	form->addRow(QString(), m_prefetchPosts);
-	form->addRow(QString(), m_servePosts);
-	form->addRow(tr("Keep posts for"), m_postKeep);
-	form->addRow(tr("Keep at most"), m_postCache);
-
-	/*
-	 * Said first and said plainly, because it is the thing about a board that somebody
-	 * would not think of and cannot find out afterwards. A subscription is answered by
-	 * the hub, but a post is a file fetched from whoever holds it - and until somebody
-	 * else has read it, the only person who holds it is its author.
-	 */
-	form->addRow(makeNote(tr(
-		"Reading a post fetches it from somebody, and to begin with the only person "
-		"who has it is whoever wrote it. So opening a post may tell its author that "
-		"you have read it, and when. Nothing is fetched until you open it, and "
-		"fetching the rest of a thread is off until you turn it on.")));
-
-	form->addRow(makeNote(tr(
-		"Offering a post says the same thing to anybody who asks for it: that you "
-		"have read it. It is also what keeps a board readable after the person who "
-		"wrote it has gone, since a post ends up held by everyone who read it. A hub "
-		"you have not bookmarked offers nothing until you say so on that hub.")));
-
-	form->addRow(makeNote(tr(
-		"Both of these can be answered by a single hub for itself, from its own row "
-		"in the hub list, whatever is chosen here. The limits apply to the posts "
-		"themselves and not to the list of them, which is small and is what makes a "
-		"board a board.")));
+	bind(prefetch, S::BoardPrefetch);
+	bind(serve, S::BoardServe);
+	bind(keep, S::BoardKeepDays);
+	bind(cache, S::BoardCache, MIB);
 
 	return page;
 }
@@ -791,238 +667,43 @@ QWidget* Qdc::SettingsView::buildAppearance()
 {
 	QWidget* page = new QWidget(this);
 
-	/*
-	 * Filled in load() rather than here, so that Revert picks up a theme file that
-	 * was written while the window was open.
-	 */
-	m_theme->setToolTip(tr("The colours the interface is drawn in"));
+	m_theme = new QComboBox(page);
+	m_theme->setObjectName(QStringLiteral("appearanceTheme"));
+	m_theme->setMinimumWidth(TEXT_WIDTH / 2);
+	m_theme->setToolTip(tr("Themes dropped in %1 are listed too").arg(themeDirectory()));
 
-	connect(m_theme, &QComboBox::currentIndexChanged, this, &SettingsView::markModified);
+	makeForm(page)->addRow(tr("Theme"), m_theme);
 
-	QFormLayout* form = new QFormLayout(page);
-	form->addRow(tr("Theme"), m_theme);
+	/* On a choice made, not on every name passed on the way to it. */
+	connect(m_theme, &QComboBox::activated, this, [this] {
+		const QString scheme = m_theme->currentData().toString();
+		m_config->write(S::ThemeName, scheme);
+		if (scheme != theme().name) applyTheme(themeByName(scheme));
+	});
 
-	/*
-	 * Where the files are is worth saying plainly: a theme is data rather than part
-	 * of the program, and somebody who wants a scheme of their own has no other way
-	 * to find that out.
-	 */
-	form->addRow(makeNote(tr(
-		"Applied when this page is saved. A theme is a file of colours, and any "
-		"dropped in %1 are offered here as well - each one names only what it "
-		"changes about the theme it extends. A copy of widgets.qss in the same "
-		"folder replaces the stylesheet the interface is built from, which is how "
-		"borders, padding and corners are changed rather than only colours.")
-			.arg(themeDirectory())));
+	m_loaders.push_back([this] {
+		m_theme->clear();
+		for (const Theme& scheme : availableThemes())
+			m_theme->addItem(scheme.name, scheme.name);
+
+		const QString stored = m_config->read(S::ThemeName);
+		m_theme->setCurrentIndex(qMax(0, m_theme->findData(stored.isEmpty() ? theme().name : stored)));
+	});
 
 	return page;
-}
-
-void Qdc::SettingsView::markModified()
-{
-	if (m_loading) return;
-
-	m_modified = true;
-	m_save->setEnabled(true);
-	m_revert->setEnabled(true);
-	m_status->setText(tr("Unsaved changes."));
-}
-
-bool Qdc::SettingsView::isModified() const
-{
-	return m_modified;
 }
 
 void Qdc::SettingsView::load()
 {
 	if (!m_config) return;
 
-	/* So that populating the fields does not read as the user editing them. */
 	m_loading = true;
-
-	m_nickname->setText(m_config->read(S::Nickname));
-	m_description->setText(m_config->read(S::Description));
-	m_email->setText(m_config->read(S::Email));
-
-	const QString cid = m_config->read(S::ClientId);
-	m_clientId->setText(cid.isEmpty() ? tr("assigned on first connection") : cid);
-
-	/* As the core says it is in force, rather than as the keys under it read. */
-	const ConnectionMode connection = m_config->connectionMode();
-
-	m_mode->setCurrentIndex(qMax(0, m_mode->findData(static_cast<int>(connection.mode))));
-
-	m_port->setValue(m_config->read(S::Port));
-	m_bind->setText(m_config->read(S::Bind));
-	m_address->setText(m_config->read(S::Address));
-
-	m_forceActive->setChecked(connection.forceActive);
-	m_useUpnp->setChecked(connection.useUpnp);
-
-	m_slots->setValue(m_config->read(S::Slots));
-	m_maxDownloads->setValue(m_config->read(S::MaxDownloads));
-	m_chunkSize->setValue(qMax(m_chunkSize->minimum(), m_config->read(S::ChunkSize) / KIB));
-
-	m_downloadDir->setText(m_config->read(S::DownloadDirectory));
-
-	m_localHub->setChecked(m_config->read(S::HubEnabled));
-	m_localHubFields->setEnabled(m_localHub->isChecked());
-
-	m_localHubName->setText(m_config->read(S::HubName));
-	m_localHubDescription->setText(m_config->read(S::HubDescription));
-	m_localHubUsers->setValue(m_config->read(S::HubMaxUsers));
-	m_localHubHistory->setValue(m_config->read(S::HubMaxHistory));
-	m_localHubPerAddress->setValue(m_config->read(S::HubMaxPerAddress));
-	m_localHubHandshakes->setValue(m_config->read(S::HubMaxHandshakes));
-	m_localHubHandshakeTimeout->setValue(m_config->read(S::HubHandshakeTimeout));
-	m_localHubIdleTimeout->setValue(m_config->read(S::HubIdleTimeout));
-	m_localHubLinger->setValue(m_config->read(S::HubLingerTimeout));
-	m_localHubCheckClaims->setChecked(m_config->read(S::HubCheckClaims));
-	m_localHubSendQueue->setValue(
-		qMax(m_localHubSendQueue->minimum(), m_config->read(S::HubMaxSendQueue) / KIB));
-
-	m_fetchMedia->setChecked(m_config->read(S::ChatMediaFetch));
-	m_mediaLimit->setValue(qMax(0, m_config->read(S::ChatMediaLimit) / MIB));
-	m_mediaKeep->setValue(qMax(0, m_config->read(S::ChatMediaKeepDays)));
-
-	m_prefetchPosts->setChecked(m_config->read(S::BoardPrefetch));
-	m_servePosts->setChecked(m_config->read(S::BoardServe));
-	m_postKeep->setValue(qMax(0, m_config->read(S::BoardKeepDays)));
-	m_postCache->setValue(qMax(0, m_config->read(S::BoardCache) / MIB));
-
-	/*
-	 * Read afresh each time rather than once when the form was built, so that a theme
-	 * file written while the window was open is on the list after a Revert.
-	 */
-	m_theme->clear();
-
-	for (const Theme& scheme : availableThemes())
-		m_theme->addItem(scheme.name, scheme.name);
-
-	const QString stored = m_config->read(S::ThemeName);
-	const QString chosen = stored.isEmpty() ? theme().name : stored;
-
-	const int found = m_theme->findData(chosen);
-	m_theme->setCurrentIndex(qMax(0, found));
-
-	refreshShareList();
-
+	for (const auto& loader : m_loaders) loader();
 	m_loading = false;
-	m_modified = false;
 
-	m_save->setEnabled(false);
-	m_revert->setEnabled(false);
-	m_status->clear();
-
-	/* From the value read, not from the signal that setting it may not have sent. */
 	applyConnectionMode();
-}
-
-bool Qdc::SettingsView::save()
-{
-	if (!m_config) return false;
-
-	m_config->write(S::Nickname, m_nickname->text().trimmed());
-	m_config->write(S::Description, m_description->text().trimmed());
-	m_config->write(S::Email, m_email->text().trimmed());
-
-	/*
-	 * The mode, and the switches advanced leaves to the user; the core writes
-	 * everything the mode decides, and in the other two modes the switches are not
-	 * on screen and it decides them.
-	 */
-	const NetworkMode mode = static_cast<NetworkMode>(m_mode->currentData().toInt());
-
-	m_config->setConnectionMode(mode, m_useUpnp->isChecked(), m_forceActive->isChecked());
-
-	/*
-	 * The plumbing only where somebody is choosing it. The port is not merely bound
-	 * from this key - it is also the number handed to every peer - so writing it from
-	 * a field the user cannot see would have the client advertise whatever the form
-	 * last loaded, and a peer dialling a port nothing listens on fails at their end
-	 * rather than at ours.
-	 */
-	if (mode == NetworkMode::Advanced)
-	{
-		m_config->write(S::Port, m_port->value());
-		m_config->write(S::Bind, m_bind->text().trimmed());
-		m_config->write(S::Address, m_address->text().trimmed());
-	}
-
-	m_config->write(S::Slots, m_slots->value());
-	m_config->write(S::MaxDownloads, m_maxDownloads->value());
-	m_config->write(S::ChunkSize, m_chunkSize->value() * KIB);
-
-	m_config->write(S::DownloadDirectory, m_downloadDir->text().trimmed());
-
-	m_config->write(S::HubEnabled, m_localHub->isChecked());
-	m_config->write(S::HubName, m_localHubName->text().trimmed());
-	m_config->write(S::HubDescription, m_localHubDescription->text().trimmed());
-	m_config->write(S::HubMaxUsers, m_localHubUsers->value());
-	m_config->write(S::HubMaxHistory, m_localHubHistory->value());
-	m_config->write(S::HubMaxSendQueue, m_localHubSendQueue->value() * KIB);
-	m_config->write(S::HubMaxPerAddress, m_localHubPerAddress->value());
-	m_config->write(S::HubMaxHandshakes, m_localHubHandshakes->value());
-	m_config->write(S::HubHandshakeTimeout, m_localHubHandshakeTimeout->value());
-	m_config->write(S::HubIdleTimeout, m_localHubIdleTimeout->value());
-	m_config->write(S::HubLingerTimeout, m_localHubLinger->value());
-	m_config->write(S::HubCheckClaims, m_localHubCheckClaims->isChecked());
-
-	m_config->write(S::ChatMediaFetch, m_fetchMedia->isChecked());
-	m_config->write(S::ChatMediaLimit, m_mediaLimit->value() * MIB);
-	m_config->write(S::ChatMediaKeepDays, m_mediaKeep->value());
-
-	m_config->write(S::BoardPrefetch, m_prefetchPosts->isChecked());
-	m_config->write(S::BoardServe, m_servePosts->isChecked());
-	m_config->write(S::BoardKeepDays, m_postKeep->value());
-	m_config->write(S::BoardCache, m_postCache->value() * MIB);
-
-	m_config->write(S::ThemeName, m_theme->currentData().toString());
-
-	/*
-	 * The file is written a moment later, on the core's own thread. Waiting to be
-	 * told whether it worked is what made this page stall for as long as the core
-	 * was busy; a write that fails reports itself through saveFailed() instead.
-	 */
-	m_config->save(ConfigStore::Application);
-
-	/*
-	 * Nothing else to do: the core follows the configuration, so the gateway
-	 * mapping, the listening port, the measurement and what every hub was told all
-	 * move with the settings just written, at the core's next turn.
-	 */
-
-	/*
-	 * Here rather than as the combo changes: a theme applied while somebody is moving
-	 * down a list restyles the whole window at every name they pass on the way to the
-	 * one they wanted. Nothing to do when the scheme has not changed, which is almost
-	 * every save.
-	 */
-	const QString scheme = m_theme->currentData().toString();
-	if (scheme != theme().name) applyTheme(themeByName(scheme));
-
-	m_modified = false;
-	m_save->setEnabled(false);
-	m_revert->setEnabled(false);
-	m_status->setText(tr("Saved."));
-
-	emit saved();
-	return true;
-}
-
-void Qdc::SettingsView::clearVerdict()
-{
-	m_reachability->clear();
-}
-
-void Qdc::SettingsView::showVerdict(const ReachabilityVerdict& verdict)
-{
-	m_reachability->setVerdict(verdict);
-}
-
-void Qdc::SettingsView::showCheckFailed(const QString& reason)
-{
-	m_reachability->setFailure(reason);
+	showPeerPort();
+	m_localHubFields->setEnabled(m_localHub->isChecked());
 }
 
 void Qdc::SettingsView::refreshShareList()
@@ -1035,11 +716,7 @@ void Qdc::SettingsView::refreshShareList()
 		QListWidgetItem* item = new QListWidgetItem(
 			QStringLiteral("%1  —  %2").arg(folder.name, folder.path), m_shareList);
 
-		/*
-		 * Both fields are this user's own, so there is nobody else's text here to
-		 * disarm - but a tooltip is drawn as markup whoever wrote it, and a folder named
-		 * with an angle bracket in it should read as it was typed.
-		 */
+		/* A tooltip is drawn as markup, and a folder name with an angle bracket should read as typed. */
 		item->setToolTip(RichText::literalHtml(tr("Shown to others as '%1'\n%2")
 			.arg(folder.name, folder.path)));
 	}
@@ -1049,10 +726,6 @@ void Qdc::SettingsView::addShare()
 {
 	if (!m_shares) return;
 
-	/*
-	 * Applied at once rather than on Save: the folders are the core's own list, and
-	 * a half-applied one is not a useful state to be in.
-	 */
 	chooseDirectory(tr("Share a folder"), QDir::homePath(),
 	                [this](const QString& chosen) { m_shares->add(chosen); });
 }
@@ -1062,9 +735,7 @@ void Qdc::SettingsView::removeSelectedShare()
 	if (!m_shares) return;
 
 	const int row = m_shareList->currentRow();
-	if (row < 0) return;
-
-	m_shares->removeAt(row);
+	if (row >= 0) m_shares->removeAt(row);
 }
 
 void Qdc::SettingsView::renameSelectedShare()
@@ -1078,32 +749,24 @@ void Qdc::SettingsView::renameSelectedShare()
 
 	bool accepted = false;
 	const QString name = QInputDialog::getText(this, tr("Rename a shared folder"),
-		tr("What other users see this folder as:"), QLineEdit::Normal,
-		folder.name, &accepted);
+		tr("What other users see this folder as:"), QLineEdit::Normal, folder.name, &accepted);
 
-	if (!accepted) return;
-
-	m_shares->renameAt(row, name);
+	if (accepted) m_shares->renameAt(row, name);
 }
 
 void Qdc::SettingsView::chooseDirectory(const QString& title, const QString& start,
                                         std::function<void(const QString&)> chosen)
 {
 	/*
-	 * On the next turn of the event loop, and drawn by Qt rather than by the platform,
-	 * for the same reasons the composer's file chooser is - see HubsView. Both
-	 * failures look exactly like a button that does nothing: a chooser opened from
-	 * inside the press that asked for it is dismissed again by that same press, and
-	 * the platform's own panel, asked for modally, returns at once with nothing
-	 * chosen.
+	 * On the next turn and drawn by Qt, as the composer's chooser is (see HubsView): opened
+	 * inside the press it is dismissed by that press, and the platform's modal panel
+	 * returns at once with nothing chosen.
 	 */
 	QTimer::singleShot(0, this, [this, title, start, chosen] {
 		const QString directory = QFileDialog::getExistingDirectory(this, title, start,
 			QFileDialog::ShowDirsOnly | QFileDialog::DontUseNativeDialog);
 
-		if (directory.isEmpty()) return;
-
-		chosen(directory);
+		if (!directory.isEmpty()) chosen(directory);
 	});
 }
 
@@ -1111,9 +774,9 @@ void Qdc::SettingsView::chooseDownloadDirectory()
 {
 	const QString current = m_downloadDir->text().trimmed();
 
-	chooseDirectory(tr("Save downloads to"),
-		current.isEmpty() ? QDir::homePath() : current, [this](const QString& chosen) {
+	chooseDirectory(tr("Save downloads to"), current.isEmpty() ? QDir::homePath() : current,
+		[this](const QString& chosen) {
 			m_downloadDir->setText(chosen);
-			markModified();
+			m_config->write(S::DownloadDirectory, chosen);
 		});
 }

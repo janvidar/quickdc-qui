@@ -1094,4 +1094,20 @@ containers doing NAT with nftables, qdc in each client container.
   hubUrl (as the keeper keys it) instead of a handle, PostSubmitted and
   PostRefused gained hubUrl and board; the GUI takes refusals from BoardBridge
   and matches them by hubKey(), and HubBridge lost boardRefused.
+- 2026-11-26: the settings page redone. A list of pages on the left, each a column
+  of at most 640 px with fields at their natural size and a heading; rarely
+  touched fields (bind and external address, the forced claim, the local hub's
+  limits, the smallest chunk) under a collapsed "More settings". Applied as
+  changed - a text field when left, the rest at once - through one bind() per
+  field, which also reloads it when the setting changes elsewhere; Save, Revert,
+  save(), saved() and isModified() are gone. The paragraphs went: what is left is
+  one line where a choice discloses something (reading a post, fetching a
+  picture, running a hub, what automatic asks of whom, what passive cannot do)
+  and tooltips on the forced claim and UPnP. The peer port in use is shown beside
+  the field ("1411 is in use, listening on 1412") and as a row in automatic,
+  from CoreStatus, now a state event in CoreChannel and read through
+  ConfigBridge::peerPort()/peerPortChanged(). Settings spin boxes have no arrow
+  buttons (the stylesheet drew them broken). tst_settings rewritten for the
+  model: nothing is written by opening the page, a field applies when left,
+  units, changes from elsewhere, modes applying when chosen.
 

@@ -192,6 +192,12 @@ enum class NetworkMode {
 };
 Q_ENUM_NS(NetworkMode)
 
+/** The peer port: the one bound (0 where nothing listens) and the one configured. */
+struct PeerPort {
+	quint16 bound = 0;
+	quint16 configured = 0;
+};
+
 /** The connection mode in force and what the core decided from it. */
 struct ConnectionMode {
 	NetworkMode mode = NetworkMode::Advanced;

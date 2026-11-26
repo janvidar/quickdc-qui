@@ -227,6 +227,29 @@ QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QComboBox {
     selection-color: %(accentText);
 }
 
+QListWidget#settingsPages {
+    background: %(contentAlt);
+    border: none;
+    border-right: 1px solid %(border);
+    padding: 12px 0;
+}
+
+QListWidget#settingsPages::item {
+    padding-left: 16px;
+    border: none;
+}
+
+QListWidget#settingsPages::item:selected {
+    background: %(selection);
+    color: %(selectionText);
+}
+
+QLabel#settingsHeading {
+    font-size: 16pt;
+    font-weight: 600;
+    padding-bottom: 8px;
+}
+
 QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QComboBox:focus {
     border-color: %(accent);
 }

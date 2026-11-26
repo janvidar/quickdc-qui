@@ -265,6 +265,17 @@ Qdc::ConnectionMode Qdc::ConfigBridge::connectionMode() const
 	return copied;
 }
 
+Qdc::PeerPort Qdc::ConfigBridge::peerPort() const
+{
+	PeerPort port;
+	const auto* status = m_thread ? m_thread->channel()->latest<QuickDC::Api::Events::CoreStatus>() : nullptr;
+	if (!status) return port;
+
+	port.bound = (status->tcp || status->tcp6) ? status->port : 0;
+	port.configured = status->configuredPort;
+	return port;
+}
+
 void Qdc::ConfigBridge::setConnectionMode(NetworkMode mode, bool useUpnp, bool forceActive)
 {
 	if (!m_thread) return;
@@ -281,6 +292,12 @@ void Qdc::ConfigBridge::onCoreEvent(const QuickDC::Api::Event& event)
 	if (event.as<QuickDC::Api::Events::ConnectionMode>())
 	{
 		emit connectionModeChanged();
+		return;
+	}
+
+	if (event.as<QuickDC::Api::Events::CoreStatus>())
+	{
+		emit peerPortChanged();
 		return;
 	}
 

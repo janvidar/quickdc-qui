@@ -23,7 +23,8 @@
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
-#include <QTabWidget>
+#include <QScrollArea>
+#include <QToolButton>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -33,7 +34,7 @@
 /**
  * Settings: the shared folder list, and the form's binding to the configuration.
  *
- * The form is driven through its own load()/save() rather than by clicking, and
+ * The form is driven through its fields, found by name, and
  * the values are checked where they end up - in the core's own preference store -
  * because that is the contract: what is typed here is what the core reads next
  * time it looks.
@@ -53,29 +54,26 @@ private slots:
 
 	void formLoadsTheStoredValues();
 	void anUnsetFieldShowsWhatTheCoreUses();
+	void openingThePageWritesNothing();
 	void formDoesNotWaitForABusyCore();
-	void formWritesWhatTheCoreReads();
-	void formTracksBeingEdited();
-	void formChunkSizeIsShownInKibibytes();
+	void aTextFieldAppliesWhenItIsLeft();
+	void numbersAndSwitchesApplyAtOnce();
+	void figuresAreWrittenInTheUnitsTheCoreReads();
+	void aSettingChangedElsewhereShowsOnThePage();
+	void aFigureTheCoreWouldClampShowsAsClamped();
 	void formAddsAFolderWithQtsOwnChooser();
 
-	void activeModeIsNotForcedUntilItIsAskedFor();
-	void forcedActiveModeSurvivesTheForm();
-	void theConnectionPageSaysWhatForcingActiveModeCosts();
-	void theGatewayIsNotAskedForAMappingUntilItIsAskedFor();
-	void askingTheGatewayToForwardSurvivesTheForm();
-	void theConnectionPageSaysWhatSearchingForAGatewayDiscloses();
-
-	void eachConnectionModeRoundTripsThroughTheForm();
+	void eachConnectionModeAppliesWhenChosen();
 	void automaticDecidesTheSettingsUnderIt();
 	void passiveTurnsOffWhatItCannotUse();
 	void aModeThatHidesThePortDoesNotRewriteIt();
 	void aModeShowsOnlyThePlumbingItIsAbout();
-	void switchingTheModeRearrangesThePageWithoutASave();
-	void eachModeSaysInWordsWhatItDoesInstead();
-	void advancedSaysThePortAppliesWhenSaved();
+	void theSwitchesUnderAdvancedApplyWhenTicked();
+	void eachModeSaysInAWordWhatItDoesInstead();
+	void thePageSaysWhichPortIsInUse();
 	void noModeOffersAFieldForTheReachabilityServer();
-	void aServerNamedByHandSurvivesTheForm();
+	void aServerNamedByHandSurvivesChoosingAMode();
+	void theCostlySwitchesSayWhatTheyCost();
 
 	void thePanelDrawsItsThreeAnswersApart();
 	void aFamilyNobodyMeasuredIsNotDrawnAsAFailure();
@@ -85,12 +83,7 @@ private slots:
 	void everyRunThatStartsAlsoEndsTheCheckingLine();
 	void anUnconfiguredServerSaysSoRatherThanNothing();
 
-	void boardsFetchNothingAheadUntilTheyAreTold();
-	void theBoardsPageSaysThatReadingAPostMayBeSeen();
-
-	void theLocalHubIsOffUntilItIsAskedFor();
-	void theLocalHubKeepsItsFiguresInTheUnitsTheCoreReads();
-	void theLocalHubPageSaysWhatTurningItOnDoes();
+	void thePagesThatDiscloseSaySoInOneLine();
 
 private:
 	QString scratch(const QString& name) const;
@@ -314,61 +307,66 @@ void TestSettings::formLoadsTheStoredValues()
 
 	m_config->setString(ConfigStore::Application, QStringLiteral("User"),
 	                    QStringLiteral("Nickname"), QStringLiteral("tester"));
-	m_config->setString(ConfigStore::Application, QStringLiteral("User"),
-	                    QStringLiteral("Description"), QStringLiteral("somewhere"));
 	m_config->setNumber(ConfigStore::Application, QStringLiteral("Network"),
 	                    QStringLiteral("Slots"), 9);
-	m_config->setBool(ConfigStore::Application, QStringLiteral("Network"),
-	                  QStringLiteral("Active mode"), false);
-	m_config->save(ConfigStore::Application);
 
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
-	/* Loaded on construction, and not counted as the user having edited it. */
-	QVERIFY(!view.isModified());
-
-	/* Round-tripped through save() rather than read out of private fields. */
-	QVERIFY(view.save());
-	settle();
-
-	QCOMPARE(m_config->getString(ConfigStore::Application, QStringLiteral("User"),
-	                             QStringLiteral("Nickname")),
-	         QStringLiteral("tester"));
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Network"),
-	                             QStringLiteral("Slots")), 9);
-	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Network"),
-	                           QStringLiteral("Active mode"), true), false);
+	QCOMPARE(view.findChild<QLineEdit*>(QStringLiteral("identityNickname"))->text(), QStringLiteral("tester"));
+	QCOMPARE(view.findChild<QSpinBox*>(QStringLiteral("transfersSlots"))->value(), 9);
 }
 
+/* The page kept defaults of its own once, and they drifted from the core's. */
 void TestSettings::anUnsetFieldShowsWhatTheCoreUses()
 {
 	using Qdc::ConfigStore;
 
-	/*
-	 * The page kept defaults of its own, and they had drifted: an unset nickname
-	 * showed as empty while the core announced "QuickDC", and saving the page then
-	 * wrote the empty one. Read back through save(), which writes what each field
-	 * holds.
-	 */
-	const QString user = QStringLiteral("User");
-	m_config->remove(ConfigStore::Application, user, QStringLiteral("Nickname"));
-	m_config->remove(ConfigStore::Application, user, QStringLiteral("Description"));
+	m_config->remove(ConfigStore::Application, QStringLiteral("User"), QStringLiteral("Nickname"));
+	m_config->remove(ConfigStore::Application, QStringLiteral("User"), QStringLiteral("Description"));
 	m_config->remove(ConfigStore::Application, QStringLiteral("Local hub"), QStringLiteral("Max users"));
+	m_config->remove(ConfigStore::Application, QStringLiteral("Local hub"), QStringLiteral("Enabled"));
 
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
-	QVERIFY(view.save());
+
+	QCOMPARE(view.findChild<QLineEdit*>(QStringLiteral("identityNickname"))->text(), QStringLiteral("QuickDC"));
+	QCOMPARE(view.findChild<QLineEdit*>(QStringLiteral("identityDescription"))->text(), QStringLiteral("QuickDC user"));
+	QCOMPARE(view.findChild<QSpinBox*>(QStringLiteral("localHubUsers"))->value(), 128);
+	QVERIFY(!view.findChild<QCheckBox*>(QStringLiteral("localHubEnabled"))->isChecked());
+}
+
+/*
+ * Nothing is written by looking: a forced claim, a gateway search, a hub answering
+ * strangers and posts fetched ahead are each a disclosure somebody has to choose.
+ */
+void TestSettings::openingThePageWritesNothing()
+{
+	using Qdc::ConfigStore;
+
+	const QList<QPair<QString, QString>> keys = {
+		{QStringLiteral("Network"), QStringLiteral("Force active mode")},
+		{QStringLiteral("Network"), QStringLiteral("UseUPnP")},
+		{QStringLiteral("Local hub"), QStringLiteral("Enabled")},
+		{QStringLiteral("Boards"), QStringLiteral("Fetch a thread ahead")},
+		{QStringLiteral("User"), QStringLiteral("Nickname")},
+	};
+	for (const auto& [group, key] : keys) m_config->remove(ConfigStore::Application, group, key);
+
+	Qdc::Shares shares(m_thread);
+	settle();
+	{
+		Qdc::SettingsView view(m_config, &shares);
+		view.load();
+		settle();
+	}
 	settle();
 
-	QCOMPARE(m_config->getString(ConfigStore::Application, user, QStringLiteral("Nickname")),
-	         QStringLiteral("QuickDC"));
-	QCOMPARE(m_config->getString(ConfigStore::Application, user, QStringLiteral("Description")),
-	         QStringLiteral("QuickDC user"));
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Local hub"),
-	                             QStringLiteral("Max users")), 128);
+	for (const auto& [group, key] : keys)
+		QVERIFY2(!m_config->contains(ConfigStore::Application, group, key),
+		         qPrintable(group + QLatin1Char('/') + key + QStringLiteral(" was written by opening the page")));
 }
 
 void TestSettings::formDoesNotWaitForABusyCore()
@@ -376,16 +374,7 @@ void TestSettings::formDoesNotWaitForABusyCore()
 	Qdc::ConfigBridge config(m_thread);
 	Qdc::Shares shares(m_thread);
 
-	/*
-	 * The page used to be read a key at a time, each one a blocking job on the core
-	 * thread, so opening it while the core was busy waited out a whole core turn
-	 * fourteen times over. It reads its own copy now, and so does the store behind
-	 * the share list, and saving posts the write rather than waiting for it.
-	 *
-	 * The copy is filled when the bridge is built, which is why that happens above
-	 * rather than below - it is the one call left in this layer that waits, and it
-	 * happens once, at start-up, before there is a window to freeze.
-	 */
+	/* The page reads the bridge's copy; a blocking read per key once waited out a core turn each. */
 	Qdc::Testing::post(m_thread, [] { QThread::msleep(1500); });
 
 	QElapsedTimer timer;
@@ -393,16 +382,13 @@ void TestSettings::formDoesNotWaitForABusyCore()
 
 	Qdc::SettingsView view(&config, &shares);
 	view.load();
-	view.save();
+	view.findChild<QSpinBox*>(QStringLiteral("transfersSlots"))->setValue(4);
 
 	const qint64 spent = timer.elapsed();
-
-	QVERIFY2(spent < 100,
-	         qPrintable(QStringLiteral("loading and saving the page took %1 ms while "
-	                                   "the core was busy").arg(spent)));
+	QVERIFY2(spent < 100, qPrintable(QStringLiteral("the page took %1 ms while the core was busy").arg(spent)));
 }
 
-void TestSettings::formWritesWhatTheCoreReads()
+void TestSettings::aTextFieldAppliesWhenItIsLeft()
 {
 	using Qdc::ConfigStore;
 
@@ -410,81 +396,96 @@ void TestSettings::formWritesWhatTheCoreReads()
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
-	/*
-	 * The fields are private, so the values are set through the store and read
-	 * back through the form - which is the binding being tested either way.
-	 */
-	m_config->setString(ConfigStore::Application, QStringLiteral("Downloads"),
-	                    QStringLiteral("Directory"), scratch(QStringLiteral("dl")));
-	m_config->setNumber(ConfigStore::Application, QStringLiteral("Network"),
-	                    QStringLiteral("Max downloads"), 7);
-	m_config->setNumber(ConfigStore::Application, QStringLiteral("Network"),
-	                    QStringLiteral("Port"), 4111);
-
-	view.load();
-	QVERIFY(!view.isModified());
-
-	QSignalSpy saved(&view, &Qdc::SettingsView::saved);
-	QVERIFY(view.save());
+	QLineEdit* nick = view.findChild<QLineEdit*>(QStringLiteral("identityNickname"));
+	nick->setText(QStringLiteral("  typed  "));
 	settle();
-	QCOMPARE(saved.count(), 1);
+	QVERIFY(m_config->getString(ConfigStore::Application, QStringLiteral("User"), QStringLiteral("Nickname")) != QStringLiteral("typed"));
 
-	/* Every key survives the round trip through the form. */
-	QCOMPARE(m_config->getString(ConfigStore::Application, QStringLiteral("Downloads"),
-	                             QStringLiteral("Directory")),
-	         scratch(QStringLiteral("dl")));
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Network"),
-	                             QStringLiteral("Max downloads")), 7);
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Network"),
-	                             QStringLiteral("Port")), 4111);
+	emit nick->editingFinished();
+	settle();
+	QCOMPARE(m_config->getString(ConfigStore::Application, QStringLiteral("User"), QStringLiteral("Nickname")),
+	         QStringLiteral("typed"));
 }
 
-void TestSettings::formTracksBeingEdited()
-{
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	QVERIFY(!view.isModified());
-
-	/*
-	 * Typing is what marks the form dirty, and load() populating the fields must
-	 * not - which is what the loading guard is for. Simulated by editing a field
-	 * found through the object tree, since the members are private.
-	 */
-	QList<QSpinBox*> spins = view.findChildren<QSpinBox*>();
-	QVERIFY(!spins.isEmpty());
-
-	spins.first()->setValue(spins.first()->value() + 1);
-	QVERIFY(view.isModified());
-
-	/* Reverting reloads and clears the flag. */
-	view.load();
-	QVERIFY(!view.isModified());
-}
-
-void TestSettings::formChunkSizeIsShownInKibibytes()
+void TestSettings::numbersAndSwitchesApplyAtOnce()
 {
 	using Qdc::ConfigStore;
 
-	/* The core stores bytes; the form offers KiB. */
-	m_config->setNumber(ConfigStore::Application, QStringLiteral("Network"),
-	                    QStringLiteral("Chunk size"), 2 * 1024 * 1024);
-	m_config->save(ConfigStore::Application);
+	Qdc::Shares shares(m_thread);
+	settle();
+	Qdc::SettingsView view(m_config, &shares);
+
+	view.findChild<QSpinBox*>(QStringLiteral("transfersDownloads"))->setValue(7);
+	QCheckBox* fetch = view.findChild<QCheckBox*>(QStringLiteral("chatFetch"));
+	fetch->setChecked(!fetch->isChecked());
+	const bool fetching = fetch->isChecked();
+	settle();
+
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Network"), QStringLiteral("Max downloads")), 7);
+	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Chat media"), QStringLiteral("Fetch automatically"), !fetching),
+	         fetching);
+}
+
+/* The core reads bytes; a page that wrote back what it showed would shrink these on every edit. */
+void TestSettings::figuresAreWrittenInTheUnitsTheCoreReads()
+{
+	using Qdc::ConfigStore;
+
+	m_config->setNumber(ConfigStore::Application, QStringLiteral("Network"), QStringLiteral("Chunk size"), 2 * 1024 * 1024);
+	m_config->setNumber(ConfigStore::Application, QStringLiteral("Boards"), QStringLiteral("Cache size"), 128 * 1024 * 1024);
 
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
-	QVERIFY(view.save());
+	QSpinBox* chunk = view.findChild<QSpinBox*>(QStringLiteral("transfersChunk"));
+	QCOMPARE(chunk->value(), 2048);
+	chunk->setValue(4096);
+
+	QSpinBox* cache = view.findChild<QSpinBox*>(QStringLiteral("boardsCache"));
+	QCOMPARE(cache->value(), 128);
+	cache->setValue(64);
+
+	QSpinBox* queue = view.findChild<QSpinBox*>(QStringLiteral("localHubSendQueue"));
+	queue->setValue(96);
 	settle();
 
-	/*
-	 * Back in bytes, unchanged. A form that showed bytes as KiB and wrote them
-	 * back as KiB would divide the chunk size by 1024 every time it was saved.
-	 */
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Network"),
-	                             QStringLiteral("Chunk size")), 2 * 1024 * 1024);
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Network"), QStringLiteral("Chunk size")), 4 * 1024 * 1024);
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Boards"), QStringLiteral("Cache size")), 64 * 1024 * 1024);
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Local hub"), QStringLiteral("Max send queue bytes")), 96 * 1024);
+}
+
+void TestSettings::aSettingChangedElsewhereShowsOnThePage()
+{
+	using Qdc::ConfigStore;
+
+	Qdc::Shares shares(m_thread);
+	settle();
+	Qdc::SettingsView view(m_config, &shares);
+
+	m_config->setNumber(ConfigStore::Application, QStringLiteral("Network"), QStringLiteral("Slots"), 5);
+	QTRY_COMPARE(view.findChild<QSpinBox*>(QStringLiteral("transfersSlots"))->value(), 5);
+
+	m_config->setNumber(ConfigStore::Application, QStringLiteral("Network"), QStringLiteral("Slots"), 6);
+	QTRY_COMPARE(view.findChild<QSpinBox*>(QStringLiteral("transfersSlots"))->value(), 6);
+}
+
+/* Shown as what the hub will use, and not written back until somebody edits it. */
+void TestSettings::aFigureTheCoreWouldClampShowsAsClamped()
+{
+	using Qdc::ConfigStore;
+
+	m_config->setNumber(ConfigStore::Application, QStringLiteral("Local hub"), QStringLiteral("Max users"), 999999);
+
+	Qdc::Shares shares(m_thread);
+	settle();
+	Qdc::SettingsView view(m_config, &shares);
+	settle();
+
+	QCOMPARE(view.findChild<QSpinBox*>(QStringLiteral("localHubUsers"))->value(), 65536);
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Local hub"), QStringLiteral("Max users")), 999999);
+
+	m_config->remove(ConfigStore::Application, QStringLiteral("Local hub"), QStringLiteral("Max users"));
 }
 
 void TestSettings::formAddsAFolderWithQtsOwnChooser()
@@ -506,7 +507,7 @@ void TestSettings::formAddsAFolderWithQtsOwnChooser()
 
 	QVERIFY2(add, "the form has no Add folder button");
 
-	QListWidget* list = view.findChildren<QListWidget*>().value(0);
+	QListWidget* list = view.findChild<QListWidget*>(QStringLiteral("sharingFolders"));
 	QVERIFY(list);
 	QCOMPARE(list->count(), 0);
 
@@ -578,210 +579,6 @@ void TestSettings::formAddsAFolderWithQtsOwnChooser()
 	QCOMPARE(shares.folders().first().name, QStringLiteral("Clicked"));
 
 	clearShares(shares);
-}
-
-/**
- * Saving the form without touching it leaves active mode unforced.
- *
- * The key is removed first, so the form is showing what is really in force rather than
- * what some other test left behind. The default is then asked for as true, so that the
- * answer cannot be right by accident: the core reads this before it consults the
- * measurement at all, and a client that arrived at it by installing the program would
- * be telling every hub something nothing has established.
- */
-void TestSettings::activeModeIsNotForcedUntilItIsAskedFor()
-{
-	using Qdc::ConfigStore;
-
-	const QString group = QStringLiteral("Network");
-	const QString key = QStringLiteral("Force active mode");
-
-	m_config->remove(ConfigStore::Application, group, key);
-	m_config->save(ConfigStore::Application);
-
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	QVERIFY(view.save());
-	settle();
-
-	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, true), false);
-}
-
-/**
- * A forced active mode read by the form is written back by it.
- *
- * The key is taken back out of the store between the load() and the save(), so that
- * finding it there afterwards can only mean the form carried it: left in place, this
- * would pass against a page that read the key and never wrote it again. A page that
- * offered the switch but dropped it on the way back would turn the setting off every
- * time anything else on the form was saved.
- *
- * Pinned to advanced, which is the only mode where the switch means anything. The
- * other two derive it, and derive it off - so this asks whether the form carries a
- * value it was given, which is a question only advanced poses.
- */
-void TestSettings::forcedActiveModeSurvivesTheForm()
-{
-	using Qdc::ConfigStore;
-
-	const QString group = QStringLiteral("Network");
-	const QString key = QStringLiteral("Force active mode");
-
-	m_config->setString(ConfigStore::Application, group, QStringLiteral("Mode"),
-	                    QStringLiteral("advanced"));
-	m_config->setBool(ConfigStore::Application, group, key, true);
-
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	view.load();
-
-	m_config->remove(ConfigStore::Application, group, key);
-	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), false);
-
-	QVERIFY(view.save());
-	settle();
-
-	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), true);
-
-	m_config->remove(ConfigStore::Application, group, key);
-	m_config->save(ConfigStore::Application);
-}
-
-/**
- * The connection page says in words what forcing active mode costs.
- *
- * On the page rather than in a tooltip, because this is the one setting here whose cost
- * is paid somewhere the user cannot see it: the peer that believed the claim is the one
- * whose transfer fails, so the symptom never appears beside the switch that caused it.
- * The page has to say that too, and that the claim defeats the measurement shown
- * directly above it.
- */
-void TestSettings::theConnectionPageSaysWhatForcingActiveModeCosts()
-{
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	QStringList said;
-
-	for (const QLabel* label : view.findChildren<QLabel*>())
-		said.append(label->text());
-
-	const QString page = said.join(QLatin1Char('\n'));
-
-	QVERIFY2(page.contains(QStringLiteral("every peer that acts on it by dialling this "
-	                                      "client fails to reach it")),
-	         "the page does not say that peers fail to connect when the claim is wrong");
-
-	QVERIFY2(page.contains(QStringLiteral("a download that never starts rather than a "
-	                                      "setting to turn off")),
-	         "the page does not say what the failure looks like");
-
-	QVERIFY2(page.contains(QStringLiteral("whatever the check above concluded")),
-	         "the page does not say that the claim overrides the measurement");
-}
-
-/**
- * Nothing is asked of a gateway until somebody asks for it.
- *
- * The default has to be off in the form as well as in the core: finding a gateway means
- * searching the local segment, which tells every host on it that this machine is here
- * and what it runs, and a form that saved the switch on would make that disclosure on
- * behalf of a user who never chose it.
- */
-void TestSettings::theGatewayIsNotAskedForAMappingUntilItIsAskedFor()
-{
-	using Qdc::ConfigStore;
-
-	const QString group = QStringLiteral("Network");
-	const QString key = QStringLiteral("UseUPnP");
-
-	m_config->remove(ConfigStore::Application, group, key);
-	m_config->save(ConfigStore::Application);
-
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	QVERIFY(view.save());
-	settle();
-
-	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, true), false);
-}
-
-/**
- * A gateway mapping asked for in the file is still asked for after the form saves.
- *
- * The key is taken back out of the store between the load() and the save(), for the
- * reason the forced-active test gives: left in place, this would pass against a page
- * that read the switch and never wrote it back, and such a page would turn forwarding
- * off every time anything else was saved - leaving a user passive with no sign of why.
- *
- * Advanced, for the reason the forced-active case above gives: it is the one mode
- * that answers with the switch rather than deciding for it.
- */
-void TestSettings::askingTheGatewayToForwardSurvivesTheForm()
-{
-	using Qdc::ConfigStore;
-
-	const QString group = QStringLiteral("Network");
-	const QString key = QStringLiteral("UseUPnP");
-
-	m_config->setString(ConfigStore::Application, group, QStringLiteral("Mode"),
-	                    QStringLiteral("advanced"));
-	m_config->setBool(ConfigStore::Application, group, key, true);
-
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	view.load();
-
-	m_config->remove(ConfigStore::Application, group, key);
-	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), false);
-
-	QVERIFY(view.save());
-	settle();
-
-	QCOMPARE(m_config->getBool(ConfigStore::Application, group, key, false), true);
-
-	m_config->remove(ConfigStore::Application, group, key);
-	m_config->save(ConfigStore::Application);
-}
-
-/**
- * The connection page says what turning forwarding on tells the local network.
- *
- * On the page rather than in the tooltip, because the cost is not paid where the switch
- * is: a search is a broadcast to every host on the segment, and nothing on screen would
- * ever show that it happened. The page also has to say that a router granting a mapping
- * settles nothing on its own, so that a user reading a passive verdict with forwarding
- * on looks above the router rather than at the switch.
- */
-void TestSettings::theConnectionPageSaysWhatSearchingForAGatewayDiscloses()
-{
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	QStringList said;
-
-	for (const QLabel* label : view.findChildren<QLabel*>())
-		said.append(label->text());
-
-	const QString page = said.join(QLatin1Char('\n'));
-
-	QVERIFY2(page.contains(QStringLiteral("tells every host on it that this machine is "
-	                                      "here and what it runs")),
-	         "the page does not say what a gateway search discloses");
-
-	QVERIFY2(page.contains(QStringLiteral("does not know whether anything above it "
-	                                      "honours one")),
-	         "the page does not say that a granted mapping settles nothing on its own");
 }
 
 /**
@@ -1067,746 +864,333 @@ QString storedMode(Qdc::ConfigBridge* config)
 	                         QStringLiteral("Network"), QStringLiteral("Mode"));
 }
 
-/** Put the form into 'mode' as though somebody had picked it from the list. */
+/** Pick 'token' from the list as somebody would: activated, not merely set. */
 void chooseMode(Qdc::SettingsView& view, const QString& token)
 {
 	const Qdc::NetworkMode mode = token == QLatin1String("automatic") ? Qdc::NetworkMode::Automatic
 		: token == QLatin1String("passive") ? Qdc::NetworkMode::Passive
 		: Qdc::NetworkMode::Advanced;
-	const int value = static_cast<int>(mode);
 
-	QComboBox* combo = nullptr;
-
-	for (QComboBox* candidate : view.findChildren<QComboBox*>())
-	{
-		if (candidate->findData(value) >= 0 && candidate->count() == 3) { combo = candidate; break; }
-	}
-
+	QComboBox* combo = view.findChild<QComboBox*>(QStringLiteral("connectionMode"));
 	QVERIFY(combo);
-	combo->setCurrentIndex(combo->findData(value));
+	const int index = combo->findData(static_cast<int>(mode));
+	combo->setCurrentIndex(index);
+	emit combo->activated(index);
 }
 
-/**
- * Every mode survives being chosen, saved and read back.
- *
- * The one setting on the page that everything else is derived from, so a mode that
- * did not survive the round trip would take the whole group with it.
- */
-void TestSettings::eachConnectionModeRoundTripsThroughTheForm()
+/** Bring a page to the front, so that hidden means hidden by the page and not by the stack. */
+void openPage(Qdc::SettingsView& view, const QString& name)
 {
-	for (const QString& token : {QStringLiteral("automatic"),
-	                             QStringLiteral("advanced"),
-	                             QStringLiteral("passive")})
-	{
-		Qdc::Shares shares(m_thread);
-		settle();
-		Qdc::SettingsView view(m_config, &shares);
-
-		chooseMode(view, token);
-		QVERIFY(view.save());
-		settle();
-
-		QCOMPARE(storedMode(m_config), token);
-
-		/* And read back into the form it came from, not merely into the file. */
-		settle();
-		Qdc::SettingsView reopened(m_config, &shares);
-		QVERIFY(reopened.save());
-		settle();
-		QCOMPARE(storedMode(m_config), token);
-	}
+	QListWidget* pages = view.findChild<QListWidget*>(QStringLiteral("settingsPages"));
+	QVERIFY(pages);
+	for (int i = 0; i < pages->count(); i++)
+		if (pages->item(i)->text() == name) pages->setCurrentRow(i);
+	QCOMPARE(pages->currentItem()->text(), name);
 }
 
-/**
- * Automatic settles the plumbing itself, whatever the switches under it held.
- *
- * The whole of the mode: a user who picks it is saying they do not want to answer
- * these questions, so the answers must not depend on what the hidden switches
- * happened to be left at. Forwarding on, the claim never forced - because automatic
- * establishes reachability rather than asserting it - and a server to ask, since
- * without one there is no verdict to show.
- */
-void TestSettings::automaticDecidesTheSettingsUnderIt()
-{
-	using Qdc::ConfigStore;
-
-	const QString group = QStringLiteral("Network");
-
-	/* The opposite of every value automatic implies. */
-	m_config->setBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), false);
-	m_config->setBool(ConfigStore::Application, group,
-	                  QStringLiteral("Force active mode"), true);
-	m_config->setString(ConfigStore::Application, group,
-	                    QStringLiteral("Reachability server"), QString());
-	m_config->save(ConfigStore::Application);
-
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	chooseMode(view, QStringLiteral("automatic"));
-	QVERIFY(view.save());
-	settle();
-
-	QVERIFY2(m_config->getBool(ConfigStore::Application, group,
-	                           QStringLiteral("UseUPnP"), false),
-	         "automatic did not ask the gateway to forward the port");
-
-	QVERIFY2(m_config->getBool(ConfigStore::Application, group,
-	                           QStringLiteral("Active mode"), false),
-	         "automatic did not intend to be reachable");
-
-	QVERIFY2(!m_config->getBool(ConfigStore::Application, group,
-	                            QStringLiteral("Force active mode"), true),
-	         "automatic forced a claim it is supposed to establish");
-
-	QVERIFY2(!m_config->getString(ConfigStore::Application, group,
-	                              QStringLiteral("Reachability server")).isEmpty(),
-	         "automatic left nobody to ask");
-}
-
-/**
- * Passive turns off the two things it has no use for.
- *
- * Nothing is told to connect here, so a forwarded port is a hole in somebody's
- * network that nothing is using, and a forced claim would have peers dial a port
- * this client is not offering - which fails at their end, where nobody can see why.
- */
-void TestSettings::passiveTurnsOffWhatItCannotUse()
-{
-	using Qdc::ConfigStore;
-
-	const QString group = QStringLiteral("Network");
-
-	m_config->setBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), true);
-	m_config->setBool(ConfigStore::Application, group,
-	                  QStringLiteral("Force active mode"), true);
-	m_config->save(ConfigStore::Application);
-
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	chooseMode(view, QStringLiteral("passive"));
-	QVERIFY(view.save());
-	settle();
-
-	QVERIFY(!m_config->getBool(ConfigStore::Application, group,
-	                           QStringLiteral("Active mode"), true));
-	QVERIFY(!m_config->getBool(ConfigStore::Application, group,
-	                           QStringLiteral("UseUPnP"), true));
-	QVERIFY(!m_config->getBool(ConfigStore::Application, group,
-	                           QStringLiteral("Force active mode"), true));
-}
-
-/**
- * A mode that does not show the port leaves the stored one alone.
- *
- * The port is not only bound from this key - it is also the number handed to every
- * peer on every hub. So a save that wrote it from a field nobody could see would
- * have the client advertise whatever the form last loaded, and a peer that dials a
- * port nothing is listening on fails at their end rather than at ours. Leaving it
- * also means the answer to "what did I set the port to" survives a trip through
- * automatic and back.
- */
-void TestSettings::aModeThatHidesThePortDoesNotRewriteIt()
-{
-	using Qdc::ConfigStore;
-
-	const QString group = QStringLiteral("Network");
-
-	m_config->setNumber(ConfigStore::Application, group, QStringLiteral("Port"), 1409);
-	m_config->setString(ConfigStore::Application, group, QStringLiteral("Bind"),
-	                    QStringLiteral("10.0.0.5"));
-	m_config->save(ConfigStore::Application);
-
-	{
-		Qdc::Shares shares(m_thread);
-		settle();
-		Qdc::SettingsView view(m_config, &shares);
-
-		chooseMode(view, QStringLiteral("automatic"));
-		QVERIFY(view.save());
-		settle();
-	}
-
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
-	                             QStringLiteral("Port")), 1409);
-	QCOMPARE(m_config->getString(ConfigStore::Application, group,
-	                             QStringLiteral("Bind")),
-	         QStringLiteral("10.0.0.5"));
-
-	/* And back in advanced it is the form's again. */
-	{
-		Qdc::Shares shares(m_thread);
-		settle();
-		Qdc::SettingsView view(m_config, &shares);
-
-		chooseMode(view, QStringLiteral("advanced"));
-		QVERIFY(view.save());
-		settle();
-	}
-
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
-	                             QStringLiteral("Port")), 1409);
-}
-
-/**
- * Bring the Connection tab to the front, so that hidden means hidden by the mode.
- *
- * A tab widget hides every page but the current one, and the current one here is
- * Identity: without this, everything on the Connection page answers "not shown"
- * whatever the mode chose, and a test asking about the mode would be reading the tab
- * strip instead.
- */
-void openConnectionTab(Qdc::SettingsView& view)
-{
-	QTabWidget* tabs = view.findChild<QTabWidget*>();
-	QVERIFY(tabs);
-
-	for (int i = 0; i < tabs->count(); i++)
-	{
-		if (tabs->tabText(i) == QStringLiteral("Connection"))
-			tabs->setCurrentIndex(i);
-	}
-
-	QCOMPARE(tabs->tabText(tabs->currentIndex()), QStringLiteral("Connection"));
-}
-
-/**
- * Whether a widget would be on screen if the window were.
- *
- * isVisible() answers no for every widget in these tests, since a view built on the
- * stack is never shown, so the question has to be asked of the page rather than of the
- * screen: isVisibleTo() walks the parents and answers false where anything between the
- * widget and the view has been hidden, which is what hiding a mode's fields does.
- */
+/* A view built on the stack is never shown, so ask whether anything between widget and view is hidden. */
 bool shown(Qdc::SettingsView& view, const QWidget* widget)
 {
 	return widget && widget->isVisibleTo(&view);
 }
 
-/** What the page would say, leaving out what it is not showing. */
 QString visibleText(Qdc::SettingsView& view)
 {
 	QStringList said;
-
 	for (const QLabel* label : view.findChildren<QLabel*>())
-	{
 		if (label->isVisibleTo(&view)) said.append(label->text());
-	}
-
 	return said.join(QLatin1Char('\n'));
 }
 
-/**
- * A mode shows the plumbing it is about and nothing else.
- *
- * The point of having modes at all: a user who picked automatic said they did not want
- * to answer these questions, and a page that asked them anyway would be showing
- * controls that save() then ignores - so whatever was left in them would look like the
- * setting in force. Read from the stored mode as well as from the list, because the
- * page has to arrive in the right shape rather than only get there when somebody
- * touches the combo, and after a save the combo has not changed.
- */
+QToolButton* moreSettings(Qdc::SettingsView& view, const QWidget* inside)
+{
+	for (QToolButton* button : view.findChildren<QToolButton*>())
+		if (button->text() == QStringLiteral("More settings") && inside->isAncestorOf(button)) return button;
+	return nullptr;
+}
+
+void TestSettings::eachConnectionModeAppliesWhenChosen()
+{
+	for (const QString& token : {QStringLiteral("automatic"), QStringLiteral("advanced"), QStringLiteral("passive")})
+	{
+		Qdc::Shares shares(m_thread);
+		settle();
+		{
+			Qdc::SettingsView view(m_config, &shares);
+			chooseMode(view, token);
+			QTRY_COMPARE(storedMode(m_config), token);
+		}
+
+		settle();
+		Qdc::SettingsView reopened(m_config, &shares);
+		QComboBox* combo = reopened.findChild<QComboBox*>(QStringLiteral("connectionMode"));
+		QTRY_COMPARE(combo->currentText().toLower(), token);
+	}
+}
+
+/* Picking automatic says "don't ask me", so nothing may depend on what the hidden switches held. */
+void TestSettings::automaticDecidesTheSettingsUnderIt()
+{
+	using Qdc::ConfigStore;
+	const QString group = QStringLiteral("Network");
+
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Mode"), QStringLiteral("advanced"));
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), false);
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), true);
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Reachability server"), QString());
+
+	Qdc::Shares shares(m_thread);
+	settle();
+	Qdc::SettingsView view(m_config, &shares);
+
+	chooseMode(view, QStringLiteral("automatic"));
+	QTRY_VERIFY2(m_config->getBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), false),
+	             "automatic did not ask the gateway to forward the port");
+	QVERIFY(m_config->getBool(ConfigStore::Application, group, QStringLiteral("Active mode"), false));
+	QVERIFY2(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), true),
+	         "automatic forced a claim it is supposed to establish");
+	QVERIFY2(!m_config->getString(ConfigStore::Application, group, QStringLiteral("Reachability server")).isEmpty(),
+	         "automatic left nobody to ask");
+}
+
+void TestSettings::passiveTurnsOffWhatItCannotUse()
+{
+	using Qdc::ConfigStore;
+	const QString group = QStringLiteral("Network");
+
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Mode"), QStringLiteral("advanced"));
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), true);
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), true);
+
+	Qdc::Shares shares(m_thread);
+	settle();
+	Qdc::SettingsView view(m_config, &shares);
+
+	chooseMode(view, QStringLiteral("passive"));
+	QTRY_VERIFY(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("Active mode"), true));
+	QVERIFY(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), true));
+	QVERIFY(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), true));
+}
+
+/* The port is handed to every peer; a mode that does not show it must not move it. */
+void TestSettings::aModeThatHidesThePortDoesNotRewriteIt()
+{
+	using Qdc::ConfigStore;
+	const QString group = QStringLiteral("Network");
+
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Mode"), QStringLiteral("advanced"));
+	m_config->setNumber(ConfigStore::Application, group, QStringLiteral("Port"), 1409);
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Bind"), QStringLiteral("10.0.0.5"));
+
+	Qdc::Shares shares(m_thread);
+	settle();
+	{
+		Qdc::SettingsView view(m_config, &shares);
+		chooseMode(view, QStringLiteral("automatic"));
+		QTRY_COMPARE(storedMode(m_config), QStringLiteral("automatic"));
+		chooseMode(view, QStringLiteral("advanced"));
+		QTRY_COMPARE(storedMode(m_config), QStringLiteral("advanced"));
+	}
+
+	QCOMPARE(m_config->getNumber(ConfigStore::Application, group, QStringLiteral("Port")), 1409);
+	QCOMPARE(m_config->getString(ConfigStore::Application, group, QStringLiteral("Bind")), QStringLiteral("10.0.0.5"));
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Bind"), QStringLiteral("127.0.0.1"));
+}
+
 void TestSettings::aModeShowsOnlyThePlumbingItIsAbout()
 {
 	using Qdc::ConfigStore;
 
-	m_config->setString(ConfigStore::Application, QStringLiteral("Network"),
-	                    QStringLiteral("Mode"), QStringLiteral("automatic"));
-	m_config->save(ConfigStore::Application);
+	m_config->setString(ConfigStore::Application, QStringLiteral("Network"), QStringLiteral("Mode"), QStringLiteral("automatic"));
 
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
+	openPage(view, QStringLiteral("Connection"));
 
-	openConnectionTab(view);
-
-	const QSpinBox* port =
-		view.findChild<QSpinBox*>(QStringLiteral("connectionPort"));
-	const QCheckBox* upnp =
-		view.findChild<QCheckBox*>(QStringLiteral("connectionUpnp"));
-	const QCheckBox* forced =
-		view.findChild<QCheckBox*>(QStringLiteral("connectionForceActive"));
-
-	QVERIFY(port);
-	QVERIFY(upnp);
-	QVERIFY(forced);
+	const QSpinBox* port = view.findChild<QSpinBox*>(QStringLiteral("connectionPort"));
+	const QLabel* inUse = view.findChild<QLabel*>(QStringLiteral("connectionPortInUse"));
+	const QCheckBox* upnp = view.findChild<QCheckBox*>(QStringLiteral("connectionUpnp"));
+	const QCheckBox* forced = view.findChild<QCheckBox*>(QStringLiteral("connectionForceActive"));
+	QVERIFY(port && inUse && upnp && forced);
 
 	QVERIFY2(!shown(view, port), "automatic showed the port it chooses itself");
+	QVERIFY2(shown(view, inUse), "automatic did not say which port it is using");
 	QVERIFY2(!shown(view, upnp), "automatic showed the forwarding switch it decides");
 	QVERIFY2(!shown(view, forced), "automatic showed a claim it never forces");
-
-	/*
-	 * And the label beside the field went with it, which is the whole reason for the
-	 * containers: hiding a field in a form layout does not hide its label.
-	 */
-	QVERIFY2(!visibleText(view).contains(QStringLiteral("Bind to")),
-	         "a hidden field left its label standing on the page");
+	QVERIFY2(!visibleText(view).contains(QStringLiteral("Bind to")), "a hidden field left its label standing");
 
 	chooseMode(view, QStringLiteral("advanced"));
-
 	QVERIFY2(shown(view, port), "advanced did not show the port");
+	QVERIFY2(!shown(view, inUse), "advanced said the port twice");
 	QVERIFY2(shown(view, upnp), "advanced did not show the forwarding switch");
-	QVERIFY2(shown(view, forced), "advanced did not show the forced claim");
+	QVERIFY2(!shown(view, forced), "the forced claim was not under More settings");
+
+	const QWidget* connectionPage = port;
+	while (connectionPage && !qobject_cast<const QScrollArea*>(connectionPage)) connectionPage = connectionPage->parentWidget();
+	QToolButton* more = moreSettings(view, connectionPage);
+	QVERIFY(more && shown(view, more));
+	more->setChecked(true);
+	QVERIFY2(shown(view, forced), "More settings did not show the forced claim");
 
 	chooseMode(view, QStringLiteral("passive"));
-
 	QVERIFY2(!shown(view, port), "passive showed a port nothing connects to");
 	QVERIFY2(!shown(view, upnp), "passive showed a switch that forwards nothing");
 	QVERIFY2(!shown(view, forced), "passive showed a claim it cannot honour");
 
-	/*
-	 * Passive keeps the addresses and drops the port rows, which is the panel's own
-	 * distinction: an address still says which network this is.
-	 */
 	const QLabel* tcp = view.findChild<QLabel*>(QStringLiteral("reachabilityTcp4"));
 	const QLabel* address = view.findChild<QLabel*>(QStringLiteral("reachabilityAddress4"));
-
-	QVERIFY(tcp);
-	QVERIFY(address);
-
+	QVERIFY(tcp && address);
 	QVERIFY2(!shown(view, tcp), "passive asked whether an unoffered port was reached");
 	QVERIFY2(shown(view, address), "passive hid the address as well as the ports");
 
-	m_config->remove(ConfigStore::Application, QStringLiteral("Network"),
-	                 QStringLiteral("Mode"));
-	m_config->save(ConfigStore::Application);
+	m_config->remove(ConfigStore::Application, QStringLiteral("Network"), QStringLiteral("Mode"));
 }
 
-/**
- * The list changes the page as it is used, without a save.
- *
- * Somebody choosing a mode is asking what that mode means, and the answer is the shape
- * of the page: a form that only rearranged itself on the next load would have them
- * saving a mode to find out what it does. The way back matters as much - a field hidden
- * once and never shown again is a setting that has been taken away.
- */
-void TestSettings::switchingTheModeRearrangesThePageWithoutASave()
+void TestSettings::theSwitchesUnderAdvancedApplyWhenTicked()
 {
 	using Qdc::ConfigStore;
+	const QString group = QStringLiteral("Network");
 
-	m_config->setString(ConfigStore::Application, QStringLiteral("Network"),
-	                    QStringLiteral("Mode"), QStringLiteral("advanced"));
-	m_config->save(ConfigStore::Application);
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Mode"), QStringLiteral("advanced"));
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), false);
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), false);
 
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
+	settle();
 
-	openConnectionTab(view);
+	view.findChild<QCheckBox*>(QStringLiteral("connectionUpnp"))->setChecked(true);
+	QTRY_VERIFY(m_config->getBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), false));
 
-	const QSpinBox* port =
-		view.findChild<QSpinBox*>(QStringLiteral("connectionPort"));
-	const QCheckBox* upnp =
-		view.findChild<QCheckBox*>(QStringLiteral("connectionUpnp"));
+	view.findChild<QCheckBox*>(QStringLiteral("connectionForceActive"))->setChecked(true);
+	QTRY_VERIFY(m_config->getBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), false));
+	QVERIFY(m_config->getBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), false));
 
-	QVERIFY(port);
-	QVERIFY(upnp);
-	QVERIFY(shown(view, port));
-
-	chooseMode(view, QStringLiteral("automatic"));
-
-	QVERIFY2(!shown(view, port), "the port stayed on the page after automatic was picked");
-	QVERIFY2(!shown(view, upnp), "the forwarding switch stayed after automatic was picked");
-
-	chooseMode(view, QStringLiteral("advanced"));
-
-	QVERIFY2(shown(view, port), "the port did not come back with advanced");
-	QVERIFY2(shown(view, upnp), "the forwarding switch did not come back with advanced");
-
-	m_config->remove(ConfigStore::Application, QStringLiteral("Network"),
-	                 QStringLiteral("Mode"));
-	m_config->save(ConfigStore::Application);
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), false);
+	m_config->setBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), false);
 }
 
-/**
- * Each mode says in words what it does instead of showing the switches.
- *
- * The two modes that hide the plumbing owe the user a sentence in its place, and each
- * sentence is a disclosure: automatic contacts a server outside on every start and has
- * it connect back, which nobody typed a name in to ask for, and passive gives up being
- * dialled at all - a cost paid at the other end of a transfer that never begins. Each
- * belongs to its own mode, so a page carrying both would be telling the user two
- * things, one of which is not happening.
- */
-void TestSettings::eachModeSaysInWordsWhatItDoesInstead()
+/* A mode that hides the switches says, briefly, what it does in their place; and only its own. */
+void TestSettings::eachModeSaysInAWordWhatItDoesInstead()
 {
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
-
-	openConnectionTab(view);
+	openPage(view, QStringLiteral("Connection"));
 
 	chooseMode(view, QStringLiteral("automatic"));
-
+	QTRY_VERIFY(visibleText(view).contains(QStringLiteral("checks it with drop.quickdc.org")));
 	const QString automatic = visibleText(view);
-
-	QVERIFY2(automatic.contains(QStringLiteral("chooses the port, asks the router to "
-	                                           "forward it")),
-	         "automatic does not say what it does on the user's behalf");
-
-	QVERIFY2(automatic.contains(QStringLiteral("against drop.quickdc.org")),
-	         "automatic does not say who is asked");
-
-	/*
-	 * Named where the disclosure is made as well as where the checking is, since the
-	 * two sentences are about the same stranger.
-	 */
-	QVERIFY2(automatic.contains(QStringLiteral("tells drop.quickdc.org the address")),
-	         "automatic does not name who the check discloses this machine to");
-
-	QVERIFY2(automatic.contains(QStringLiteral("has it connect back to prove the "
-	                                           "answer")),
-	         "automatic does not say that the server it asks connects back");
-
-	QVERIFY2(!automatic.contains(QStringLiteral("will not work at all")),
-	         "automatic showed what passive costs");
+	QVERIFY(automatic.contains(QStringLiteral("asks the router to forward it")));
+	QVERIFY(!automatic.contains(QStringLiteral("passive users")));
 
 	chooseMode(view, QStringLiteral("passive"));
-
 	const QString passive = visibleText(view);
-
-	QVERIFY2(passive.contains(QStringLiteral("No port is forwarded")),
-	         "passive does not say that nothing is forwarded");
-
-	QVERIFY2(passive.contains(QStringLiteral("not be able to connect to you directly")),
-	         "passive does not say that other clients cannot connect");
-
-	QVERIFY2(passive.contains(QStringLiteral("transfers with other passive users will "
-	                                         "not work at all")),
-	         "passive does not say that two passive users cannot transfer");
-
-	QVERIFY2(passive.contains(QStringLiteral("chatting and downloading from active "
-	                                         "users")),
-	         "passive says what it costs without saying what still works");
-
-	QVERIFY2(!passive.contains(QStringLiteral("chooses the port")),
-	         "passive showed what automatic does");
+	QVERIFY(passive.contains(QStringLiteral("Peers cannot connect to you")));
+	QVERIFY(passive.contains(QStringLiteral("transfers with other passive users do not work")));
+	QVERIFY(!passive.contains(QStringLiteral("asks the router")));
 }
 
-/**
- * Advanced says that a changed port applies when saved, as everything else does.
- *
- * It used to say the opposite, and was right to: the listening socket was opened
- * once at start-up. The core now opens it again wherever the settings say, so the
- * page must not send anybody to restart for it.
- */
-void TestSettings::advancedSaysThePortAppliesWhenSaved()
+void TestSettings::thePageSaysWhichPortIsInUse()
 {
+	using Qdc::ConfigStore;
+	const QString group = QStringLiteral("Network");
+
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Mode"), QStringLiteral("advanced"));
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Bind"), QStringLiteral("127.0.0.1"));
+	m_config->setString(ConfigStore::Application, group, QStringLiteral("Bind6"), QString());
+	m_config->setNumber(ConfigStore::Application, group, QStringLiteral("Port"), 41711);
+
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
+	const QLabel* status = view.findChild<QLabel*>(QStringLiteral("connectionPortStatus"));
+	QVERIFY(status);
 
-	openConnectionTab(view);
-
-	chooseMode(view, QStringLiteral("advanced"));
-
-	const QString page = visibleText(view);
-
-	QVERIFY2(page.contains(QStringLiteral("the port and the bind addresses included")),
-	         "the page does not say that a changed port applies when saved");
-
-	QVERIFY2(!page.contains(QStringLiteral("next time QuickDC starts")),
-	         "the page still sends somebody to restart for a changed port");
+	settle();
+	const Qdc::PeerPort port = m_config->peerPort();
+	const QString expected = !port.bound ? QStringLiteral("Not listening")
+		: port.bound == port.configured ? QStringLiteral("Listening")
+		: QStringLiteral("%1 is in use, listening on %2").arg(port.configured).arg(port.bound);
+	QTRY_COMPARE(status->text(), expected);
 }
 
-/**
- * No mode offers a field for the reachability server.
- *
- * Naming a server is not part of getting connected: every mode measures against the
- * same one, and a field for it on the page would be one more question in a place
- * built to stop asking them. Somebody running a server of their own names it in the
- * configuration file, which is why the key is still read and written.
- */
 void TestSettings::noModeOffersAFieldForTheReachabilityServer()
 {
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
+	openPage(view, QStringLiteral("Connection"));
 
-	openConnectionTab(view);
-
-	for (const QString& token : {QStringLiteral("automatic"),
-	                             QStringLiteral("advanced"),
-	                             QStringLiteral("passive")})
+	for (const QString& token : {QStringLiteral("automatic"), QStringLiteral("advanced"), QStringLiteral("passive")})
 	{
 		chooseMode(view, token);
-
-		QStringList said;
-
-		for (const QLabel* label : view.findChildren<QLabel*>())
-		{
-			if (label->isVisibleTo(&view)) said.append(label->text());
-		}
-
-		QVERIFY2(!said.join(QLatin1Char('\n'))
-			.contains(QStringLiteral("Reachability server")),
-			qPrintable(QStringLiteral("a server field is offered in ") + token));
+		QVERIFY2(!visibleText(view).contains(QStringLiteral("Reachability server")),
+		         qPrintable(QStringLiteral("a server field is offered in ") + token));
 	}
 }
 
-/**
- * A server named by hand is not replaced by the one the mode would supply.
- *
- * The only way to point this client at a DROP server of somebody's own, now that the
- * page offers no field for it. A save that overwrote it with the default would take
- * that away with no way to put it back, and would silently move the measuring to a
- * third party the user had deliberately avoided.
- */
-void TestSettings::aServerNamedByHandSurvivesTheForm()
+/* The only way to measure against a server of one's own; choosing a mode must not replace it. */
+void TestSettings::aServerNamedByHandSurvivesChoosingAMode()
 {
 	using Qdc::ConfigStore;
-
 	const QString group = QStringLiteral("Network");
 	const QString key = QStringLiteral("Reachability server");
 
-	m_config->setString(ConfigStore::Application, group, key,
-	                    QStringLiteral("drop.example.org"));
-	m_config->save(ConfigStore::Application);
+	m_config->setString(ConfigStore::Application, group, key, QStringLiteral("drop.example.org"));
 
-	for (const QString& token : {QStringLiteral("automatic"),
-	                             QStringLiteral("advanced"),
-	                             QStringLiteral("passive")})
+	for (const QString& token : {QStringLiteral("automatic"), QStringLiteral("advanced"), QStringLiteral("passive")})
 	{
 		Qdc::Shares shares(m_thread);
 		settle();
 		Qdc::SettingsView view(m_config, &shares);
-
 		chooseMode(view, token);
-		QVERIFY(view.save());
-		settle();
-
-		QCOMPARE(m_config->getString(ConfigStore::Application, group, key),
-		         QStringLiteral("drop.example.org"));
+		QTRY_COMPARE(storedMode(m_config), token);
+		QCOMPARE(m_config->getString(ConfigStore::Application, group, key), QStringLiteral("drop.example.org"));
 	}
 
-	/*
-	 * And where the file names nobody, choosing a mode names the default - which is
-	 * the one moment a user asks to be measured, so it is the one place that may
-	 * decide it for them.
-	 */
 	m_config->setString(ConfigStore::Application, group, key, QString());
-	m_config->save(ConfigStore::Application);
-
 	{
 		Qdc::Shares shares(m_thread);
 		settle();
 		Qdc::SettingsView view(m_config, &shares);
-
 		chooseMode(view, QStringLiteral("automatic"));
-		QVERIFY(view.save());
-		settle();
+		QTRY_COMPARE(m_config->getString(ConfigStore::Application, group, key), QStringLiteral("drop.quickdc.org"));
 	}
-
-	QCOMPARE(m_config->getString(ConfigStore::Application, group, key),
-	         QStringLiteral("drop.quickdc.org"));
 }
 
-void TestSettings::boardsFetchNothingAheadUntilTheyAreTold()
-{
-	using Qdc::ConfigStore;
-
-	/* Nothing written for either, so the form is showing what is really in force. */
-	m_config->remove(ConfigStore::Application, QStringLiteral("Boards"),
-	                 QStringLiteral("Fetch a thread ahead"));
-	m_config->remove(ConfigStore::Application, QStringLiteral("Boards"),
-	                 QStringLiteral("Cache size"));
-	m_config->save(ConfigStore::Application);
-
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	QVERIFY(view.save());
-	settle();
-
-	/*
-	 * Off, and not as a preference: a post is fetched from whoever holds it, and until
-	 * somebody else has read it the only person who holds it is its author - so
-	 * anything fetched without being asked for tells an author who read their post and
-	 * when.
-	 */
-	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Boards"),
-	                           QStringLiteral("Fetch a thread ahead"), true), false);
-
-	/* And the bound on what is held is in bytes, whatever the form shows. */
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Boards"),
-	                             QStringLiteral("Cache size")), 256 * 1024 * 1024);
-
-	m_config->setNumber(ConfigStore::Application, QStringLiteral("Boards"),
-	                    QStringLiteral("Cache size"), 128 * 1024 * 1024);
-
-	view.load();
-	QVERIFY(view.save());
-	settle();
-
-	/*
-	 * Back in bytes, unchanged. A page that showed bytes as mebibytes and wrote them
-	 * back as mebibytes would divide the cache by a million every time it was saved.
-	 */
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Boards"),
-	                             QStringLiteral("Cache size")), 128 * 1024 * 1024);
-}
-
-void TestSettings::theBoardsPageSaysThatReadingAPostMayBeSeen()
+/* The cost of these is paid out of sight, so the switch itself says it. */
+void TestSettings::theCostlySwitchesSayWhatTheyCost()
 {
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
-	QStringList said;
-
-	for (const QLabel* label : view.findChildren<QLabel*>())
-		said.append(label->text());
-
-	const QString page = said.join(QLatin1Char('\n'));
-
-	/*
-	 * In words on the page rather than in a tooltip, because it is the thing about a
-	 * board that somebody would not think of and cannot find out afterwards: the
-	 * request goes to whoever has the post, and to begin with that is only its author.
-	 */
-	QVERIFY2(page.contains(QStringLiteral("the only person who has it is whoever "
-	                                      "wrote it")),
-	         "the page does not say who a post is fetched from");
-
-	QVERIFY2(page.contains(QStringLiteral("may tell its author that you have read it")),
-	         "the page does not say that reading a post can be seen");
-
-	/* And that answering for one says the same thing to anybody who asks. */
-	QVERIFY(page.contains(QStringLiteral("Offering a post says the same thing to "
-	                                     "anybody who asks for it")));
-
-	/* And which hubs answer for nothing until they are told to. */
-	QVERIFY(page.contains(QStringLiteral("A hub you have not bookmarked offers "
-	                                     "nothing until you say so on that hub")));
+	QVERIFY(view.findChild<QCheckBox*>(QStringLiteral("connectionForceActive"))->toolTip()
+		.contains(QStringLiteral("peers fail to reach you")));
+	QVERIFY(view.findChild<QCheckBox*>(QStringLiteral("connectionUpnp"))->toolTip()
+		.contains(QStringLiteral("local network")));
 }
 
-/**
- * Saving the form without touching it leaves the local hub off.
- *
- * The key is removed first, so the form is showing what is really in force. The default
- * is then asked for as true, so that the answer cannot be right by accident: running a
- * hub means this computer answering strangers, which is a thing to be chosen rather than
- * arrived at by installing the program. The rest of the page is asserted to be what the
- * core would have used anyway, so that turning the hub on later does not also silently
- * change how it behaves.
- */
-void TestSettings::theLocalHubIsOffUntilItIsAskedFor()
-{
-	using Qdc::ConfigStore;
-
-	const QString group = QStringLiteral("Local hub");
-
-	m_config->remove(ConfigStore::Application, group, QStringLiteral("Enabled"));
-	m_config->save(ConfigStore::Application);
-
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	QVERIFY(view.save());
-	settle();
-
-	QCOMPARE(m_config->getBool(ConfigStore::Application, group,
-	                           QStringLiteral("Enabled"), true), false);
-
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
-	                             QStringLiteral("Max users")), 128);
-	QCOMPARE(m_config->getString(ConfigStore::Application, group,
-	                             QStringLiteral("Name")),
-	         QStringLiteral("A QuickDC hub"));
-	QCOMPARE(m_config->getBool(ConfigStore::Application, group,
-	                           QStringLiteral("Check reachability claims"), false), true);
-}
-
-/**
- * The local hub page writes its figures back in the units the core reads them in.
- *
- * The core reads bytes whatever the form shows, and the default is 48 KiB of them. A page
- * that showed bytes as kibibytes and wrote them back as kibibytes would divide the queue
- * by a thousand every time it was saved.
- *
- * A figure edited into the file outside the core's own clamp has to come back as what the
- * hub will actually use rather than as what was typed, because a field that accepts a
- * number the program will not use is a field that lies about what it did.
- */
-void TestSettings::theLocalHubKeepsItsFiguresInTheUnitsTheCoreReads()
-{
-	using Qdc::ConfigStore;
-
-	const QString group = QStringLiteral("Local hub");
-	const QString sendq = QStringLiteral("Max send queue bytes");
-
-	m_config->remove(ConfigStore::Application, group, sendq);
-	m_config->save(ConfigStore::Application);
-
-	Qdc::Shares shares(m_thread);
-	settle();
-	Qdc::SettingsView view(m_config, &shares);
-
-	QVERIFY(view.save());
-	settle();
-
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, group, sendq), 48 * 1024);
-
-	m_config->setNumber(ConfigStore::Application, group, sendq, 96 * 1024);
-
-	view.load();
-	QVERIFY(view.save());
-	settle();
-
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, group, sendq), 96 * 1024);
-
-	m_config->setNumber(ConfigStore::Application, group,
-	                    QStringLiteral("Max users"), 999999);
-
-	view.load();
-	QVERIFY(view.save());
-	settle();
-
-	QCOMPARE(m_config->getNumber(ConfigStore::Application, group,
-	                             QStringLiteral("Max users")), 65536);
-}
-
-/**
- * The local hub page says in words what turning the hub on does.
- *
- * On the page rather than in a tooltip. This is the one switch in the settings that makes
- * the computer answer strangers, and none of what that means can be worked out from the
- * switch itself: who can join, that there is no password, that it shares the port the
- * Connection tab sets since there is no other, and that the switch acts at once - which a
- * settings page does not usually promise - including what turning it off does to whoever
- * is on it.
- */
-void TestSettings::theLocalHubPageSaysWhatTurningItOnDoes()
+/* Said on the page, in a line: what reading a post, fetching a picture and running a hub give away. */
+void TestSettings::thePagesThatDiscloseSaySoInOneLine()
 {
 	Qdc::Shares shares(m_thread);
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
-	QStringList said;
+	openPage(view, QStringLiteral("Boards"));
+	QVERIFY(visibleText(view).contains(QStringLiteral("can tell others you have read it")));
 
-	for (const QLabel* label : view.findChildren<QLabel*>())
-		said.append(label->text());
+	openPage(view, QStringLiteral("Chat"));
+	QVERIFY(visibleText(view).contains(QStringLiteral("tells its sender you are online")));
 
-	const QString page = said.join(QLatin1Char('\n'));
-
-	QVERIFY2(page.contains(QStringLiteral("Anyone who can reach that port can join")),
-	         "the page does not say who can join a hub run here");
-
-	QVERIFY2(page.contains(QStringLiteral("there is no password")),
-	         "the page does not say that the hub has no password");
-
-	QVERIFY(page.contains(QStringLiteral("the same port this client already listens on")));
-
-	QVERIFY2(page.contains(QStringLiteral("applies it straight away")),
-	         "the page does not say that saving takes effect without a restart");
-
-	QVERIFY2(page.contains(QStringLiteral("disconnects whoever is on it")),
-	         "the page does not say what turning the hub off does to its users");
+	openPage(view, QStringLiteral("Local hub"));
+	const QString hub = visibleText(view);
+	QVERIFY(hub.contains(QStringLiteral("can join")));
+	QVERIFY(hub.contains(QStringLiteral("there is no password")));
 }
 
 QTEST_MAIN(TestSettings)
