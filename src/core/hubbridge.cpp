@@ -53,7 +53,6 @@ bool session_ended(Qdc::NetStatus status)
  * long enough that no working hub trips it and short enough to be an answer rather
  * than a wait.
  */
-constexpr int LOGIN_TIMEOUT_MS = 20000;
 
 QString from(const std::string& text)
 {
@@ -173,8 +172,6 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 {
 	static QuickDC::Api::HubHandle handles = 0;
 	m_handle = ++handles;
-
-	startLoginWatch();
 
 	if (!m_thread || !m_thread->isCoreRunning())
 	{
@@ -490,47 +487,10 @@ bool Qdc::HubBridge::allowPeerConnections() const
 	return m_allowPeerConnections;
 }
 
-void Qdc::HubBridge::startLoginWatch()
-{
-	m_loginTimer = new QTimer(this);
-	m_loginTimer->setSingleShot(true);
-	m_loginTimer->setInterval(LOGIN_TIMEOUT_MS);
-
-	connect(m_loginTimer, &QTimer::timeout, this, [this] {
-		emit systemError(tr("%1 took the connection and then said nothing. "
-		                    "The hub is most likely not running, however open "
-		                    "the port is.").arg(m_url));
-	});
-
-	/*
-	 * Both of these arrive on this thread - the session marshals them - so the
-	 * timer is only ever touched from the one place.
-	 */
-	connect(this, &HubBridge::hubStatusChanged, this, [this](HubStatus status) {
-		if (status == HubStatus::LoggedIn) m_loginTimer->stop();
-	});
-
-	connect(this, &HubBridge::netStatusChanged, this, [this](NetStatus status) {
-		switch (status)
-		{
-			case NetStatus::Lookup:
-			case NetStatus::Connecting:
-			case NetStatus::Connected:
-			case NetStatus::TlsConnected:
-				break;
-
-			/* It failed and said so itself; no need to say it twice. */
-			default:
-				m_loginTimer->stop();
-		}
-	});
-}
-
 void Qdc::HubBridge::connectToHub()
 {
 	if (!m_opened) return;
 
-	m_loginTimer->start();
 	m_thread->submit(QuickDC::Api::Commands::ConnectHub{m_handle});
 }
 
@@ -538,7 +498,6 @@ void Qdc::HubBridge::disconnectFromHub()
 {
 	if (!m_opened) return;
 
-	m_loginTimer->stop();
 	m_thread->submit(QuickDC::Api::Commands::DisconnectHub{m_handle});
 }
 

@@ -323,9 +323,6 @@ private:
 	/** Tell the core what this session agrees to when a hub asks. */
 	void sendPolicy();
 
-	/** Build the login watchdog and the signals that call it off. */
-	void startLoginWatch();
-
 	/** Hold a reply back for a moment, so that the ones behind it travel with it. */
 	void collect(const Qdc::SearchHit& hit);
 
@@ -364,15 +361,6 @@ private:
 	 */
 	QString m_hubDescription;
 	bool m_secure = false;
-
-	/**
-	 * Says so when a hub takes the connection and then never logs us in.
-	 *
-	 * Nothing else ever will. A hub that accepts the socket and says nothing leaves
-	 * the connection open and healthy for as long as anyone cares to wait, so
-	 * without this the view sits there connected to a hub that is not there.
-	 */
-	QTimer* m_loginTimer = nullptr;
 
 	/** Replies waiting to go out together; see searchResultsReceived(). */
 	QVector<Qdc::SearchHit> m_pendingHits;
