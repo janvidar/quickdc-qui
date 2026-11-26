@@ -145,8 +145,7 @@ Qdc::MainWindow::MainWindow(CoreThread* thread, QWidget* parent)
 	m_rail->addTrailingSpace();
 	addView(new SettingsView(m_config, m_shares, m_drop));
 
-	connect(m_watch, &NetworkWatch::connectivityChanged,
-	        m_drop, &DropBridge::recheck);
+	connect(m_watch, &NetworkWatch::changed, m_drop, &DropBridge::noteNetworkChange);
 
 	connect(m_rail, &NavigationRail::currentIndexChanged,
 	        this, &MainWindow::showView);

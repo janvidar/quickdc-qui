@@ -186,6 +186,9 @@ public:
 	 */
 	void recheck();
 
+	/** Pass on what the platform says about the network; the core decides what to check. */
+	void noteNetworkChange(bool online);
+
 	/**
 	 * Ask a DROP server what address it sees this client at, and nothing further.
 	 *

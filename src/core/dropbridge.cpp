@@ -104,6 +104,11 @@ void Qdc::DropBridge::recheck()
 		emit checkFailed(tr("The QuickDC core is not running, so nothing could be measured."));
 }
 
+void Qdc::DropBridge::noteNetworkChange(bool online)
+{
+	if (m_thread) m_thread->submit(QuickDC::Api::Commands::NoteNetworkChange{online});
+}
+
 void Qdc::DropBridge::lookupPublicAddress(bool ipv6)
 {
 	if (!m_thread || !m_thread->submit(QuickDC::Api::Commands::LookupPublicAddress{ipv6}))
