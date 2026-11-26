@@ -143,8 +143,9 @@ jobs:
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/lsan.supp
         run: ctest --test-dir build -LE net --output-on-failure -j4 --timeout 300
 
-  # Emulated networks in rootless podman. Nightly and by hand: it takes minutes,
-  # and the scenarios that need DROP's server skip without dropd.
+  # Emulated networks in rootless podman. Nightly and by hand: it takes minutes.
+  # dropd, DROP's own server, is built from its repository for the reachability
+  # scenarios.
   net:
     name: net (podman)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -155,6 +156,19 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - uses: actions/checkout@v4
+        with:
+          repository: janvidar/drop
+          path: drop
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: drop/go.mod
+          cache-dependency-path: drop/go.sum
+
+      - name: Build dropd
+        run: cd drop && go build -o "$GITHUB_WORKSPACE/dropd" ./cmd/dropd
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -163,7 +177,7 @@ jobs:
       - name: Configure
         run: |
           cmake -S quickdc -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            -DQUICKDC_BUILD_CLI=ON -DQUICKDC_BUILD_TESTS=ON
+            -DQUICKDC_BUILD_CLI=ON -DQUICKDC_BUILD_TESTS=ON -DQUICKDC_DROPD="$GITHUB_WORKSPACE/dropd"
 
       - name: Build
         run: cmake --build build --target qdc
