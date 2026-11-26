@@ -13,11 +13,14 @@
 #include <QSocketNotifier>
 
 #include <csignal>
+#ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
 namespace {
 
+#ifndef _WIN32
 /**
  * A self-pipe, so that a signal can be turned into an ordinary event.
  *
@@ -86,6 +89,13 @@ bool install_signal_handlers(QObject* owner)
 
 	return true;
 }
+#else
+/* Windows has no such signals; Qt turns the end of a session into an ordinary quit. */
+bool install_signal_handlers(QObject*)
+{
+	return false;
+}
+#endif
 
 }
 
