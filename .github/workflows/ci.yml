@@ -93,7 +93,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cmake --build build 2>&1 | tee build.log
+          # Windows keeps going, so one run lists everything the port still has to do.
+          keep=(); [ "$RUNNER_OS" = "Windows" ] && keep=(-- -k 0)
+          cmake --build build "${keep[@]}" 2>&1 | tee build.log
           if grep -q 'warning:' build.log; then
             echo "::error::build produced warnings"
             grep 'warning:' build.log
