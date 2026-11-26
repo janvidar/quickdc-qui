@@ -43,9 +43,6 @@ bool open(const QString& path);
  */
 bool reveal(const QString& path);
 
-/** Delete the file. @return false if it is not there, or could not be removed. */
-bool remove(const QString& path);
-
 bool exists(const QString& path);
 
 }

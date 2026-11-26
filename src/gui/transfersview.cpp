@@ -579,16 +579,7 @@ void Qdc::TransfersView::showCompletedMenu(const QPoint& where)
 			return;
 		}
 
-		for (const CompletedDownload& entry : selected)
-		{
-			/*
-			 * Dropped from the history whether or not the file was still there:
-			 * either way it is gone now, and leaving the row would suggest
-			 * otherwise.
-			 */
-			FileActions::remove(entry.filename);
-			m_completed->remove(entry.filename);
-		}
+		for (const CompletedDownload& entry : selected) m_completed->erase(entry.filename);
 	});
 	erase->setEnabled(present);
 

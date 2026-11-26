@@ -62,6 +62,11 @@ void Qdc::Completed::remove(const QString& filename)
 	if (m_thread) m_thread->submit(QuickDC::Api::Commands::ForgetCompletedDownload{filename.toStdString()});
 }
 
+void Qdc::Completed::erase(const QString& filename)
+{
+	if (m_thread) m_thread->submit(QuickDC::Api::Commands::ForgetCompletedDownload{filename.toStdString(), true});
+}
+
 void Qdc::Completed::clear()
 {
 	if (m_thread) m_thread->submit(QuickDC::Api::Commands::ClearCompletedDownloads{});

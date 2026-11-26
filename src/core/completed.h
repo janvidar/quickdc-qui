@@ -44,6 +44,9 @@ public:
 	/** Forget one, by the filename it went to. Does not touch the file. */
 	void remove(const QString& filename);
 
+	/** remove(), and the core deletes the file too. */
+	void erase(const QString& filename);
+
 	void clear();
 
 	/** How many the core keeps before the oldest are dropped. */

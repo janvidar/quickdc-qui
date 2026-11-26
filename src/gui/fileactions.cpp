@@ -29,12 +29,6 @@ bool Qdc::FileActions::open(const QString& path)
 	return QDesktopServices::openUrl(QUrl::fromLocalFile(resolve(path)));
 }
 
-bool Qdc::FileActions::remove(const QString& path)
-{
-	if (!exists(path)) return false;
-	return QFile::remove(resolve(path));
-}
-
 bool Qdc::FileActions::reveal(const QString& path)
 {
 	if (!exists(path)) return false;
