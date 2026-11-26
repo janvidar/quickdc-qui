@@ -384,11 +384,8 @@ void Qdc::SettingsView::submitConnectionMode()
 {
 	if (m_loading || !m_config) return;
 
+	/* Always sent: what the core last reported may not include a choice still on its way. */
 	const NetworkMode mode = static_cast<NetworkMode>(m_mode->currentData().toInt());
-	const ConnectionMode now = m_config->connectionMode();
-	if (mode == now.mode && m_useUpnp->isChecked() == now.useUpnp
-	    && m_forceActive->isChecked() == now.forceActive) return;
-
 	m_config->setConnectionMode(mode, m_useUpnp->isChecked(), m_forceActive->isChecked());
 }
 
