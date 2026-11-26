@@ -390,11 +390,6 @@ containers doing NAT with nftables, qdc in each client container.
 
 - samurai's own singletons (D2). The last of the global state; worth it only
   to run more than one core in a process, or to test with several.
-- Hub redirects, done properly: today the core reports a redirect (HubRedirect
-  `followed` is only what the policy said) and nothing follows it. Following
-  one means a policy (always, ask, never; same-protocol only; a loop and hop
-  limit), carrying the session's identity and settings group to the new
-  address, and the front ends adopting the moved session rather than a new one.
 - 2026-11-23: smoke test of the real app (driver in the session scratchpad):
   port change without restart, local hub enabled live, hublists, a public
   ADCS hub, mode switches, config file holding only what was saved - all
@@ -1074,7 +1069,9 @@ containers doing NAT with nftables, qdc in each client container.
   four tests reach the 300 s ctest limit together, once beside podman's
   "database is locked"; six more full suites did not bring it back, so it is
   taken as podman under two parallel suites and closed, as is the once-seen G3
-  failure. Found on the way: NET_KEEP=failed never kept anything (teardown read
+  failure. (The "left as found" notes on redirects, one peer as two sources and
+  boards named by handle were all settled on 2026-11-25; read the later entries
+  before taking an older note as open.) Found on the way: NET_KEEP=failed never kept anything (teardown read
   the status after its own podman calls).
 - 2026-11-26: port 0 is gone. [Network] Port 0 or out of range reads as the
   default (Settings::peerPort). DCServer binds the configured port or the first
@@ -1086,4 +1083,15 @@ containers doing NAT with nftables, qdc in each client container.
   it asked the gateway and drop.quickdc.org, and joined whatever held 1411 - the
   user's own QuickDC, if running (the own-hub row test failed on that, before this
   change too). The other GUI tests still start their cores on defaults.
+- 2026-11-26: one peer, one source, under test: a CID on two ADC hubs or spelt
+  two ways is one source, an NMDC nick one per hub, a peer already asked for a
+  file is not asked again, and a SID on a hub becomes that user's CID. Found: a
+  SID nobody on the hub had was filed as an ADC source no lookup could ever match
+  (and written to queue.xml); sourceIdOn() now returns empty on ADC for what is
+  not a CID (ADC::isValidCID), so addKnownSource, EnqueueFromSearch and partial
+  sources drop it. The sources tests used 16-character "CIDs" and now use 39.
+  Boards named by address throughout: BoardsAvailable and BoardRefused carry
+  hubUrl (as the keeper keys it) instead of a handle, PostSubmitted and
+  PostRefused gained hubUrl and board; the GUI takes refusals from BoardBridge
+  and matches them by hubKey(), and HubBridge lost boardRefused.
 

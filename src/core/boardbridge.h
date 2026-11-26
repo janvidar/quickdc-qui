@@ -137,6 +137,25 @@ signals:
 
 	void postStateChanged(const QString& tth, Qdc::PostState state);
 
+	/**
+	 * The hub on @a hubUrl (as hubKey() spells it) refused something said about a board.
+	 *
+	 * Named by the board or by the hash rather than by a token, because the
+	 * extension has none: a submission is answered either by its entry or by a
+	 * refusal quoting the same hash. Either may be empty where the refusal named
+	 * neither.
+	 *
+	 * @param code the status code with the severity taken off. 71 is a board that is
+	 *        not there and can be dropped from the interface, 72 a post larger than
+	 *        the board allows, 75 a rate limit, and 76 a post the hub holds no entry
+	 *        for and which can stop being asked for. Everything else is to report
+	 *        rather than to act on.
+	 * @param message the hub's own words: remote text bound for an interface, and
+	 *        neither trusted nor this side's to shorten.
+	 */
+	void boardRefused(const QString& hubUrl, int code, const QString& message,
+	                  const QString& board, const QString& tth);
+
 	/** The whole of a board as held, oldest first. */
 	void entriesLoaded(const QString& hubUrl, const QString& board,
 	                   const QVector<Qdc::BoardEntry>& entries);

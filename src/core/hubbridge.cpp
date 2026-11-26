@@ -401,18 +401,6 @@ void Qdc::HubBridge::handle(const QuickDC::Api::Events::ChatMedia& e)
 		emit chatMediaReady(from(e.tth), from(e.path));
 }
 
-/* The core follows a hub's boards itself; what is drawn of them comes through BoardBridge. */
-template<>
-void Qdc::HubBridge::handle(const QuickDC::Api::Events::BoardsAvailable&)
-{
-}
-
-template<>
-void Qdc::HubBridge::handle(const QuickDC::Api::Events::BoardRefused& e)
-{
-	emit boardRefused(e.code, from(e.message), from(e.board), from(e.tth));
-}
-
 void Qdc::HubBridge::onCoreEvent(const QuickDC::Api::Event& event)
 {
 	using namespace QuickDC::Api::Events;

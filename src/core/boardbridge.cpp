@@ -187,6 +187,11 @@ void Qdc::BoardBridge::take(const QuickDC::Api::Event& event)
 		if (e->whole) emit entriesLoaded(hub, board, from_core(e->entries));
 		else emit entriesStored(hub, board, from_core(e->entries));
 	}
+	else if (const auto* e = event.as<Ev::BoardRefused>())
+	{
+		emit boardRefused(from_std(e->hubUrl), e->code, from_std(e->message),
+		                  from_std(e->board), from_std(e->tth));
+	}
 	else if (const auto* e = event.as<Ev::BoardRead>())
 	{
 		noteRead(from_std(e->hubUrl), from_std(e->board), e->unread, from_std(e->read), e->whole);

@@ -306,25 +306,6 @@ signals:
 	/** A picture a message here showed is on this disk at @a path; the core fetched it or had it. */
 	void chatMediaReady(const QString& tth, const QString& path);
 
-	/**
-	 * The hub refused something said about a board.
-	 *
-	 * Named by the board or by the hash rather than by a token, because the
-	 * extension has none: a submission is answered either by its entry or by a
-	 * refusal quoting the same hash. Either may be empty where the refusal named
-	 * neither.
-	 *
-	 * @param code the status code with the severity taken off. 71 is a board that is
-	 *        not there and can be dropped from the interface, 72 a post larger than
-	 *        the board allows, 75 a rate limit, and 76 a post the hub holds no entry
-	 *        for and which can stop being asked for. Everything else is to report
-	 *        rather than to act on.
-	 * @param message the hub's own words: remote text bound for an interface, and
-	 *        neither trusted nor this side's to shorten.
-	 */
-	void boardRefused(int code, const QString& message, const QString& board,
-	                  const QString& tth);
-
 	/** @param followed what followRedirects() decided, at the time it was asked. */
 	void redirectRequested(const QString& address, quint16 port, bool followed);
 

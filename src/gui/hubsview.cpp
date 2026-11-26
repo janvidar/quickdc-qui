@@ -611,34 +611,6 @@ void Qdc::HubsView::addHub(HubBridge* bridge, bool connectNow)
 	connect(bridge, &HubBridge::searchResultsReceived,
 	        this, &HubsView::searchResultsReceived);
 
-	connect(bridge, &HubBridge::boardRefused, this,
-	        [this, bridge](int code, const QString& message, const QString& board,
-	                       const QString& tth) {
-		Entry* found = entryFor(bridge);
-		if (!found) return;
-
-		/*
-		 * Reported wherever it can be matched, and in every open board on the hub
-		 * where it cannot. This extension has no token: a refusal names the board or
-		 * the hash it refuses and nothing else, so one that names neither is still
-		 * the hub declining to do what somebody asked, and swallowing it would leave
-		 * them watching for an entry that will never arrive.
-		 */
-		QList<BoardPane*> told;
-
-		if (BoardPane* named = found->boards.value(board, nullptr))
-			told.append(named);
-		else if (!tth.isEmpty())
-			told = panesHolding(tth);
-
-		if (told.isEmpty())
-		{
-			for (BoardPane* pane : found->boards) told.append(pane);
-		}
-
-		for (BoardPane* pane : told) pane->reportRefusal(code, message, tth, board);
-	});
-
 	connect(bridge, &HubBridge::hubNameChanged, this, [this, bridge] {
 		if (Entry* found = entryFor(bridge))
 			refreshItem(found->item, found->pane);
@@ -1164,6 +1136,36 @@ Qdc::BoardBridge* Qdc::HubsView::bulletins()
 
 	connect(m_bulletins, &BoardBridge::entriesStored, this, arrived);
 	connect(m_bulletins, &BoardBridge::entriesLoaded, this, arrived);
+
+	connect(m_bulletins, &BoardBridge::boardRefused, this,
+	        [this](const QString& hubKey, int code, const QString& message, const QString& board,
+	               const QString& tth) {
+		Entry* found = nullptr;
+		for (Entry* entry : m_entries)
+			if (entry->bridge && BoardBridge::hubKey(entry->bridge->url()) == hubKey) found = entry;
+		if (!found) return;
+
+		/*
+		 * Reported wherever it can be matched, and in every open board on the hub
+		 * where it cannot. This extension has no token: a refusal names the board or
+		 * the hash it refuses and nothing else, so one that names neither is still
+		 * the hub declining to do what somebody asked, and swallowing it would leave
+		 * them watching for an entry that will never arrive.
+		 */
+		QList<BoardPane*> told;
+
+		if (BoardPane* named = found->boards.value(board, nullptr))
+			told.append(named);
+		else if (!tth.isEmpty())
+			told = panesHolding(tth);
+
+		if (told.isEmpty())
+		{
+			for (BoardPane* pane : found->boards) told.append(pane);
+		}
+
+		for (BoardPane* pane : told) pane->reportRefusal(code, message, tth, board);
+	});
 
 	connect(m_bulletins, &BoardBridge::boardStateReady, this,
 	        [this](const QString& hubKey, const BoardInfo& board, bool described, quint64,
