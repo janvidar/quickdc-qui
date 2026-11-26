@@ -53,6 +53,7 @@
 #include <QTextList>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <QFile>
 #include <QFileDialog>
 #include <QMenu>
 #include <QTimer>
@@ -344,6 +345,14 @@ void TestHubs::initTestCase()
 	QVERIFY2(m_dir.isValid(), "could not create a temporary directory");
 
 	const QDir dir(m_dir.path());
+
+	/* On the loopback, measured by nobody, so the core's own hub is the one it joins
+	   and no gateway or server outside is asked anything; a taken port moves up. */
+	QFile conf(dir.filePath(QStringLiteral("quickdc.conf")));
+	QVERIFY(conf.open(QIODevice::WriteOnly | QIODevice::Text));
+	conf.write("[Network]\nMode=advanced\nBind=127.0.0.1\nBind6=\nPort=41511\nReachability server=\n");
+	conf.close();
+
 	m_thread = new Qdc::CoreThread(this);
 	m_thread->setPreferenceFiles(dir.filePath(QStringLiteral("quickdc.conf")),
 	                             dir.filePath(QStringLiteral("session.conf")),
@@ -3399,9 +3408,6 @@ void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 
 	Qdc::HubBridge::clearSessionHubs(m_thread);
 	QTRY_VERIFY(Qdc::HubBridge::sessionHubs(m_thread).isEmpty());
-
-	config.setNumber(ConfigStore::Application, QStringLiteral("Network"),
-	                 QStringLiteral("Port"), 1411);
 
 	config.setBool(ConfigStore::Application, localHub, enabled, true);
 

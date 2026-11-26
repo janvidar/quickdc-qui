@@ -1076,3 +1076,14 @@ containers doing NAT with nftables, qdc in each client container.
   taken as podman under two parallel suites and closed, as is the once-seen G3
   failure. Found on the way: NET_KEEP=failed never kept anything (teardown read
   the status after its own podman calls).
+- 2026-11-26: port 0 is gone. [Network] Port 0 or out of range reads as the
+  default (Settings::peerPort). DCServer binds the configured port or the first
+  above it free for TCP and UDP both, up to QUICKDC_PORT_FALLBACK_STEPS (50), for
+  this run only; what is advertised, mapped and joined is the bound port, and
+  CoreStatus gained `configuredPort`. reach-occupied now expects a to move to 1412
+  and measure it open (and waits out the drop server's rate limit). tst_hubs gives
+  its core advanced mode on the loopback with no reachability server: on defaults
+  it asked the gateway and drop.quickdc.org, and joined whatever held 1411 - the
+  user's own QuickDC, if running (the own-hub row test failed on that, before this
+  change too). The other GUI tests still start their cores on defaults.
+
