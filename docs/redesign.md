@@ -1041,3 +1041,16 @@ containers doing NAT with nftables, qdc in each client container.
   dialable), and DNAT/DRNT use IPv6 when both INFs carry I6. New net topology
   ipv6-closed and test cli_net_ipv6_traversal. NMDC IPv6 peers: decided not to
   do. Still open: the once-seen G3 net failure.
+- 2026-11-26: GUI pass, first round - five pieces of policy moved from the GUI
+  into the core, each with a qdc scenario. (B) SettingsKeeper writes a changed
+  store after 500 ms and at shutdown; SaveSettings is only for a confirmation,
+  and the core's own failed writes arrive as SettingsSaved{request 0}. (A)
+  SessionHubs ([Windows]) keeps the hubs to reopen; EndSession, OpenHub
+  {remember}, ClearSessionHubs; the GUI keeps only which panes were open. (D)
+  The Api hub session reports a hub that connects and says nothing for 20 s.
+  (C) NetworkWatch in the core polls addresses, settles and re-measures;
+  NoteNetworkChange carries what only Qt knows. (E) ForgetCompletedDownload
+  {deleteFile} deletes a listed file. qdc gained end-session, session-clear,
+  hold, network-changed, completed-forget ... delete, expect-file ... missing.
+  Still in the GUI and arguably policy: joining the local hub when it is
+  enabled (HubsView::reloadLocalHub).
