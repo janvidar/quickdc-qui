@@ -390,6 +390,11 @@ containers doing NAT with nftables, qdc in each client container.
 
 - samurai's own singletons (D2). The last of the global state; worth it only
   to run more than one core in a process, or to test with several.
+- Hub redirects, done properly: today the core reports a redirect (HubRedirect
+  `followed` is only what the policy said) and nothing follows it. Following
+  one means a policy (always, ask, never; same-protocol only; a loop and hop
+  limit), carrying the session's identity and settings group to the new
+  address, and the front ends adopting the moved session rather than a new one.
 - 2026-11-23: smoke test of the real app (driver in the session scratchpad):
   port change without restart, local hub enabled live, hublists, a public
   ADCS hub, mode switches, config file holding only what was saved - all
@@ -1060,3 +1065,14 @@ containers doing NAT with nftables, qdc in each client container.
   adopts through LocalHubWatch and marks the row by HubBridge::isLocalJoin().
   qdc presets Join=0. Not covered by a scenario: a front end declining the join
   (qdc cannot name a core-opened hub yet).
+- 2026-11-26: qdc `name-hub <handle> as <name>` names a core-opened hub, and
+  cli_local_hub_join now closes the join and checks it stays declined until the
+  port moves. Soak of the net suite, plain and sanitized alternately, 09:28 to
+  15:00: 204 passes, 195 clean, no sanitizer report. Five lossy-link failures
+  were a lost UDP search result (wally is active, so alice answers over UDP on
+  the 2%-loss link); the scenario now asks three times. Four passes had two to
+  four tests reach the 300 s ctest limit together, once beside podman's
+  "database is locked"; six more full suites did not bring it back, so it is
+  taken as podman under two parallel suites and closed, as is the once-seen G3
+  failure. Found on the way: NET_KEEP=failed never kept anything (teardown read
+  the status after its own podman calls).
