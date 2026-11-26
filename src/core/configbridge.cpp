@@ -8,11 +8,9 @@
 #include "corethread.h"
 
 
-#include <QTimer>
 
 namespace {
 
-const int SAVE_DELAY_MS = 200;
 
 bool text_is_true(const QString& text)
 {
@@ -36,12 +34,7 @@ std::string to_std(const QString& text)
 Qdc::ConfigBridge::ConfigBridge(CoreThread* thread, QObject* parent)
 	: QObject(parent)
 	, m_thread(thread)
-	, m_saveTimer(new QTimer(this))
 {
-	m_saveTimer->setSingleShot(true);
-	m_saveTimer->setInterval(SAVE_DELAY_MS);
-	connect(m_saveTimer, &QTimer::timeout, this, &ConfigBridge::flush);
-
 	if (!m_thread) return;
 
 	connect(m_thread->channel(), &CoreChannel::settingChanged, this, &ConfigBridge::changed);
@@ -50,7 +43,6 @@ Qdc::ConfigBridge::ConfigBridge(CoreThread* thread, QObject* parent)
 
 Qdc::ConfigBridge::~ConfigBridge()
 {
-	if (m_thread && m_saveTimer->isActive()) flush();
 }
 
 const QString* Qdc::ConfigBridge::find(ConfigStore store, const QString& group,
@@ -224,35 +216,11 @@ void Qdc::ConfigBridge::save(ConfigStore store)
 {
 	if (!m_thread) return;
 
-	if (store == ConfigStore::Session)
-		m_saveSession = true;
-	else
-		m_saveApplication = true;
-
-	if (!m_saveTimer->isActive()) m_saveTimer->start();
-}
-
-void Qdc::ConfigBridge::flush()
-{
-	m_saveTimer->stop();
-
-	const bool application = m_saveApplication;
-	const bool session = m_saveSession;
-	m_saveApplication = false;
-	m_saveSession = false;
-
-	if (!m_thread) return;
-
-	const auto put = [this](ConfigStore store) {
-		/* Every bridge hears every answer, so the numbers are unique across them. */
-		static std::uint64_t saves = 0;
-		const std::uint64_t request = ++saves;
-		if (m_thread->submit(QuickDC::Api::Commands::SaveSettings{converted(store), request}))
-			m_saving.insert(request);
-	};
-
-	if (application) put(ConfigStore::Application);
-	if (session) put(ConfigStore::Session);
+	/* Every bridge hears every answer, so the numbers are unique across them. */
+	static std::uint64_t saves = 0;
+	const std::uint64_t request = ++saves;
+	if (m_thread->submit(QuickDC::Api::Commands::SaveSettings{converted(store), request}))
+		m_saving.insert(request);
 }
 
 namespace {
@@ -317,7 +285,11 @@ void Qdc::ConfigBridge::onCoreEvent(const QuickDC::Api::Event& event)
 	}
 
 	const auto* saved_ = event.as<QuickDC::Api::Events::SettingsSaved>();
-	if (!saved_ || !m_saving.remove(saved_->request)) return;
+	if (!saved_) return;
+
+	/* Request 0 is the core writing a change by itself; only its failure is news. */
+	const bool ours = m_saving.remove(saved_->request);
+	if (!ours && (saved_->request != 0 || saved_->ok)) return;
 
 	const ConfigStore store = saved_->store == QuickDC::Api::SettingsStore::Session
 		? ConfigStore::Session : ConfigStore::Application;

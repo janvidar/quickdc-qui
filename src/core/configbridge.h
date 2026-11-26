@@ -20,7 +20,6 @@
 
 #include <cstdint>
 
-class QTimer;
 
 namespace QuickDC { namespace Api { struct Event; } }
 
@@ -110,12 +109,9 @@ public:
 	                       const QVariantHash& wanted) const;
 
 	/**
-	 * Write the store out, before long.
-	 *
-	 * Returns at once, and the file is written a moment later - which also folds a
-	 * burst of saves into one. Somebody who has just changed a setting should call
-	 * this rather than assume the core will pick it up, and watch saveFailed() if
-	 * they want to be told when it could not be done.
+	 * Have the core write the store now, answered by saved() or saveFailed().
+	 * Not needed for a change to be kept - the core writes a changed store by
+	 * itself - only to be told it was.
 	 */
 	void save(ConfigStore store);
 
@@ -148,7 +144,6 @@ signals:
 	void connectionModeChanged();
 
 private:
-	void flush();
 	void onCoreEvent(const QuickDC::Api::Event& event);
 
 	/** The value in the channel's copy of the settings, or null. */
@@ -165,10 +160,6 @@ private:
 	                  const QString& announced);
 
 	QPointer<CoreThread> m_thread;
-
-	QTimer* m_saveTimer;
-	bool m_saveApplication = false;
-	bool m_saveSession = false;
 
 	/** Saves asked for and not yet answered, by request number. */
 	QSet<std::uint64_t> m_saving;
