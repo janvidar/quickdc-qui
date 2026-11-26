@@ -27,6 +27,8 @@ concurrency:
 
 env:
   QT_VERSION: '6.5.3'
+  # The submodules' own suites as well as the GUI's, at the commits this tree pins.
+  TEST_OPTIONS: -DQUICKDC_BUILD_TESTS=ON -DSAMURAI_BUILD_TESTS=ON -DDROP_BUILD_TESTS=ON -DEXOTIC_BUILD_TESTS=ON -DQUICKDC_REQUIRE_AUTOTESTS=ON
 
 jobs:
   build:
@@ -85,8 +87,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             extra+=(-DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake")
           fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            -DQUICKDC_REQUIRE_AUTOTESTS=ON "${extra[@]}"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug $TEST_OPTIONS "${extra[@]}"
 
       - name: Build
         shell: bash
@@ -127,8 +128,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            -DQUICKDC_REQUIRE_AUTOTESTS=ON -DQUICKDC_SANITIZE=ON
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug $TEST_OPTIONS -DQUICKDC_SANITIZE=ON
 
       - name: Build
         run: cmake --build build

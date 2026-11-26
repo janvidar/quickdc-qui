@@ -53,6 +53,7 @@ class ChatDelegate final : public QStyledItemDelegate {
 
 public:
 	explicit ChatDelegate(QObject* parent = nullptr);
+	~ChatDelegate() override;
 
 	void paint(QPainter* painter, const QStyleOptionViewItem& option,
 	           const QModelIndex& index) const override;

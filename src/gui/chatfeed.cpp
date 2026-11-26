@@ -348,6 +348,11 @@ bool Qdc::operator<(const FeedPos& left, const FeedPos& right)
 	return left.offset < right.offset;
 }
 
+Qdc::ChatDelegate::~ChatDelegate()
+{
+	qDeleteAll(m_cache);
+}
+
 Qdc::ChatDelegate::ChatDelegate(QObject* parent)
 	: QStyledItemDelegate(parent)
 	, m_idle(new QTimer(this))

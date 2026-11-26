@@ -380,5 +380,5 @@ void Qdc::BoardBridge::write(const QString& hubUrl, const QString& board, const 
 		return;
 
 	m_writing.remove(request);
-	emit postRefused(words(Ev::PostRefused{request, Ev::PostRefused::Why::NoHub, 0, 0, std::string()}));
+	emit postRefused(words(Ev::PostRefused{request, Ev::PostRefused::Why::NoHub, 0, 0, std::string(), to_std(hubUrl), to_std(board)}));
 }
