@@ -166,7 +166,7 @@ QString normalise_url(const QString& url)
 
 }
 
-Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* parent)
+Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* parent, bool remember)
 	: QObject(parent)
 	, m_thread(thread)
 	, m_url(normalise_url(url))
@@ -194,7 +194,7 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 
 	connect(m_thread->channel()->route(m_handle), &HubRoute::received, this, &HubBridge::onCoreEvent);
 
-	m_opened = m_thread->submit(QuickDC::Api::Commands::OpenHub{m_handle, m_url.toStdString()});
+	m_opened = m_thread->submit(QuickDC::Api::Commands::OpenHub{m_handle, m_url.toStdString(), remember});
 	if (m_opened) sendPolicy();
 }
 
@@ -394,6 +394,25 @@ void Qdc::HubBridge::onCoreEvent(const QuickDC::Api::Event& event)
 			if (e.hub == m_handle) handle(e);
 		}
 	}, event.value);
+}
+
+QStringList Qdc::HubBridge::sessionHubs(CoreThread* thread)
+{
+	QStringList out;
+	if (!thread) return out;
+	if (const auto* kept = thread->channel()->latest<QuickDC::Api::Events::SessionHubs>())
+		for (const std::string& url : kept->urls) out << QString::fromStdString(url);
+	return out;
+}
+
+void Qdc::HubBridge::clearSessionHubs(CoreThread* thread)
+{
+	if (thread) thread->submit(QuickDC::Api::Commands::ClearSessionHubs{});
+}
+
+void Qdc::HubBridge::endSession(CoreThread* thread)
+{
+	if (thread) thread->submit(QuickDC::Api::Commands::EndSession{});
 }
 
 QString Qdc::HubBridge::normalisedUrl(const QString& url)

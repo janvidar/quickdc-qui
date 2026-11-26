@@ -82,7 +82,7 @@ bool isState(const QuickDC::Api::Event& event)
 {
 	namespace Ev = QuickDC::Api::Events;
 	return event.as<Ev::ConnectionMode>() || event.as<Ev::ShareFolders>()
-		|| event.as<Ev::FavouriteHubs>() || event.as<Ev::RecentHubs>()
+		|| event.as<Ev::FavouriteHubs>() || event.as<Ev::RecentHubs>() || event.as<Ev::SessionHubs>()
 		|| event.as<Ev::CompletedDownloads>() || event.as<Ev::HubListSources>()
 		|| event.as<Ev::HubDirectory>();
 }

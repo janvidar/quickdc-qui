@@ -84,9 +84,6 @@ const QString NETWORK_GROUP = S::groupOf(S::Port);
  * predictable. The conversations on a hub go in the session store under that
  * hub's address, beside the other things remembered per hub.
  */
-const QString WINDOWS_GROUP = QStringLiteral("Windows");
-const QString WINDOWS_TOTAL = QStringLiteral("Total");
-const QString WINDOWS_HUB = QStringLiteral("Hub ");
 const QString DMS_TOTAL = QStringLiteral("Conversations");
 const QString DMS_ENTRY = QStringLiteral("Conversation ");
 
@@ -440,6 +437,9 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 
 Qdc::HubsView::~HubsView()
 {
+	/* The hubs this closes are closing with the window, so the core keeps them for next time. */
+	HubBridge::endSession(m_thread);
+
 	/*
 	 * The panes hold connections to the bridges, and a bridge's destructor blocks
 	 * on the core thread. Deleting the panes first means nothing is left connected
@@ -487,7 +487,7 @@ Qdc::HubsView::Entry* Qdc::HubsView::entryFor(HubBridge* bridge)
 	return nullptr;
 }
 
-bool Qdc::HubsView::openHub(const QString& url)
+bool Qdc::HubsView::openHub(const QString& url, bool remember)
 {
 	const QString wanted = url.trimmed();
 	if (wanted.isEmpty()) return false;
@@ -507,7 +507,7 @@ bool Qdc::HubsView::openHub(const QString& url)
 		return true;
 	}
 
-	HubBridge* bridge = new HubBridge(m_thread, normalised);
+	HubBridge* bridge = new HubBridge(m_thread, normalised, nullptr, remember);
 
 	Entry* entry = new Entry;
 	entry->bridge = bridge;
@@ -734,35 +734,8 @@ void Qdc::HubsView::saveSession()
 {
 	if (!m_config || m_restoring) return;
 
+	/* Which hubs are open the core keeps itself; what is kept here is the panes. */
 	const QStringList hubs = openHubs();
-
-	QStringList remembered = hubs;
-	if (!m_localHubUrl.isEmpty()) remembered.removeAll(m_localHubUrl);
-
-	/*
-	 * The old entries go first. A list that has grown shorter would otherwise
-	 * leave the tail of the longer one behind it, and those hubs would be opened
-	 * again every time for ever.
-	 */
-	const int had = m_config->getNumber(ConfigStore::Application, WINDOWS_GROUP,
-	                                    WINDOWS_TOTAL, 0);
-
-	for (int n = 0; n < had; ++n)
-	{
-		m_config->remove(ConfigStore::Application, WINDOWS_GROUP,
-		                 WINDOWS_HUB + QString::number(n));
-	}
-
-	m_config->setNumber(ConfigStore::Application, WINDOWS_GROUP, WINDOWS_TOTAL,
-	                    static_cast<int>(remembered.size()));
-
-	for (int n = 0; n < remembered.size(); ++n)
-	{
-		m_config->setString(ConfigStore::Application, WINDOWS_GROUP,
-		                    WINDOWS_HUB + QString::number(n), remembered.at(n));
-	}
-
-	m_config->save(ConfigStore::Application);
 
 	for (const QString& hubUrl : hubs)
 	{
@@ -868,18 +841,14 @@ bool Qdc::HubsView::restoreSession()
 
 	reloadLocalHub();
 
-	const int total = m_config->getNumber(ConfigStore::Application, WINDOWS_GROUP,
-	                                      WINDOWS_TOTAL, 0);
-	if (total <= 0) return false;
+	const QStringList urls = HubBridge::sessionHubs(m_thread);
+	if (urls.isEmpty()) return false;
 
 	m_restoring = true;
 	int opened = 0;
 
-	for (int n = 0; n < total; ++n)
+	for (const QString& url : urls)
 	{
-		const QString url = m_config->getString(ConfigStore::Application,
-			WINDOWS_GROUP, WINDOWS_HUB + QString::number(n), QString());
-
 		if (url.isEmpty() || !openHub(url)) continue;
 
 		opened++;
@@ -2087,7 +2056,7 @@ void Qdc::HubsView::reloadLocalHub()
 
 	m_localHubUrl = wanted;
 
-	if (!openHub(wanted))
+	if (!openHub(wanted, false))
 	{
 		m_localHubUrl.clear();
 		return;

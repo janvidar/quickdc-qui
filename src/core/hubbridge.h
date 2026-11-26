@@ -49,7 +49,17 @@ public:
 	 * Fails silently if the core is not running or the address cannot be parsed;
 	 * systemError() says which, and netStatus() stays Invalid.
 	 */
-	HubBridge(CoreThread* thread, const QString& url, QObject* parent = nullptr);
+	/** The hubs open when the last session ended, as the core kept them. */
+	static QStringList sessionHubs(CoreThread* thread);
+
+	/** Forget every kept hub that is not open now. */
+	static void clearSessionHubs(CoreThread* thread);
+
+	/** The front end is going away: the hubs it closes now are kept for next time. */
+	static void endSession(CoreThread* thread);
+
+	/** 'remember' keeps the hub among those the core opens again next start. */
+	HubBridge(CoreThread* thread, const QString& url, QObject* parent = nullptr, bool remember = true);
 	~HubBridge() override;
 
 	/**

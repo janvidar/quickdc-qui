@@ -88,7 +88,7 @@ public:
 	 *
 	 * @return false only if the address was unusable.
 	 */
-	bool openHub(const QString& url);
+	bool openHub(const QString& url, bool remember = true);
 
 	/** Close a hub, its conversations, and its connection. */
 	void closeHub(const QString& url);

@@ -3370,7 +3370,7 @@ void TestHubs::theBoardGlyphIsAThirdFigureInTheSameSpace()
 /**
  * The row for the hub this program runs is marked apart from everybody else's.
  *
- * The session total is cleared first, so that every row in the tree is one this test asked
+ * The core's list of hubs to reopen is cleared first, so that every row in the tree is one this test asked
  * for; and restoreSession() is what puts the row there, since nothing has been asked to
  * open a hub and the row exists only because the setting says this computer runs one. A
  * hub somebody else runs is then opened beside it, which is what the marking is a
@@ -3397,8 +3397,8 @@ void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 	const QString localHub = QStringLiteral("Local hub");
 	const QString enabled = QStringLiteral("Enabled");
 
-	config.setNumber(ConfigStore::Application, QStringLiteral("Windows"),
-	                 QStringLiteral("Total"), 0);
+	Qdc::HubBridge::clearSessionHubs(m_thread);
+	QTRY_VERIFY(Qdc::HubBridge::sessionHubs(m_thread).isEmpty());
 
 	config.setNumber(ConfigStore::Application, QStringLiteral("Network"),
 	                 QStringLiteral("Port"), 1411);
@@ -3930,22 +3930,17 @@ void TestHubs::theBoardsOpenOnAHubComeBackWithIt()
 	         QStringLiteral("general"));
 
 	/*
-	 * The list of windows is narrowed to this one hub first. Every test that opens a
-	 * hub with a configuration writes to that list, and restoring it whole here would
-	 * open all of them - what is being tested is what comes back with a hub, not which
-	 * hubs come back.
+	 * The core kept the hub because it closed with its view. Other cases leave
+	 * hubs of their own on that list, so what is checked is this one's rows.
 	 */
-	config.setNumber(ConfigStore::Application, QStringLiteral("Windows"),
-	                 QStringLiteral("Total"), 1);
-	config.setString(ConfigStore::Application, QStringLiteral("Windows"),
-	                 QStringLiteral("Hub 0"), url);
-	config.save(ConfigStore::Application);
+	QTRY_VERIFY(Qdc::HubBridge::sessionHubs(m_thread).contains(url));
 
 	Qdc::HubsView reopened(m_thread, nullptr, m_filelists, nullptr, &config);
 
 	QVERIFY(reopened.restoreSession());
 
-	QCOMPARE(reopened.openHubs(), QStringList{url});
+	const int row = reopened.openHubs().indexOf(url);
+	QVERIFY(row >= 0);
 
 	/*
 	 * The rows are back, in the order they were listed, and neither of them has asked
@@ -3956,10 +3951,10 @@ void TestHubs::theBoardsOpenOnAHubComeBackWithIt()
 	         (QStringList{QStringLiteral("general"), QStringLiteral("dev.adc")}));
 
 	QTreeWidget* rows = hubTree(reopened);
-	QCOMPARE(rows->topLevelItem(0)->childCount(), 2);
+	QCOMPARE(rows->topLevelItem(row)->childCount(), 2);
 
 	/* The name on the wire until the hub describes it, which it has not yet done. */
-	QCOMPARE(rows->topLevelItem(0)->child(0)->text(0), QStringLiteral("general"));
+	QCOMPARE(rows->topLevelItem(row)->child(0)->text(0), QStringLiteral("general"));
 }
 
 void TestHubs::closingAHubLeavesNoBoardRowBehind()
