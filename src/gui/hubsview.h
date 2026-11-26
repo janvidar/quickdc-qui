@@ -39,6 +39,7 @@ class DmPane;
 class Favourites;
 class FilelistBridge;
 class HubBridge;
+class LocalHubWatch;
 class HubPane;
 class TransferBridge;
 
@@ -422,33 +423,18 @@ private:
 	void reloadDownloadDirectory();
 
 	/**
-	 * Open, close or move the row for the hub this program runs itself.
-	 *
-	 * That row is there because the setting says so rather than because anybody
-	 * opened it, so this is what decides it: called when the window comes up, and
-	 * again whenever the switch or the port the hub answers on is written - that port
-	 * living with the client's own network settings because it is the same port.
-	 *
-	 * The address follows the client's own listening port, so a change to that port
-	 * moves the hub rather than leaving a row pointing at nothing. The old row is
-	 * closed even when there is a new one to open: the two are the same hub answering
-	 * elsewhere, and a list with both in it would say this computer runs two.
-	 * 'm_localHubUrl' is cleared before the old row is closed, so that what closeHub()
-	 * writes down is already the truth, and set before the new hub is opened, because
-	 * opening one draws its row - and a row drawn before it was set would be drawn as
-	 * somebody else's hub. What was open on the hub is put back here, because
-	 * restoreSession() does that for the hubs it opens and does not open this one.
+	 * Adopt, move or let go of the row for the core's own session to the hub this
+	 * program runs (LocalHubJoin): the core decides when there is one, and this
+	 * only follows. What was open on it is put back, since restoreSession() does
+	 * that only for the hubs it opens.
 	 */
-	void reloadLocalHub();
+	void syncLocalJoin();
 
-	/**
-	 * Where the built-in hub answers: this client's own port, on the loopback.
-	 *
-	 * The loopback rather than this machine's address on the network, and plaintext
-	 * rather than TLS: the connection never leaves the computer, so there is nothing
-	 * on the way to protect it from and no certificate anybody could check.
-	 */
-	QString localHubUrl() const;
+	/** The row of the core's session to the hub this program runs, if there is one. */
+	Entry* localJoinEntry();
+
+	/** A row for 'bridge', connecting it when this opened it rather than adopted it. */
+	void addHub(HubBridge* bridge, bool connect);
 
 	/**
 	 * A per hub choice with three answers: follow the general setting, always, or
@@ -471,9 +457,8 @@ private:
 	 *
 	 * The hub this program runs itself is drawn as a machine rather than as the speech
 	 * bubbles every other hub gets, and said in the tooltip as well, because a shape
-	 * says which row and only words say why. Which row that is comes from the address
-	 * rather than from anything the row carries, so that the mark follows the setting;
-	 * see 'm_localHubUrl'.
+	 * says which row and only words say why. That row is the core's own session to
+	 * it, which its bridge knows.
 	 */
 	void refreshItem(QTreeWidgetItem* item, ChatPane* pane);
 
@@ -526,15 +511,7 @@ private:
 	/** What the core says of the boards; built when first wanted. */
 	BoardBridge* m_bulletins = nullptr;
 
-	/**
-	 * The address of the hub this program runs, while it is running one.
-	 *
-	 * Empty when the built-in hub is switched off, which is also what says that no row
-	 * in the tree is that hub - a row is marked by comparing against this rather than
-	 * by carrying anything of its own, so that the mark follows the setting and cannot
-	 * be left behind on a row after the hub it named has gone.
-	 */
-	QString m_localHubUrl;
+	LocalHubWatch* m_localHub = nullptr;
 
 	QSplitter* m_split;
 	QTreeWidget* m_tree;

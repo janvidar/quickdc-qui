@@ -73,8 +73,6 @@ const QString USER_GROUP = S::groupOf(S::ClientId);
  * The local hub answers on the port this client already listens on, so its address
  * is read from the network settings rather than from a setting of the hub's own.
  */
-const QString LOCAL_HUB_GROUP = S::groupOf(S::HubEnabled);
-const QString NETWORK_GROUP = S::groupOf(S::Port);
 
 /**
  * What was open last time, so that it can be opened again.
@@ -341,6 +339,9 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 	 * moment after the setting took effect; and re-reading every hub's policy because
 	 * some unrelated store wrote a numbered list was work nobody asked for.
 	 */
+	m_localHub = new LocalHubWatch(m_thread, this);
+	connect(m_localHub, &LocalHubWatch::changed, this, &HubsView::syncLocalJoin);
+
 	if (m_config)
 	{
 		connect(m_config, &ConfigBridge::changed, this,
@@ -349,8 +350,6 @@ Qdc::HubsView::HubsView(CoreThread* thread, Favourites* favourites,
 
 			if (group == DOWNLOADS_GROUP) reloadDownloadDirectory();
 
-			if (group == LOCAL_HUB_GROUP || group == NETWORK_GROUP)
-				reloadLocalHub();
 
 			/*
 			 * Which posts are this user's own, which the identity page can change
@@ -507,8 +506,13 @@ bool Qdc::HubsView::openHub(const QString& url, bool remember)
 		return true;
 	}
 
-	HubBridge* bridge = new HubBridge(m_thread, normalised, nullptr, remember);
+	addHub(new HubBridge(m_thread, normalised, nullptr, remember), true);
+	saveSession();
+	return true;
+}
 
+void Qdc::HubsView::addHub(HubBridge* bridge, bool connectNow)
+{
 	Entry* entry = new Entry;
 	entry->bridge = bridge;
 	entry->pane = new HubPane(bridge, m_config);
@@ -658,11 +662,7 @@ bool Qdc::HubsView::openHub(const QString& url, bool remember)
 	refreshItem(entry->item, entry->pane);
 
 	showPane(entry->pane);
-	bridge->connectToHub();
-
-	saveSession();
-
-	return true;
+	if (connectNow) bridge->connectToHub();
 }
 
 QList<Qdc::DmPane*> Qdc::HubsView::conversationsOf(const Entry& entry) const
@@ -839,7 +839,7 @@ bool Qdc::HubsView::restoreSession()
 {
 	if (!m_config) return false;
 
-	reloadLocalHub();
+	syncLocalJoin();
 
 	const QStringList urls = HubBridge::sessionHubs(m_thread);
 	if (urls.isEmpty()) return false;
@@ -1917,8 +1917,7 @@ void Qdc::HubsView::refreshItem(QTreeWidgetItem* item, ChatPane* pane)
 
 	HubBridge* bridge = kind == RowKind::Hub ? pane->hub() : nullptr;
 
-	const bool ownHub = bridge && !m_localHubUrl.isEmpty()
-	                 && bridge->url() == m_localHubUrl;
+	const bool ownHub = bridge && bridge->isLocalJoin();
 
 	item->setIcon(NameColumn, row_icon(ownHub ? Glyph::LocalHub : kind_glyph(kind),
 	                                   ROW_GLYPH, ratio));
@@ -2026,43 +2025,34 @@ void Qdc::HubsView::reloadDownloadDirectory()
 	                                     : configured;
 }
 
-QString Qdc::HubsView::localHubUrl() const
+Qdc::HubsView::Entry* Qdc::HubsView::localJoinEntry()
 {
-	const int port = m_config
-		? m_config->read(S::Port)
-		: S::Port.fallback;
-
-	return HubBridge::normalisedUrl(QStringLiteral("adc://127.0.0.1:%1").arg(port));
+	for (Entry* entry : std::as_const(m_entries))
+		if (entry->bridge && entry->bridge->isLocalJoin()) return entry;
+	return nullptr;
 }
 
-void Qdc::HubsView::reloadLocalHub()
+void Qdc::HubsView::syncLocalJoin()
 {
-	if (!m_config) return;
+	const auto [handle, url] = HubBridge::localHubJoin(m_thread);
 
-	const bool enabled = m_config->read(S::HubEnabled);
+	Entry* current = localJoinEntry();
+	if (current && current->bridge->handle() == handle) return;
 
-	const QString wanted = enabled ? localHubUrl() : QString();
-	if (wanted == m_localHubUrl) return;
+	/* The core has already let go of it, so what closing it tells the core changes nothing. */
+	if (current) closeHub(current->bridge->url());
+	if (!handle) return;
 
-	if (!m_localHubUrl.isEmpty())
+	/* Somebody opened that address by hand: one row onto a hub is all there is room for. */
+	if (entryFor(url))
 	{
-		const QString had = m_localHubUrl;
-
-		m_localHubUrl.clear();
-		closeHub(had);
-	}
-
-	if (wanted.isEmpty()) return;
-
-	m_localHubUrl = wanted;
-
-	if (!openHub(wanted, false))
-	{
-		m_localHubUrl.clear();
+		HubBridge::forgetUnadopted(m_thread, handle);
 		return;
 	}
 
-	if (Entry* entry = entryFor(wanted))
+	addHub(new HubBridge(m_thread, handle, url), false);
+
+	if (Entry* entry = entryFor(url))
 	{
 		restoreConversations(*entry);
 		restoreBoards(*entry);

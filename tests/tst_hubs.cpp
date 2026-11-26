@@ -3409,9 +3409,10 @@ void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 
 	hubs.restoreSession();
 
+	/* The core opens the session to its own hub, and the row follows when it says so. */
 	QTreeWidget* rows = hubTree(hubs);
 	QVERIFY(rows);
-	QCOMPARE(rows->topLevelItemCount(), 1);
+	QTRY_COMPARE(rows->topLevelItemCount(), 1);
 
 	QTreeWidgetItem* ownRow = rows->topLevelItem(0);
 	QVERIFY(ownRow);
@@ -3451,7 +3452,7 @@ void TestHubs::theHubThisProgramRunsIsMarkedApartFromTheRest()
 
 	config.setBool(ConfigStore::Application, localHub, enabled, false);
 
-	QCOMPARE(rows->topLevelItemCount(), 1);
+	QTRY_COMPARE(rows->topLevelItemCount(), 1);
 	QCOMPARE(rows->topLevelItem(0), otherRow);
 }
 

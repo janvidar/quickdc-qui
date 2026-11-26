@@ -71,8 +71,34 @@ void Qdc::CoreChannel::dispatchToHub(const QuickDC::Api::Event& event)
 	const std::optional<QuickDC::Api::HubHandle> hub = hubOf(event);
 	if (!hub) return;
 
-	/* A hub nobody is listening to any more: its events end here. */
-	if (HubRoute* to = m_routes.value(*hub)) emit to->received(event);
+	if (HubRoute* to = m_routes.value(*hub))
+	{
+		emit to->received(event);
+		return;
+	}
+
+	/*
+	 * A hub the core opened is heard from before anything here adopts it, and
+	 * what it said first - connecting, logging in, the user list - is kept for
+	 * whoever does. Any other hub nobody is listening to: its events end here.
+	 */
+	if (*hub >= QuickDC::Api::CORE_HUB_HANDLES)
+	{
+		QVector<QuickDC::Api::Event>& held = m_unadopted[*hub];
+		if (held.size() < MAX_UNADOPTED) held.append(event);
+	}
+}
+
+void Qdc::CoreChannel::replay(QuickDC::Api::HubHandle hub)
+{
+	const QVector<QuickDC::Api::Event> held = m_unadopted.take(hub);
+	if (HubRoute* to = m_routes.value(hub))
+		for (const QuickDC::Api::Event& event : held) emit to->received(event);
+}
+
+void Qdc::CoreChannel::forgetUnadopted(QuickDC::Api::HubHandle hub)
+{
+	m_unadopted.remove(hub);
 }
 
 namespace {
@@ -83,6 +109,7 @@ bool isState(const QuickDC::Api::Event& event)
 	namespace Ev = QuickDC::Api::Events;
 	return event.as<Ev::ConnectionMode>() || event.as<Ev::ShareFolders>()
 		|| event.as<Ev::FavouriteHubs>() || event.as<Ev::RecentHubs>() || event.as<Ev::SessionHubs>()
+		|| event.as<Ev::LocalHubJoin>()
 		|| event.as<Ev::CompletedDownloads>() || event.as<Ev::HubListSources>()
 		|| event.as<Ev::HubDirectory>();
 }

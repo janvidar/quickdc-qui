@@ -1054,3 +1054,9 @@ containers doing NAT with nftables, qdc in each client container.
   hold, network-changed, completed-forget ... delete, expect-file ... missing.
   Still in the GUI and arguably policy: joining the local hub when it is
   enabled (HubsView::reloadLocalHub).
+- 2026-11-26: the local hub join moved into the core ([Local hub] Join,
+  LocalHubJoin, handles from CORE_HUB_HANDLES). CoreChannel holds the events of
+  a core-opened hub until a HubBridge adopts it (replay(), bounded); HubsView
+  adopts through LocalHubWatch and marks the row by HubBridge::isLocalJoin().
+  qdc presets Join=0. Not covered by a scenario: a front end declining the join
+  (qdc cannot name a core-opened hub yet).

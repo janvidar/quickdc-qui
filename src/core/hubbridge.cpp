@@ -195,6 +195,38 @@ Qdc::HubBridge::HubBridge(CoreThread* thread, const QString& url, QObject* paren
 	if (m_opened) sendPolicy();
 }
 
+Qdc::HubBridge::HubBridge(CoreThread* thread, quint64 handle, const QString& url, QObject* parent)
+	: QObject(parent)
+	, m_thread(thread)
+	, m_url(normalise_url(url))
+	, m_adopted(true)
+{
+	m_handle = handle;
+	if (!m_thread || !m_thread->isCoreRunning()) return;
+
+	connect(m_thread->channel()->route(m_handle), &HubRoute::received, this, &HubBridge::onCoreEvent);
+	m_opened = true;
+	sendPolicy();
+
+	/* After this returns, so whoever built this is connected to its signals first. */
+	QMetaObject::invokeMethod(this, [this] {
+		if (m_thread) m_thread->channel()->replay(m_handle);
+	}, Qt::QueuedConnection);
+}
+
+void Qdc::HubBridge::forgetUnadopted(CoreThread* thread, quint64 handle)
+{
+	if (thread) thread->channel()->forgetUnadopted(handle);
+}
+
+QPair<quint64, QString> Qdc::HubBridge::localHubJoin(CoreThread* thread)
+{
+	if (thread)
+		if (const auto* join = thread->channel()->latest<QuickDC::Api::Events::LocalHubJoin>())
+			return {join->joined, QString::fromStdString(join->url)};
+	return {0, QString()};
+}
+
 /* Closing disconnects the session; nothing of it is left to report here. */
 Qdc::HubBridge::~HubBridge()
 {
@@ -581,3 +613,12 @@ void Qdc::HubBridge::deliverSearchResults()
 	emit searchResultsReceived(going);
 }
 
+
+Qdc::LocalHubWatch::LocalHubWatch(CoreThread* thread, QObject* parent)
+	: QObject(parent)
+{
+	if (!thread) return;
+	connect(thread->channel(), &CoreChannel::received, this, [this](const QuickDC::Api::Event& event) {
+		if (event.as<QuickDC::Api::Events::LocalHubJoin>()) emit changed();
+	});
+}

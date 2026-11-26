@@ -10,6 +10,7 @@
 #include <api/protocol.h>
 
 #include <QHash>
+#include <QVector>
 #include <QList>
 #include <QMetaType>
 #include <QObject>
@@ -80,6 +81,12 @@ public:
 	HubRoute* route(QuickDC::Api::HubHandle hub);
 	void releaseRoute(QuickDC::Api::HubHandle hub);
 
+	/** Hand a hub the core opened what it said before route() was asked for it. */
+	void replay(QuickDC::Api::HubHandle hub);
+
+	/** Drop what is held for a hub the core opened and nothing will adopt. */
+	void forgetUnadopted(QuickDC::Api::HubHandle hub);
+
 	/**
 	 * Hand over the stores as they stood, and the state the core announces as it
 	 * stood with them (Core::state()). Any thread; the core's, in practice.
@@ -149,6 +156,10 @@ private:
 	std::map<std::size_t, QuickDC::Api::Event> m_state;
 
 	QHash<QuickDC::Api::HubHandle, HubRoute*> m_routes;
+
+	/** Events of hubs the core opened that nothing has adopted yet; bounded. */
+	static constexpr int MAX_UNADOPTED = 20000;
+	QHash<QuickDC::Api::HubHandle, QVector<QuickDC::Api::Event>> m_unadopted;
 };
 
 }

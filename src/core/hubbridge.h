@@ -10,6 +10,7 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QPair>
 #include <QStringList>
 #include <QTimer>
 #include <QVector>
@@ -57,6 +58,20 @@ public:
 
 	/** The front end is going away: the hubs it closes now are kept for next time. */
 	static void endSession(CoreThread* thread);
+
+	/** Adopt the session the core opened itself as 'handle' (LocalHubJoin). */
+	HubBridge(CoreThread* thread, quint64 handle, const QString& url, QObject* parent = nullptr);
+
+	/** Whether this is the core's own session to the hub it runs. */
+	bool isLocalJoin() const { return m_adopted; }
+
+	quint64 handle() const { return m_handle; }
+
+	/** Drop what the channel held for a session the core opened that nothing will adopt. */
+	static void forgetUnadopted(CoreThread* thread, quint64 handle);
+
+	/** The core's session to the hub it runs, as 0 and empty when there is none. */
+	static QPair<quint64, QString> localHubJoin(CoreThread* thread);
 
 	/** 'remember' keeps the hub among those the core opens again next start. */
 	HubBridge(CoreThread* thread, const QString& url, QObject* parent = nullptr, bool remember = true);
@@ -361,11 +376,24 @@ private:
 	 */
 	QString m_hubDescription;
 	bool m_secure = false;
+	bool m_adopted = false;
 
 	/** Replies waiting to go out together; see searchResultsReceived(). */
 	QVector<Qdc::SearchHit> m_pendingHits;
 	QTimer* m_hitTimer = nullptr;
 
+};
+
+
+/** Tells when the core opens, moves or lets go of its session to the hub it runs. */
+class LocalHubWatch final : public QObject {
+	Q_OBJECT
+
+public:
+	explicit LocalHubWatch(CoreThread* thread, QObject* parent = nullptr);
+
+signals:
+	void changed();
 };
 
 }
