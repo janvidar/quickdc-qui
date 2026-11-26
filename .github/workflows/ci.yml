@@ -37,7 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             experimental: false
           - os: macos-14
             experimental: false
@@ -107,7 +107,7 @@ jobs:
 
   sanitizers:
     name: sanitizers (ubuntu)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
