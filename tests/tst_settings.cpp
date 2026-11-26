@@ -946,11 +946,11 @@ void TestSettings::automaticDecidesTheSettingsUnderIt()
 	chooseMode(view, QStringLiteral("automatic"));
 	QTRY_VERIFY2(m_config->getBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), false),
 	             "automatic did not ask the gateway to forward the port");
-	QVERIFY(m_config->getBool(ConfigStore::Application, group, QStringLiteral("Active mode"), false));
-	QVERIFY2(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), true),
-	         "automatic forced a claim it is supposed to establish");
-	QVERIFY2(!m_config->getString(ConfigStore::Application, group, QStringLiteral("Reachability server")).isEmpty(),
-	         "automatic left nobody to ask");
+	QTRY_VERIFY(m_config->getBool(ConfigStore::Application, group, QStringLiteral("Active mode"), false));
+	QTRY_VERIFY2(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), true),
+	             "automatic forced a claim it is supposed to establish");
+	QTRY_VERIFY2(!m_config->getString(ConfigStore::Application, group, QStringLiteral("Reachability server")).isEmpty(),
+	             "automatic left nobody to ask");
 }
 
 void TestSettings::passiveTurnsOffWhatItCannotUse()
@@ -966,10 +966,11 @@ void TestSettings::passiveTurnsOffWhatItCannotUse()
 	settle();
 	Qdc::SettingsView view(m_config, &shares);
 
+	/* Each waited for: the core writes the keys one at a time. */
 	chooseMode(view, QStringLiteral("passive"));
 	QTRY_VERIFY(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("Active mode"), true));
-	QVERIFY(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), true));
-	QVERIFY(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), true));
+	QTRY_VERIFY(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("UseUPnP"), true));
+	QTRY_VERIFY(!m_config->getBool(ConfigStore::Application, group, QStringLiteral("Force active mode"), true));
 }
 
 /* The port is handed to every peer; a mode that does not show it must not move it. */
