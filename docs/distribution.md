@@ -84,3 +84,20 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
 - The minimum versions to support: glibc for the AppImage, macOS (Qt 6.5 needs 11 or newer), and Windows 10 or 11.
 - Whether the macOS DMG is universal (arm64 and x86_64) or arm64 only.
 - Where the offline update-signing key lives, and who runs the signing step for nightlies. A nightly that waits for a person is not nightly.
+
+## Progress
+
+- 2026-11-26, phase 1: public GitHub mirrors of all five repositories (history
+  rewritten first so every commit carries janvidar@extatic.org), relative submodule
+  URLs, and `.github/workflows/ci.yml` in the superproject: Ubuntu 24.04 and macOS 15
+  build and test all ~1500 tests green, the sanitizer job is green, Windows builds
+  and fails as expected, the podman net job runs nightly. Getting there fixed real
+  bugs: chat layouts leaked when a feed closed; kqueue reported a refused connect
+  as a plain disconnect, so NAT traversal gave up on macOS instead of dialling
+  again; a proxy hanging up mid-handshake read as a reset; the settings page
+  dropped a quick switch back to the previous mode; qdc's free ports were neither
+  claimed nor kept out of the ephemeral range on macOS. Left for the user: Gitea
+  push mirrors (each needs a GitHub token), and whether to publish `drop` so the
+  CI net job gets dropd. Known flake: samurai's socks5 hang-up test, seen once on
+  macOS under the superproject's parallel ctest.
+
