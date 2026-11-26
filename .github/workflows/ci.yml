@@ -41,7 +41,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             experimental: false
-          - os: macos-14
+          - os: macos-15
             experimental: false
           - os: windows-2022
             experimental: true
