@@ -145,8 +145,10 @@ jobs:
           for t in hubs bridge settings; do
             exe=build/tests/tst_$t.exe
             [ -x "$exe" ] || continue
-            timeout 120 "$exe" -o "tst_$t.txt,txt" > /dev/null 2>&1
-            echo "== tst_$t (exit $?)"; grep -E 'FAIL!|Loc:|Totals|QFATAL|Actual|Expected' "tst_$t.txt" | head -30 || true
+            status=0
+            timeout 120 "$exe" -o "tst_$t.txt,txt" > /dev/null 2>&1 || status=$?
+            echo "== tst_$t (exit $status)"
+            grep -E 'FAIL!|Loc:|Totals|QFATAL|Actual|Expected' "tst_$t.txt" | head -30 || true
           done
 
       - name: Test log
