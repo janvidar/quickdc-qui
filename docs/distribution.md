@@ -100,4 +100,13 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
   push mirrors (each needs a GitHub token), and whether to publish `drop` so the
   CI net job gets dropd. Known flake: samurai's socks5 hang-up test, seen once on
   macOS under the superproject's parallel ctest.
-
+- 2026-11-27, phase 2: Windows builds with MSVC and runs the whole suite (1516 tests,
+  qdc and its scenarios included, through Git's sh) green as a required job; samurai
+  has a Windows job of its own (7 minutes, against 30 for the superproject). Left
+  out there: samurai's poll() monitor tests and descriptors past FD_SETSIZE, the
+  core's testdebug program, and the podman net tests (Linux only). Bugs the port
+  found beyond Windows itself: a refused connect read as connected, IPv6 local
+  ports read into a buffer too short for them, a handshake deadline test that its
+  own pauses nearly filled. On Windows: TLS reads its files and the system's root
+  store without OpenSSL's stdio, sockets shared for traversal, `%s` in timestamps,
+  interfaces from GetAdaptersAddresses, CRLF in settings files.
