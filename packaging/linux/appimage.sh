@@ -31,6 +31,13 @@ case "${1:-}" in
 esac
 
 version=$(packaging/version.sh $nightly)
+# The update channel follows from the version: a nightly's, a release's, or none
+# for a build made by hand, which then never updates.
+case "$version" in
+	*~nightly*) channel=nightly ;;
+	*+*)        channel= ;;
+	*)          channel=stable ;;
+esac
 
 if [ -n "${QT_ROOT:-}" ]; then
 	qmake="$QT_ROOT/bin/qmake"
@@ -72,6 +79,7 @@ cmake -S . -B "$build" -G Ninja \
 	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
 	-DCMAKE_PREFIX_PATH="$qt_prefix" \
 	-DQUICKDC_QUI_VERSION_STRING="$version" \
+	-DQUICKDC_UPDATE_CHANNEL="$channel" \
 	-DQUICKDC_QUI_INSTALL=ON \
 	-DQUICKDC_QUI_BUILD_TESTS=OFF \
 	-DQUICKDC_BUILD_TESTS=OFF \
@@ -109,6 +117,9 @@ export PATH="$tools:$PATH"
 	--plugin qt --output appimage
 
 [ -f "$LDAI_OUTPUT" ] || { echo "$0: linuxdeploy wrote no $LDAI_OUTPUT" >&2; exit 1; }
+
+[ -z "$channel" ] || "$root/packaging/feed-entry.sh" "$channel" linux-x86_64 "$version" "$LDAI_OUTPUT" \
+	> "$root/dist/linux-x86_64.unsigned.json"
 
 echo "AppImage: $LDAI_OUTPUT"
 echo "Symbols:  $symbols"

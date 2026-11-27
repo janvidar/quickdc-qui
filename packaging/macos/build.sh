@@ -147,6 +147,14 @@ else
 	version=$(cd "$source_root" && packaging/version.sh)
 fi
 
+# The update channel follows from the version: a nightly's, a release's, or none
+# for a build made by hand, which then never updates.
+case "$version" in
+	*~nightly*) channel=nightly ;;
+	*+*)        channel= ;;
+	*)          channel=stable ;;
+esac
+
 if [ "$universal" = yes ]; then
 	architectures="arm64;x86_64"
 	arch=universal
@@ -167,6 +175,7 @@ cmake -S "$source_root" -B "$builddir" -G Ninja \
 	-DQUICKDC_SANITIZE=OFF \
 	-DQUICKDC_ALLOW_LOOPBACK_AUTH=OFF \
 	-DQUICKDC_QUI_VERSION_STRING="$version" \
+	-DQUICKDC_UPDATE_CHANNEL="$channel" \
 	-DCMAKE_OSX_ARCHITECTURES="$architectures" \
 	-DCMAKE_PREFIX_PATH="${QT_ROOT:-$qt_bin/..}"
 
@@ -214,6 +223,16 @@ codesign --verify --verbose=1 "$app" || {
 }
 
 echo "Bundle: $app"
+
+# What the updater installs from: the bundle itself, zipped, not the disk image.
+appzip="$root/dist/QuickDC-$version-$arch.app.zip"
+rm -f "$appzip"
+(cd "$(dirname "$app")" && ditto -c -k --keepParent "$BUNDLE_NAME.app" "$appzip")
+echo "Update package: $appzip"
+if [ -n "$channel" ] && [ "$universal" = yes ]; then
+	"$root/packaging/feed-entry.sh" "$channel" macos-universal "$version" "$appzip" \
+		> "$root/dist/macos-universal.unsigned.json"
+fi
 
 if [ "$dmg" = yes ]; then
 	out="$root/dist/QuickDC-$version-$arch.dmg"

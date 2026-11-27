@@ -31,6 +31,13 @@ case "${1:-}" in
 esac
 
 version=$(packaging/version.sh "${nightly[@]}")
+# The update channel follows from the version: a nightly's, a release's, or none
+# for a build made by hand, which then never updates.
+case "$version" in
+	*~nightly*) channel=nightly ;;
+	*+*)        channel= ;;
+	*)          channel=stable ;;
+esac
 numeric=$(sed -n '/^project(quickdc-qui/,/)/s/^ *VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt).0
 
 qt=${QT_ROOT:-${QT_ROOT_DIR:-}}
@@ -57,6 +64,7 @@ cmake -S . -B "$build" -G Ninja \
 	-DCMAKE_TOOLCHAIN_FILE="$vcpkg/scripts/buildsystems/vcpkg.cmake" \
 	-DCMAKE_PREFIX_PATH="$qt" \
 	-DQUICKDC_QUI_VERSION_STRING="$version" \
+	-DQUICKDC_UPDATE_CHANNEL="$channel" \
 	-DQUICKDC_QUI_BUILD_TESTS=OFF \
 	-DQUICKDC_BUILD_TESTS=OFF \
 	-DQUICKDC_BUILD_CLI=OFF \
@@ -100,6 +108,9 @@ setup="dist/QuickDC-$version-x86_64-setup.exe"
 symbols="dist/QuickDC-$version-x86_64-symbols.zip"
 rm -f "$symbols"
 (cd "$build/src/app" && 7z a -tzip -bso0 "$root/$symbols" QuickDC.pdb)
+
+[ -z "$channel" ] || packaging/feed-entry.sh "$channel" windows-x86_64 "$version" "$setup" \
+	> dist/windows-x86_64.unsigned.json
 
 echo "Installer: $setup"
 echo "Symbols:   $symbols"

@@ -13,6 +13,7 @@
 #include <core/dropbridge.h>
 #include <core/shares.h>
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFileDialog>
@@ -97,6 +98,7 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge
 	addPage(tr("Chat"), buildChat());
 	addPage(tr("Boards"), buildBoards());
 	addPage(tr("Appearance"), buildAppearance());
+	addPage(tr("Updates"), buildUpdates());
 	m_pages->setCurrentRow(0);
 
 	m_status->setObjectName(QStringLiteral("mutedText"));
@@ -687,6 +689,22 @@ QWidget* Qdc::SettingsView::buildAppearance()
 		m_theme->setCurrentIndex(qMax(0, m_theme->findData(stored.isEmpty() ? theme().name : stored)));
 	});
 
+	return page;
+}
+
+QWidget* Qdc::SettingsView::buildUpdates()
+{
+	QWidget* page = new QWidget(this);
+
+	QCheckBox* enabled = new QCheckBox(tr("Keep QuickDC up to date"), page);
+	enabled->setObjectName(QStringLiteral("updatesEnabled"));
+
+	QFormLayout* form = makeForm(page);
+	form->addRow(QString(), enabled);
+	form->addRow(tr("Version"), new QLabel(QApplication::applicationVersion(), page));
+	form->addRow(makeHint(tr("Updates are fetched quietly and installed when you quit."), page));
+
+	bind(enabled, S::UpdatesEnabled);
 	return page;
 }
 

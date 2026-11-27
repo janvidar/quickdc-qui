@@ -6,7 +6,9 @@
 ## in the last day; a manual run builds a nightly unless told otherwise. The
 ## results are this run's artifacts. Publishing them is phase 4.
 ##
-## Nothing is signed yet: each signing step waits for its secrets.
+## Nothing is signed yet: each signing step waits for its secrets. Each package's
+## unsigned feed entry (packaging/feed-entry.sh) is kept with it for the step that
+## signs and publishes it.
 #
 
 name: Package
@@ -123,7 +125,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64
-          path: dist/QuickDC-*
+          path: |
+            dist/QuickDC-*
+            dist/*.unsigned.json
           retention-days: 14
 
   macos:
@@ -200,7 +204,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos-universal
-          path: dist/QuickDC-*
+          path: |
+            dist/QuickDC-*
+            dist/*.unsigned.json
           retention-days: 14
 
   windows:
@@ -262,5 +268,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x86_64
-          path: dist/QuickDC-*
+          path: |
+            dist/QuickDC-*
+            dist/*.unsigned.json
           retention-days: 14

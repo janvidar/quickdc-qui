@@ -84,6 +84,7 @@ private slots:
 	void anUnconfiguredServerSaysSoRatherThanNothing();
 
 	void thePagesThatDiscloseSaySoInOneLine();
+	void updatesAreTurnedOffWhereTheCoreReadsIt();
 
 private:
 	QString scratch(const QString& name) const;
@@ -424,6 +425,24 @@ void TestSettings::numbersAndSwitchesApplyAtOnce()
 	QCOMPARE(m_config->getNumber(ConfigStore::Application, QStringLiteral("Network"), QStringLiteral("Max downloads")), 7);
 	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Chat media"), QStringLiteral("Fetch automatically"), !fetching),
 	         fetching);
+}
+
+/* On by default, as the core has it, and off where the updater looks. */
+void TestSettings::updatesAreTurnedOffWhereTheCoreReadsIt()
+{
+	using Qdc::ConfigStore;
+
+	Qdc::Shares shares(m_thread);
+	Qdc::SettingsView view(m_config, &shares);
+	settle();
+
+	QCheckBox* enabled = view.findChild<QCheckBox*>(QStringLiteral("updatesEnabled"));
+	QVERIFY(enabled);
+	QVERIFY(enabled->isChecked());
+
+	enabled->setChecked(false);
+	settle();
+	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Updates"), QStringLiteral("Enabled"), true), false);
 }
 
 /* The core reads bytes; a page that wrote back what it showed would shrink these on every edit. */

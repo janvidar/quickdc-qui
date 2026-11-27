@@ -57,6 +57,7 @@ private:
 	QWidget* buildChat();
 	QWidget* buildBoards();
 	QWidget* buildAppearance();
+	QWidget* buildUpdates();
 
 	void addPage(const QString& name, QWidget* content);
 

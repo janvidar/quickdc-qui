@@ -164,3 +164,17 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
   and the distribution's bundle on Linux; Windows listed adapters without an
   address. Not yet exercised: a release tag. Not signed: macOS (Developer ID and
   notarisation) and Windows (Trusted Signing or an OV certificate) wait for secrets.
+- 2026-11-27, phase 5: the updater, in the core (`core/update`): the feed format
+  above, Ed25519 in samurai (RFC 8032's vectors), versions ordered as Debian orders
+  them, the package fetched only when newer and kept only when it is the size and
+  SHA-256 that was signed for, and installed as the program quits - the AppImage
+  renamed over itself, the bundle swapped, the installer run silently. Settings has
+  an Updates page with the one switch. qdc scenarios cover a good update, a forged
+  signature, a package that is not what was signed, a feed for another channel, a
+  package outside the feed's directory, a missing feed, one off the loopback for the
+  test key, and updates turned off. Each package names its channel from its version
+  and leaves its unsigned feed entry beside it. Left: the real stable and nightly
+  keys (`core/update/keys.cpp`), and the signing and publishing of phase 4. The
+  installs on macOS and Windows are written but have only been compiled; they want
+  a run on each from a published feed. The download is held in memory (up to 512
+  MB) rather than streamed to disk.
