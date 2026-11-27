@@ -7,6 +7,8 @@
 ##   build.sh --nightly                    stamp a dated version on it
 ##   build.sh --pristine origin/master     build a clean checkout of a ref
 ##   build.sh --open                       reveal the result in Finder
+##   build.sh --universal                  Apple Silicon and Intel in one; needs an
+##                                         OpenSSL with both ($OPENSSL_ROOT_DIR)
 ##
 ## A nightly, from cron or launchd:
 ##
@@ -32,6 +34,7 @@ BUNDLE_NAME=QuickDC
 dmg=no
 nightly=no
 reveal=no
+universal=no
 pristine=
 
 while [ $# -gt 0 ]; do
@@ -39,6 +42,7 @@ while [ $# -gt 0 ]; do
 		--dmg)     dmg=yes ;;
 		--nightly) nightly=yes ;;
 		--open)    reveal=yes ;;
+		--universal) universal=yes ;;
 		--pristine)
 			if [ $# -lt 2 ]; then
 				echo "$0: --pristine needs a ref" >&2
@@ -135,17 +139,20 @@ else
 fi
 
 #
-# The version. Identical scheme to the Flatpak, and for the same reason: there
-# are no tags, so a nightly has to name itself, and CMake reads the file.
+# The version, by the rule every package follows (packaging/version.sh).
 #
-version_file="$source_root/packaging/nightly-version.txt"
-
 if [ "$nightly" = yes ]; then
-	version="0.1.0~nightly$(date -u +%Y%m%d).$(git -C "$source_root" rev-parse --short HEAD)"
-	echo "$version" > "$version_file"
+	version=$(cd "$source_root" && packaging/version.sh --nightly)
 else
-	rm -f "$version_file"
-	version=$(git -C "$source_root" describe --always --dirty 2>/dev/null || echo unknown)
+	version=$(cd "$source_root" && packaging/version.sh)
+fi
+
+if [ "$universal" = yes ]; then
+	architectures="arm64;x86_64"
+	arch=universal
+else
+	architectures=$(uname -m)
+	arch=$(uname -m)
 fi
 
 builddir="$root/build/macos"
@@ -159,9 +166,11 @@ cmake -S "$source_root" -B "$builddir" -G Ninja \
 	-DQUICKDC_TRACE=OFF \
 	-DQUICKDC_SANITIZE=OFF \
 	-DQUICKDC_ALLOW_LOOPBACK_AUTH=OFF \
+	-DQUICKDC_QUI_VERSION_STRING="$version" \
+	-DCMAKE_OSX_ARCHITECTURES="$architectures" \
 	-DCMAKE_PREFIX_PATH="${QT_ROOT:-$qt_bin/..}"
 
-cmake --build "$builddir"
+cmake --build "$builddir" --target quickdc-qui
 
 if [ ! -d "$app" ]; then
 	echo "$0: expected a bundle at $app and there is none" >&2
@@ -174,6 +183,19 @@ fi
 # -always-overwrite because a second run over a bundle macdeployqt has already
 # processed otherwise leaves the first run's copies in place.
 #
+#
+# The debug symbols, taken before anything below rewrites the binary, for the
+# crash reports of phase 6 (docs/distribution.md) to be read against.
+#
+mkdir -p "$root/dist"
+dsym="$builddir/$BUNDLE_NAME.dSYM"
+rm -rf "$dsym"
+dsymutil "$app/Contents/MacOS/$BUNDLE_NAME" -o "$dsym"
+symbols="$root/dist/QuickDC-$version-$arch-symbols.zip"
+rm -f "$symbols"
+(cd "$builddir" && ditto -c -k --keepParent "$BUNDLE_NAME.dSYM" "$symbols")
+echo "Symbols: $symbols"
+
 echo "Deploying Qt into the bundle"
 "$macdeployqt" "$app" -always-overwrite
 
@@ -194,9 +216,6 @@ codesign --verify --verbose=1 "$app" || {
 echo "Bundle: $app"
 
 if [ "$dmg" = yes ]; then
-	mkdir -p "$root/dist"
-
-	arch=$(uname -m)
 	out="$root/dist/QuickDC-$version-$arch.dmg"
 	staging="$builddir/dmg"
 

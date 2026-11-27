@@ -1,0 +1,235 @@
+#
+## Packages: the AppImage, the macOS disk image and the Windows installer, with
+## the debug symbols of each (docs/distribution.md, phase 3).
+##
+## A tag vX.Y.Z builds a release; every night builds a nightly if master changed
+## in the last day; a manual run builds a nightly unless told otherwise. The
+## results are this run's artifacts. Publishing them is phase 4.
+##
+## Nothing is signed yet: each signing step waits for its secrets.
+#
+
+name: Package
+
+on:
+  push:
+    tags: ['v*']
+  schedule:
+    - cron: '41 3 * * *'
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: 'Stamp a dated nightly version'
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  QT_VERSION: '6.5.3'
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      flag: ${{ steps.plan.outputs.flag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          NIGHTLY: ${{ inputs.nightly }}
+        run: |
+          build=true
+          flag=--nightly
+          case "$EVENT" in
+            push) flag= ;;
+            workflow_dispatch) [ "$NIGHTLY" = true ] || flag= ;;
+            schedule)
+              age=$(( $(date +%s) - $(git log -1 --format=%ct) ))
+              [ "$age" -lt 90000 ] || build=false
+              ;;
+          esac
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "flag=$flag" >> "$GITHUB_OUTPUT"
+          echo "build=$build flag=${flag:-(release)}"
+
+  appimage:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    # The oldest glibc offered, since an AppImage runs only where glibc is as new.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+
+      # GCC 13 for std::format, which 22.04's own compilers do not have.
+      - name: Install dependencies
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y g++-13 ninja-build zlib1g-dev libbz2-dev libssl-dev \
+            libgl1-mesa-dev libegl1 libfontconfig1 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libwayland-egl1 xvfb
+
+      - name: Build
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: QT_ROOT="$QT_ROOT_DIR" packaging/linux/appimage.sh ${{ needs.plan.outputs.flag }} --bundle-libstdc++
+
+      # Started on a display of its own with a home of its own; still running after
+      # a while is what passing means.
+      - name: Smoke test
+        run: |
+          home=$(mktemp -d)
+          status=0
+          HOME="$home" XDG_CONFIG_HOME="$home/.config" timeout 15 \
+            xvfb-run -a dist/QuickDC-*-x86_64.AppImage --appimage-extract-and-run \
+            > "$home/out" 2>&1 || status=$?
+          cat "$home/out"
+          [ "$status" -eq 124 ] || { echo "::error::QuickDC exited with $status"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: dist/QuickDC-*
+          retention-days: 14
+
+  macos:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: brew install ninja
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-cache
+          key: vcpkg-macos-openssl-arm64-x64-v1
+
+      # Homebrew's OpenSSL is for one architecture; vcpkg builds both, and lipo
+      # makes the one prefix a universal build links against.
+      - name: Universal OpenSSL
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/vcpkg-cache"
+          vcpkg="${VCPKG_INSTALLATION_ROOT:-$VCPKG_ROOT}"
+          "$vcpkg/vcpkg" install openssl:arm64-osx openssl:x64-osx
+          arm="$vcpkg/installed/arm64-osx"
+          x64="$vcpkg/installed/x64-osx"
+          out="$RUNNER_TEMP/openssl-universal"
+          mkdir -p "$out/lib"
+          cp -R "$arm/include" "$out/include"
+          for lib in libssl.a libcrypto.a; do
+            lipo -create "$arm/lib/$lib" "$x64/lib/$lib" -output "$out/lib/$lib"
+          done
+          lipo -info "$out/lib/libcrypto.a"
+          echo "OPENSSL_ROOT_DIR=$out" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: QT_ROOT="$QT_ROOT_DIR" packaging/macos/build.sh --dmg --universal ${{ needs.plan.outputs.flag }}
+
+      - name: Smoke test
+        run: |
+          app=build/macos/src/app/QuickDC.app
+          lipo -info "$app/Contents/MacOS/QuickDC"
+          home=$(mktemp -d)
+          HOME="$home" "$app/Contents/MacOS/QuickDC" > "$home/out" 2>&1 &
+          pid=$!
+          sleep 15
+          if kill -0 "$pid" 2>/dev/null; then kill "$pid"; else
+            cat "$home/out"; echo "::error::QuickDC did not stay up"; exit 1
+          fi
+          cat "$home/out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/QuickDC-*
+          retention-days: 14
+
+  windows:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-cache
+          key: vcpkg-${{ runner.os }}-openssl-zlib-bzip2-v1
+
+      - name: Install dependencies
+        shell: bash
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/vcpkg-cache"
+          choco install -y ninja
+          [ -x "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ] || choco install -y innosetup
+          vcpkg install openssl:x64-windows zlib:x64-windows bzip2:x64-windows
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build
+        shell: bash
+        run: packaging/windows/build.sh ${{ needs.plan.outputs.flag }}
+
+      # Installed silently for this user into a directory of its own, as the updater
+      # will, and started from there.
+      - name: Smoke test
+        shell: bash
+        run: |
+          target="$RUNNER_TEMP/QuickDC"
+          setup=$(ls dist/QuickDC-*-setup.exe)
+          "$setup" //VERYSILENT //SUPPRESSMSGBOXES //CURRENTUSER //NORESTART "//DIR=$(cygpath -w "$target")"
+          [ -f "$target/QuickDC.exe" ] || { echo "::error::the installer put no QuickDC.exe in $target"; exit 1; }
+          home=$(mktemp -d)
+          HOME="$home" USERPROFILE="$(cygpath -w "$home")" "$target/QuickDC.exe" &
+          pid=$!
+          sleep 15
+          if kill -0 "$pid" 2>/dev/null; then kill "$pid"; else
+            echo "::error::QuickDC did not stay up"; exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: dist/QuickDC-*
+          retention-days: 14

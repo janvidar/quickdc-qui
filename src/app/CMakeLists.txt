@@ -81,6 +81,17 @@ if(APPLE)
         OUTPUT_NAME "${QUICKDC_QUI_BUNDLE_NAME}")
 endif()
 
+# On Windows: a GUI program, so no console window comes up with it, called QuickDC
+# as the bundle is, with the icon and version information in its resources.
+if(WIN32)
+    set(QUICKDC_QUI_ICO ${PROJECT_SOURCE_DIR}/packaging/windows/app.ico)
+    configure_file(app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
+    target_sources(quickdc-qui PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
+    set_target_properties(quickdc-qui PROPERTIES
+        WIN32_EXECUTABLE ON
+        OUTPUT_NAME QuickDC)
+endif()
+
 target_link_libraries(quickdc-qui PRIVATE qdcgui)
 
 # The identity and the version as the compiler sees them. Only main.cpp needs
