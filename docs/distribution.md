@@ -96,13 +96,15 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
 
 ## Crash reporting and diagnostics
 
-- **Client:** Crashpad, built from source in CI (it uses gn/ninja, or a CMake port) and linked into the app. The handler runs as a separate process from the first second of start, so a corrupted process can still be dumped.
+- **Client:** sentry-native (MIT) with its Crashpad backend, fetched pinned by URL and SHA-256 when `QUICKDC_QUI_CRASH_REPORTS` is on, which only the package builds turn on. It is a CMake project, where Crashpad alone needs Chromium's gn. The handler (`crashpad_handler`) runs as a separate process beside the program from the first second of start, so a corrupted process can still be dumped. The client is `src/app/diagnostics.cpp`; the core knows nothing of it.
+- **Where reports go:** `QUICKDC_QUI_CRASH_DSN`, from the `QUICKDC_CRASH_DSN` secret in CI. Without it, dumps stay in the local crash database and are never sent.
 - **What a report carries:**
   - the minidump;
   - the version, channel, OS and a random install ID, created at opt-in and resettable;
   - for non-fatal errors, a Sentry event with the message and a stack.
+- **On the server:** the project is set not to store the IP address a report arrives from (GlitchTip and Sentry both have the switch); the client sends none.
 - **What a report does not carry:** no logs, chat, nicknames or hub addresses beyond what happens to be in the minidump's memory. The opt-in text says that plainly.
-- **Usage ping:** daily, carrying only the version, channel, OS and install ID. It goes only to opted-in installs.
+- **Usage ping:** the sessions sentry-native records, one per run, carrying only the release, channel and install ID. It goes only from opted-in installs.
 - **Consent:** one question at first run, which defaults to no. Turning it off later in Settings stops all reporting and deletes the pending dumps. A privacy notice on quickdc.org says what is sent, where it goes and how long it is kept; the GDPR applies.
 - **Server:** GlitchTip at `crash.quickdc.org`, which takes Sentry's minidump and event endpoints. CI uploads `.sym` and debug files for every published build, so stacks come back symbolicated.
 

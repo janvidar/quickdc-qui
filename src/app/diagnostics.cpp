@@ -117,8 +117,11 @@ void Qdc::Diagnostics::start()
 	sentry_options_set_handler_path(options, QDir::toNativeSeparators(handler).toUtf8().constData());
 	sentry_options_set_release(options, ("quickdc@" + m_version).toUtf8().constData());
 	sentry_options_set_environment(options, m_channel.isEmpty() ? "local" : m_channel.toUtf8().constData());
-	/* No addresses, user names or anything else sentry-native would gather by default. */
-	sentry_options_set_send_default_pii(options, 0);
+	/*
+	 * sentry-native adds no user name or address of its own on a desktop. The
+	 * address a report arrives from is the server's to keep or not, and the
+	 * project there is set not to keep it.
+	 */
 
 	if (sentry_init(options) != 0)
 	{
