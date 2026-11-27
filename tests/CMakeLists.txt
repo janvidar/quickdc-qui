@@ -72,9 +72,12 @@ add_test(NAME theme COMMAND tst_theme)
 add_test(NAME boards COMMAND tst_boards)
 
 # Not a program but a rule: see the script for which files may wait for the core.
+# A shell script over the sources: the same answer on every platform, so Linux and macOS ask it.
+if(NOT WIN32)
 add_test(NAME blocking
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/nothing-blocks-the-views.sh
             ${CMAKE_CURRENT_SOURCE_DIR}/..)
+endif()
 
 # Generous, because most of what these do is wait for the reactor: a job posted
 # while it is in poll() is answered within a quarter of a second, and there are a
