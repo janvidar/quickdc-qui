@@ -72,11 +72,15 @@ add_test(NAME theme COMMAND tst_theme)
 add_test(NAME boards COMMAND tst_boards)
 
 # Not a program but a rule: see the script for which files may wait for the core.
-# A shell script over the sources: the same answer on every platform, so Linux and macOS ask it.
+# Windows runs it with Git's sh, as qdc's scenarios are (quickdc/cli/CMakeLists.txt).
 if(NOT WIN32)
-add_test(NAME blocking
-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/nothing-blocks-the-views.sh
-            ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    add_test(NAME blocking
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/nothing-blocks-the-views.sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/..)
+elseif(QUICKDC_SH)
+    add_test(NAME blocking
+        COMMAND ${QUICKDC_SH} ${CMAKE_CURRENT_SOURCE_DIR}/nothing-blocks-the-views.sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/..)
 endif()
 
 # Generous, because most of what these do is wait for the reactor: a job posted
