@@ -172,7 +172,10 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug $TEST_OPTIONS -DQUICKDC_SANITIZE=ON
+          # Two links at once: a sanitized link of every test at a time took the
+          # runner's memory and had it shut down mid-build.
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug $TEST_OPTIONS -DQUICKDC_SANITIZE=ON \
+            -DCMAKE_JOB_POOLS=link=2 -DCMAKE_JOB_POOL_LINK=link
 
       - name: Build
         run: cmake --build build
