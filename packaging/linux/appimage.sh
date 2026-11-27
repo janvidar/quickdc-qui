@@ -2,17 +2,15 @@
 #
 ## Build QuickDC as an AppImage.
 ##
-##   appimage.sh                      the version from git (packaging/version.sh)
-##   appimage.sh --nightly            a dated nightly version
-##   appimage.sh --bundle-libstdc++   carry the compiler's C++ runtime too
+##   appimage.sh            the version from git (packaging/version.sh)
+##   appimage.sh --nightly  a dated nightly version
 ##
 ## Needs Qt ($QT_ROOT, or qmake6 on PATH), the build dependencies of the core,
 ## Ninja, curl and objcopy. Build it on the oldest distribution it should run on:
 ## an AppImage carries its libraries but not glibc, so it runs where glibc is at
-## least as new as where it was built. The C++ runtime is left to the system
-## unless asked for: carry it when the compiler is newer than the distribution
-## (GCC 13 on Ubuntu 22.04, for std::format), at the cost that a system whose own
-## graphics driver wants a newer one may fail to load it.
+## least as new as where it was built. Build it with that distribution's own
+## compiler too: the C++ runtime is the system's, never carried, so it has to be
+## no newer than the one on the oldest system supported.
 ##
 ## Writes dist/QuickDC-<version>-x86_64.AppImage and the debug symbols beside it as
 ## dist/QuickDC-<version>-x86_64-symbols.tar.xz.
@@ -25,16 +23,12 @@ root=$(cd -- "$here/../.." && pwd)
 cd "$root"
 
 nightly=
-libstdcxx=
-while [ $# -gt 0 ]; do
-	case $1 in
-		--nightly) nightly=--nightly ;;
-		--bundle-libstdc++) libstdcxx=yes ;;
-		-h|--help) sed -n 's/^## \{0,1\}//p' "$0"; exit 0 ;;
-		*) echo "$0: unknown option: $1" >&2; exit 2 ;;
-	esac
-	shift
-done
+case "${1:-}" in
+	--nightly) nightly=--nightly ;;
+	"") ;;
+	-h|--help) sed -n 's/^## \{0,1\}//p' "$0"; exit 0 ;;
+	*) echo "$0: unknown option: $1" >&2; exit 2 ;;
+esac
 
 version=$(packaging/version.sh $nightly)
 
@@ -108,13 +102,7 @@ export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
 export LDAI_OUTPUT="$root/dist/QuickDC-$version-x86_64.AppImage"
 export PATH="$tools:$PATH"
 
-set --
-if [ -n "$libstdcxx" ]; then
-	cxx=$(sed -n 's/^CMAKE_CXX_COMPILER:[A-Z]*=//p' "$build/CMakeCache.txt")
-	set -- --library "$("$cxx" -print-file-name=libstdc++.so.6)" --library "$("$cxx" -print-file-name=libgcc_s.so.1)"
-fi
-
-"$tools/linuxdeploy-x86_64.AppImage" --appdir "$appdir" "$@" \
+"$tools/linuxdeploy-x86_64.AppImage" --appdir "$appdir" \
 	--executable "$build/quickdc-qui" \
 	--desktop-file "$build/packaging/linux/$app_id.desktop" \
 	--icon-file "$build/$app_id.svg" \

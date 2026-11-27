@@ -215,6 +215,9 @@ add_subdirectory(samurai)
 # the four read in the order they depend on each other; nothing links it yet.
 add_subdirectory(libdrop-cpp)
 
+# The core announces the application's version, not its own.
+set(QUICKDC_VERSION_STRING "${QUICKDC_QUI_VERSION_STRING}" CACHE STRING
+    "The version the core announces; empty for its own" FORCE)
 add_subdirectory(quickdc)
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,8 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-MinVersion=10.0
+; Windows 10 1809, the oldest Qt 6.5 runs on.
+MinVersion=10.0.17763
 OutputDir={#OutputDir}
 OutputBaseFilename=QuickDC-{#AppVersion}-x86_64-setup
 SetupIconFile=app.ico

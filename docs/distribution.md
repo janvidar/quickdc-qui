@@ -7,6 +7,7 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
 | Subject | Decision |
 |---|---|
 | Platforms | Linux, macOS and Windows, started together; the first release waits for all three. |
+| Oldest supported | Linux: Debian stable, now Debian 13 (glibc 2.41, GLIBCXX 3.4.33); the AppImage is built on Ubuntu 24.04 with its own compiler and uses the system's libstdc++. macOS 13.3, universal (arm64 and x86_64). Windows 10 1809, Qt 6.5's own floor. |
 | Linux package | AppImage. The Flatpak (`packaging/flatpak`) and the Snap plan (`packaging/snap.md`) stay as they are, outside CI. |
 | macOS package | `QuickDC.app` in a DMG (`packaging/macos/build.sh`). |
 | Windows package | An Inno Setup installer around a `windeployqt` tree (Qt, OpenSSL, the MSVC runtime). |
@@ -27,7 +28,7 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
   - `net` on ubuntu: the rootless-podman suite (`ctest -L net`). It runs nightly rather than per push, because it takes minutes and needs podman.
   - `package` on all three for nightlies and tags: AppImage, DMG and installer, plus debug symbols.
   - `publish`: signs the update feed entries, rsyncs to `download.quickdc.org` and uploads symbols to the crash server.
-- **Toolchains:** on Linux, the AppImage is built on the oldest glibc we support (an Ubuntu 22.04 runner or container) with `linuxdeploy` and its Qt plugin. On macOS, Qt comes from `aqtinstall` and OpenSSL 3 from Homebrew, as `build.sh` already expects. On Windows, MSVC with `aqtinstall` Qt and OpenSSL from vcpkg.
+- **Toolchains:** on Linux, the AppImage is built on Ubuntu 24.04, older than Debian stable in both glibc and libstdc++, with `linuxdeploy` and its Qt plugin. CI checks that nothing in it needs more than Debian stable has. On macOS, Qt comes from `aqtinstall` and OpenSSL 3 from Homebrew, as `build.sh` already expects. On Windows, MSVC with `aqtinstall` Qt and OpenSSL from vcpkg.
 - **Secrets on GitHub:** the deploy SSH key and the crash server's symbol-upload token. The update-signing key never goes to GitHub (see below). Signing certificates come later.
 
 ## Versions and channels
@@ -81,8 +82,6 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
 
 ## Open questions
 
-- The minimum versions to support: glibc for the AppImage, macOS (Qt 6.5 needs 11 or newer), and Windows 10 or 11.
-- Whether the macOS DMG is universal (arm64 and x86_64) or arm64 only.
 - Where the offline update-signing key lives, and who runs the signing step for nightlies. A nightly that waits for a person is not nightly.
 
 ## Progress
@@ -111,7 +110,7 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
   store without OpenSSL's stdio, sockets shared for traversal, `%s` in timestamps,
   interfaces from GetAdaptersAddresses, CRLF in settings files.
 - 2026-11-27, phase 3: `.github/workflows/package.yml` builds the AppImage (Ubuntu
-  22.04, GCC 13 with its libstdc++ carried, Wayland and X11), a universal DMG
+  24.04 and its own GCC 13, for Debian stable and newer; Wayland and X11), a universal DMG
   (OpenSSL from vcpkg for both architectures at macOS 13.3, merged with lipo) and a
   per-user Inno Setup installer (`packaging/windows`), each with its debug symbols,
   and starts each once before keeping it. `packaging/version.sh` is the one version
