@@ -109,11 +109,16 @@ jobs:
         shell: bash
         run: cmd //c "if not exist \\tmp mkdir \\tmp"
 
+      # A bounded step, so a hanging test ends the job with its log rather than
+      # running until someone cancels it (a cancelled job keeps no log).
       - name: Test
         shell: bash
+        timeout-minutes: 30
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -LE net --output-on-failure -j4 --timeout 300
+        run: |
+          limit=300; [ "$RUNNER_OS" = "Windows" ] && limit=60
+          ctest --test-dir build -LE net --output-on-failure -j4 --timeout $limit
 
   sanitizers:
     name: sanitizers (ubuntu)
