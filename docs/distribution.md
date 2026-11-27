@@ -110,3 +110,14 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
   own pauses nearly filled. On Windows: TLS reads its files and the system's root
   store without OpenSSL's stdio, sockets shared for traversal, `%s` in timestamps,
   interfaces from GetAdaptersAddresses, CRLF in settings files.
+- 2026-11-27, phase 3: `.github/workflows/package.yml` builds the AppImage (Ubuntu
+  22.04, GCC 13 with its libstdc++ carried, Wayland and X11), a universal DMG
+  (OpenSSL from vcpkg for both architectures at macOS 13.3, merged with lipo) and a
+  per-user Inno Setup installer (`packaging/windows`), each with its debug symbols,
+  and starts each once before keeping it. `packaging/version.sh` is the one version
+  rule. A tag builds a release, the night a nightly when master moved, a manual run
+  a nightly. Found on the way: a shipped build verified TLS against the build
+  machine's certificate paths, so samurai now loads the keychain's roots on macOS
+  and the distribution's bundle on Linux; Windows listed adapters without an
+  address. Not yet exercised: a release tag. Not signed: macOS (Developer ID and
+  notarisation) and Windows (Trusted Signing or an OV certificate) wait for secrets.
