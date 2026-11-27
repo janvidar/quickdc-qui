@@ -6,9 +6,8 @@
 ## submodule URLs are relative, so a recursive checkout fetches the mirrors
 ## beside this repository.
 ##
-## Windows is in the matrix before it builds: its job may fail until the port
-## is done (docs/distribution.md, phase 2), and its log is the list of what is
-## left.
+## Windows builds with MSVC and has to pass like the others; qdc and the podman
+## net tests are not built there (docs/distribution.md, phase 2).
 #
 
 name: CI
@@ -34,17 +33,10 @@ jobs:
   build:
     name: build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            experimental: false
-          - os: macos-15
-            experimental: false
-          - os: windows-2022
-            experimental: true
+        os: [ubuntu-24.04, macos-15, windows-2022]
 
     steps:
       - uses: actions/checkout@v4
