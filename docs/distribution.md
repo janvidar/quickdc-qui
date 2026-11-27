@@ -180,3 +180,11 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
   installs on macOS and Windows are written but have only been compiled; they want
   a run on each from a published feed. The download is held in memory (up to 512
   MB) rather than streamed to disk.
+- 2026-11-27, phase 6, the client: sentry-native 0.17.6 with its Crashpad handler in
+  all three packages (`src/app/diagnostics.cpp`), asked once at first start and off
+  unless agreed to, with a Diagnostics page in Settings that deletes unsent reports
+  when turned off. A failed update is reported as a warning. Each package's CI run
+  crashes it on purpose (`--test-crash`) and checks that the handler left a
+  minidump, which it does on Linux, macOS and Windows. Left for the server:
+  GlitchTip at `crash.quickdc.org` with IP addresses not stored, its DSN as the
+  `QUICKDC_CRASH_DSN` secret, and a step uploading each build's symbols.
