@@ -102,6 +102,13 @@ jobs:
             exit 1
           fi
 
+      # The tests write under /tmp, which Windows reads as \tmp on the current drive.
+      # To go once they ask for a temporary directory instead.
+      - name: Make /tmp (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cmd //c "if not exist \\tmp mkdir \\tmp"
+
       - name: Test
         shell: bash
         env:
