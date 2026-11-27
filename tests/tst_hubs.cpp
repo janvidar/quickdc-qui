@@ -1041,25 +1041,29 @@ void TestHubs::chatFeedSweepsOutPartOfALine()
 	QVERIFY(!one.feed.hasSelectedText());
 	QCOMPARE(one.feed.selectedText(), QString());
 
-	sweep(one.feed.viewport(), one.at(0, 120), one.at(0, 300));
-
-	QVERIFY(one.feed.hasSelectedText());
-
-	const QString swept = one.feed.selectedText();
-
 	/*
 	 * A run out of the middle of the line and nothing else: no timestamp, no
 	 * nickname, no neighbouring message. That is the whole point of the change - a
 	 * row at a time could not do it.
+	 *
+	 * Where the message starts depends on the font, which is wider on some systems
+	 * than others, so the sweep starts at the first place inside it.
 	 */
-	QVERIFY2(!swept.isEmpty(), "sweeping across a line selected nothing");
-	QVERIFY2(!swept.contains(QLatin1Char('\n')), qPrintable(swept));
-
 	const QString whole =
 		QStringLiteral("the build is at revision 4471");
 
-	QVERIFY2(whole.contains(swept), qPrintable(swept));
-	QVERIFY2(swept.length() < whole.length(), qPrintable(swept));
+	QString swept;
+	bool inside = false;
+	for (int from = 100; from <= 400 && !inside; from += 20)
+	{
+		sweep(one.feed.viewport(), one.at(0, from), one.at(0, from + 120));
+		QVERIFY(one.feed.hasSelectedText());
+		swept = one.feed.selectedText();
+		QVERIFY2(!swept.contains(QLatin1Char('\n')), qPrintable(swept));
+		inside = !swept.isEmpty() && whole.contains(swept) && swept.length() < whole.length();
+	}
+
+	QVERIFY2(inside, qPrintable(swept));
 
 	/* Pressing without dragging puts it away again. */
 	QTest::mouseClick(one.feed.viewport(), Qt::LeftButton, Qt::NoModifier,
