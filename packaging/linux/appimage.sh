@@ -6,7 +6,8 @@
 ##   appimage.sh --nightly  a dated nightly version
 ##
 ## Needs Qt ($QT_ROOT, or qmake6 on PATH), the build dependencies of the core,
-## Ninja, curl and objcopy. Build it on the oldest distribution it should run on:
+## Ninja, curl and objcopy, and libcurl's headers for the crash reporter, which
+## is built in unless QUICKDC_CRASH_REPORTS=OFF (QUICKDC_CRASH_DSN says where to). Build it on the oldest distribution it should run on:
 ## an AppImage carries its libraries but not glibc, so it runs where glibc is at
 ## least as new as where it was built. Build it with that distribution's own
 ## compiler too: the C++ runtime is the system's, never carried, so it has to be
@@ -80,6 +81,8 @@ cmake -S . -B "$build" -G Ninja \
 	-DCMAKE_PREFIX_PATH="$qt_prefix" \
 	-DQUICKDC_QUI_VERSION_STRING="$version" \
 	-DQUICKDC_UPDATE_CHANNEL="$channel" \
+	-DQUICKDC_QUI_CRASH_REPORTS="${QUICKDC_CRASH_REPORTS:-ON}" \
+	-DQUICKDC_QUI_CRASH_DSN="${QUICKDC_CRASH_DSN:-}" \
 	-DQUICKDC_QUI_INSTALL=ON \
 	-DQUICKDC_QUI_BUILD_TESTS=OFF \
 	-DQUICKDC_BUILD_TESTS=OFF \
@@ -110,7 +113,11 @@ export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
 export LDAI_OUTPUT="$root/dist/QuickDC-$version-x86_64.AppImage"
 export PATH="$tools:$PATH"
 
-"$tools/linuxdeploy-x86_64.AppImage" --appdir "$appdir" \
+# The crash handler, beside the program where it is looked for, when it was built in.
+set --
+[ -x "$build/src/app/crashpad_handler" ] && set -- --executable "$build/src/app/crashpad_handler"
+
+"$tools/linuxdeploy-x86_64.AppImage" --appdir "$appdir" "$@" \
 	--executable "$build/quickdc-qui" \
 	--desktop-file "$build/packaging/linux/$app_id.desktop" \
 	--icon-file "$build/$app_id.svg" \

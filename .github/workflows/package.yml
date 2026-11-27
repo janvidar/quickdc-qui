@@ -31,6 +31,8 @@ concurrency:
 
 env:
   QT_VERSION: '6.5.3'
+  # Where crash reports go; until the secret is set they stay on the machine that crashed.
+  QUICKDC_CRASH_DSN: ${{ secrets.QUICKDC_CRASH_DSN }}
 
 jobs:
   plan:
@@ -81,7 +83,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y g++ ninja-build zlib1g-dev libbz2-dev libssl-dev \
+          sudo apt-get install -y g++ ninja-build zlib1g-dev libbz2-dev libssl-dev libcurl4-openssl-dev \
             libgl1-mesa-dev libegl1 libfontconfig1 libxkbcommon-x11-0 libxcb-cursor0 \
             libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libwayland-egl1 xvfb
@@ -121,6 +123,16 @@ jobs:
           cat "$home/out"
           [ "$status" -eq 124 ] || { echo "::error::QuickDC exited with $status"; exit 1; }
           ! grep -q 'certificate verify failed' "$home/out" || { echo "::error::QuickDC cannot verify a TLS server"; exit 1; }
+
+      # Crashed on purpose: what passing means is a minidump left by the handler.
+      - name: Crash test
+        run: |
+          home=$(mktemp -d)
+          HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" timeout 30 \
+            xvfb-run -a dist/QuickDC-*-x86_64.AppImage --appimage-extract-and-run --test-crash \
+            > "$home/out" 2>&1 || true
+          cat "$home/out"
+          packaging/crash-check.sh "$home/out"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -201,6 +213,16 @@ jobs:
           cat "$home/out"
           ! grep -q 'certificate verify failed' "$home/out" || { echo "::error::QuickDC cannot verify a TLS server"; exit 1; }
 
+      - name: Crash test
+        run: |
+          home=$(mktemp -d)
+          HOME="$home" build/macos/src/app/QuickDC.app/Contents/MacOS/QuickDC --test-crash > "$home/out" 2>&1 &
+          pid=$!
+          for n in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+          kill "$pid" 2>/dev/null || true
+          cat "$home/out"
+          packaging/crash-check.sh "$home/out"
+
       - uses: actions/upload-artifact@v4
         with:
           name: macos-universal
@@ -264,6 +286,17 @@ jobs:
           fi
           cat "$home/out"
           ! grep -q 'certificate verify failed' "$home/out" || { echo "::error::QuickDC cannot verify a TLS server"; exit 1; }
+
+      - name: Crash test
+        shell: bash
+        run: |
+          home=$(mktemp -d)
+          "$RUNNER_TEMP/QuickDC/QuickDC.exe" --test-crash > "$home/out" 2>&1 &
+          pid=$!
+          for n in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+          kill "$pid" 2>/dev/null || true
+          cat "$home/out"
+          packaging/crash-check.sh "$home/out"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -3,7 +3,8 @@
 ## Copyright (c) 2026, Jan Vidar Krey
 #
 
-add_executable(quickdc-qui MACOSX_BUNDLE main.cpp)
+add_executable(quickdc-qui MACOSX_BUNDLE main.cpp diagnostics.cpp diagnostics.h)
+set_target_properties(quickdc-qui PROPERTIES AUTOMOC ON)
 
 set_target_properties(quickdc-qui PROPERTIES
     CXX_STANDARD 20
@@ -94,12 +95,26 @@ endif()
 
 target_link_libraries(quickdc-qui PRIVATE qdcgui)
 
+# The handler goes beside the executable, where diagnostics.cpp looks for it: in
+# the bundle's Contents/MacOS on macOS, beside QuickDC.exe on Windows.
+if(QUICKDC_QUI_CRASH_REPORTS)
+    target_link_libraries(quickdc-qui PRIVATE sentry::sentry)
+    target_compile_definitions(quickdc-qui PRIVATE
+        QUICKDC_QUI_CRASH_REPORTS=1
+        QUICKDC_QUI_CRASH_DSN="${QUICKDC_QUI_CRASH_DSN}")
+    add_dependencies(quickdc-qui crashpad_handler)
+    add_custom_command(TARGET quickdc-qui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:crashpad_handler> $<TARGET_FILE_DIR:quickdc-qui>
+        VERBATIM)
+endif()
+
 # The identity and the version as the compiler sees them. Only main.cpp needs
 # either, and only to tell the desktop what it is looking at, so they are
 # defined on the executable rather than anywhere a view could reach them.
 target_compile_definitions(quickdc-qui PRIVATE
     QUICKDC_QUI_APP_ID="${QUICKDC_QUI_APP_ID}"
-    QUICKDC_QUI_VERSION_STRING="${QUICKDC_QUI_VERSION_STRING}")
+    QUICKDC_QUI_VERSION_STRING="${QUICKDC_QUI_VERSION_STRING}"
+    QUICKDC_QUI_CHANNEL="${QUICKDC_UPDATE_CHANNEL}")
 
 if(QUICKDC_QUI_INSTALL)
     install(TARGETS quickdc-qui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

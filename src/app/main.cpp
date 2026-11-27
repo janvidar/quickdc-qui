@@ -5,6 +5,8 @@
 #include <core/configbridge.h>
 #include <core/corethread.h>
 #include <core/updatebridge.h>
+
+#include "diagnostics.h"
 #include <gui/mainwindow.h>
 #include <gui/theme.h>
 
@@ -12,6 +14,7 @@
 #include <QIcon>
 #include <QMessageBox>
 #include <QSocketNotifier>
+#include <QTimer>
 
 #include <csignal>
 #include <cstdio>
@@ -110,6 +113,8 @@ int main(int argc, char** argv)
 	QApplication::setOrganizationName(QStringLiteral("QuickDC"));
 	QApplication::setOrganizationDomain(QStringLiteral("extatic.org"));
 	QApplication::setApplicationVersion(QStringLiteral(QUICKDC_QUI_VERSION_STRING));
+	/* For the settings page, which offers the switch only where it does something. */
+	application.setProperty("quickdcCrashReports", Qdc::Diagnostics::available());
 
 	/*
 	 * The application id, not the name of the executable. An installed desktop
@@ -182,6 +187,32 @@ int main(int argc, char** argv)
 	/* Collects what the updater makes ready during the session, for the quit to install. */
 	Qdc::UpdateBridge updates(&core);
 	bool updatesWanted = true;
+
+	Qdc::ConfigBridge diagnosticsConfig(&core);
+	Qdc::Diagnostics diagnostics(&diagnosticsConfig, QStringLiteral(QUICKDC_QUI_VERSION_STRING),
+		QStringLiteral(QUICKDC_QUI_CHANNEL));
+	QObject::connect(&updates, &Qdc::UpdateBridge::failed, &diagnostics, [&diagnostics](const QString& why) {
+		diagnostics.report(QStringLiteral("An update failed: ") + why);
+	});
+
+	/*
+	 * Hidden: reports this run whatever was chosen, and crashes a few seconds in, to
+	 * see a report through from the crash to the server.
+	 */
+	if (QCoreApplication::arguments().contains(QStringLiteral("--test-crash")))
+	{
+		diagnostics.startForTest();
+		QTimer::singleShot(3000, [] {
+			std::fprintf(stderr, "QuickDC: crashing, as --test-crash asked\n");
+			volatile int* nowhere = nullptr;
+			*nowhere = 1;
+		});
+	}
+	else
+	{
+		diagnostics.askOnce(nullptr);
+		diagnostics.apply();
+	}
 
 	/*
 	 * The window is scoped so that it is destroyed before the core is stopped.

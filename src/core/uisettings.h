@@ -68,6 +68,11 @@ extern const Flag   UpdatesEnabled;
 /** The colour scheme by name; empty for the built-in default, see defaultTheme(). */
 inline constexpr Text   ThemeName         {"Interface", "Theme", ""};
 
+/** Crash reports and the count of use: asked once, off unless agreed to, and the ID agreed under. */
+inline constexpr Flag   DiagnosticsAsked     {"Diagnostics", "Asked", false};
+inline constexpr Flag   DiagnosticsEnabled   {"Diagnostics", "Enabled", false};
+inline constexpr Text   DiagnosticsInstallId {"Diagnostics", "Install ID", ""};
+
 /** For matching a change notice, or reading a hub's own value in the session store. */
 template <typename Setting> QString groupOf(const Setting& setting) { return QString::fromUtf8(setting.group); }
 template <typename Setting> QString keyOf(const Setting& setting) { return QString::fromUtf8(setting.key); }

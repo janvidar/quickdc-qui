@@ -99,6 +99,9 @@ Qdc::SettingsView::SettingsView(ConfigBridge* config, Shares* shares, DropBridge
 	addPage(tr("Boards"), buildBoards());
 	addPage(tr("Appearance"), buildAppearance());
 	addPage(tr("Updates"), buildUpdates());
+	/* Only where the program was built able to report: see src/app/diagnostics.h. */
+	if (QApplication::instance() && QApplication::instance()->property("quickdcCrashReports").toBool())
+		addPage(tr("Diagnostics"), buildDiagnostics());
 	m_pages->setCurrentRow(0);
 
 	m_status->setObjectName(QStringLiteral("mutedText"));
@@ -705,6 +708,22 @@ QWidget* Qdc::SettingsView::buildUpdates()
 	form->addRow(makeHint(tr("Updates are fetched quietly and installed when you quit."), page));
 
 	bind(enabled, S::UpdatesEnabled);
+	return page;
+}
+
+QWidget* Qdc::SettingsView::buildDiagnostics()
+{
+	QWidget* page = new QWidget(this);
+
+	QCheckBox* enabled = new QCheckBox(tr("Send crash reports and a daily count of use"), page);
+	enabled->setObjectName(QStringLiteral("diagnosticsEnabled"));
+
+	QFormLayout* form = makeForm(page);
+	form->addRow(QString(), enabled);
+	form->addRow(makeHint(tr("Nothing you share, say or search for is sent on purpose. Turning this off "
+		"deletes the reports not yet sent."), page));
+
+	bind(enabled, S::DiagnosticsEnabled);
 	return page;
 }
 

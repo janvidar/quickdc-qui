@@ -65,6 +65,8 @@ cmake -S . -B "$build" -G Ninja \
 	-DCMAKE_PREFIX_PATH="$qt" \
 	-DQUICKDC_QUI_VERSION_STRING="$version" \
 	-DQUICKDC_UPDATE_CHANNEL="$channel" \
+	-DQUICKDC_QUI_CRASH_REPORTS="${QUICKDC_CRASH_REPORTS:-ON}" \
+	-DQUICKDC_QUI_CRASH_DSN="${QUICKDC_CRASH_DSN:-}" \
 	-DQUICKDC_QUI_BUILD_TESTS=OFF \
 	-DQUICKDC_BUILD_TESTS=OFF \
 	-DQUICKDC_BUILD_CLI=OFF \
@@ -80,6 +82,9 @@ exe=$build/src/app/QuickDC.exe
 rm -rf "$stage"
 mkdir -p "$stage"
 cp "$exe" "$stage/"
+
+# The crash handler, beside the program where it is looked for, when it was built in.
+[ -f "$build/src/app/crashpad_handler.exe" ] && cp "$build/src/app/crashpad_handler.exe" "$stage/"
 
 # vcpkg's DLLs (OpenSSL, zlib, bzip2), which its toolchain copied beside the executable.
 cp "$build"/src/app/*.dll "$stage/"

@@ -85,6 +85,7 @@ private slots:
 
 	void thePagesThatDiscloseSaySoInOneLine();
 	void updatesAreTurnedOffWhereTheCoreReadsIt();
+	void diagnosticsAreOfferedOnlyWhereTheyCanBeSent();
 
 private:
 	QString scratch(const QString& name) const;
@@ -443,6 +444,31 @@ void TestSettings::updatesAreTurnedOffWhereTheCoreReadsIt()
 	enabled->setChecked(false);
 	settle();
 	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Updates"), QStringLiteral("Enabled"), true), false);
+}
+
+/* Off by default; the page is there only in a build that can report, and writes where the app reads. */
+void TestSettings::diagnosticsAreOfferedOnlyWhereTheyCanBeSent()
+{
+	using Qdc::ConfigStore;
+	Qdc::Shares shares(m_thread);
+
+	qApp->setProperty("quickdcCrashReports", false);
+	{
+		Qdc::SettingsView view(m_config, &shares);
+		QVERIFY(!view.findChild<QCheckBox*>(QStringLiteral("diagnosticsEnabled")));
+	}
+
+	qApp->setProperty("quickdcCrashReports", true);
+	Qdc::SettingsView view(m_config, &shares);
+	settle();
+	QCheckBox* enabled = view.findChild<QCheckBox*>(QStringLiteral("diagnosticsEnabled"));
+	QVERIFY(enabled);
+	QVERIFY(!enabled->isChecked());
+
+	enabled->setChecked(true);
+	settle();
+	QCOMPARE(m_config->getBool(ConfigStore::Application, QStringLiteral("Diagnostics"), QStringLiteral("Enabled"), false), true);
+	qApp->setProperty("quickdcCrashReports", QVariant());
 }
 
 /* The core reads bytes; a page that wrote back what it showed would shrink these on every edit. */

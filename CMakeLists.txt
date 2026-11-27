@@ -48,6 +48,12 @@ set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
 
 option(QUICKDC_QUI_BUILD_TESTS "Build the quickdc-qui tests" ON)
 
+# Crash reports and the count of use, through sentry-native and its Crashpad
+# handler (docs/distribution.md). Off unless a package asks for it: it is fetched
+# when on, and a development build has nothing to report to.
+option(QUICKDC_QUI_CRASH_REPORTS "Build in crash reporting (fetches sentry-native)" OFF)
+set(QUICKDC_QUI_CRASH_DSN "" CACHE STRING "Where crash reports go; empty keeps them on disk")
+
 include(GNUInstallDirs)
 
 # ---------------------------------------------------------------------------
@@ -223,6 +229,20 @@ add_subdirectory(quickdc)
 # ---------------------------------------------------------------------------
 # Targets
 # ---------------------------------------------------------------------------
+
+if(QUICKDC_QUI_CRASH_REPORTS)
+    include(FetchContent)
+    set(SENTRY_BACKEND crashpad CACHE STRING "" FORCE)
+    set(SENTRY_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(SENTRY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(SENTRY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(SENTRY_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    # Pinned and checked, as every tool a package build downloads is.
+    FetchContent_Declare(sentry
+        URL https://github.com/getsentry/sentry-native/releases/download/0.17.6/sentry-native.zip
+        URL_HASH SHA256=40b4b70cbada5bfae5b73f8267831dd023ec676d9676fb0d890878f31d2b5055)
+    FetchContent_MakeAvailable(sentry)
+endif()
 
 add_subdirectory(src)
 
