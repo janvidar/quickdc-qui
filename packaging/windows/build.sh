@@ -7,7 +7,7 @@
 ##   build.sh --nightly  a dated nightly version
 ##
 ## Needs: Qt for MSVC ($QT_ROOT_DIR, as aqtinstall sets it, or QT_ROOT), vcpkg with
-## openssl, zlib and bzip2 for x64-windows ($VCPKG_INSTALLATION_ROOT or VCPKG_ROOT),
+## openssl, zlib and bzip2 for x64-windows ($VCPKG_INSTALLATION_ROOT, else VCPKG_ROOT),
 ## Ninja, and Inno Setup 6.
 ##
 ## Writes dist/QuickDC-<version>-x86_64-setup.exe and, beside it, the debug symbols
@@ -34,7 +34,9 @@ version=$(packaging/version.sh "${nightly[@]}")
 numeric=$(sed -n '/^project(quickdc-qui/,/)/s/^ *VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt).0
 
 qt=${QT_ROOT:-${QT_ROOT_DIR:-}}
-vcpkg=${VCPKG_ROOT:-${VCPKG_INSTALLATION_ROOT:-}}
+# The runner's vcpkg before VCPKG_ROOT, which a developer prompt points at the
+# empty copy that comes with Visual Studio.
+vcpkg=${VCPKG_INSTALLATION_ROOT:-${VCPKG_ROOT:-}}
 [ -n "$qt" ] && [ -x "$qt/bin/windeployqt.exe" ] || { echo "$0: no windeployqt; set QT_ROOT to the Qt for MSVC" >&2; exit 1; }
 [ -n "$vcpkg" ] || { echo "$0: set VCPKG_ROOT" >&2; exit 1; }
 
