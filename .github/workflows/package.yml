@@ -131,7 +131,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/vcpkg-cache
-          key: vcpkg-macos-openssl-arm64-x64-v1
+          key: vcpkg-macos-openssl-arm64-x64-13.3-v1
 
       # Homebrew's OpenSSL is for one architecture; vcpkg builds both, and lipo
       # makes the one prefix a universal build links against.
@@ -141,7 +141,8 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/vcpkg-cache"
           vcpkg="${VCPKG_INSTALLATION_ROOT:-$VCPKG_ROOT}"
-          "$vcpkg/vcpkg" install openssl:arm64-osx openssl:x64-osx
+          "$vcpkg/vcpkg" install --overlay-triplets="$GITHUB_WORKSPACE/packaging/macos/triplets" \
+            openssl:arm64-osx openssl:x64-osx
           arm="$vcpkg/installed/arm64-osx"
           x64="$vcpkg/installed/x64-osx"
           out="$RUNNER_TEMP/openssl-universal"
@@ -153,8 +154,17 @@ jobs:
           lipo -info "$out/lib/libcrypto.a"
           echo "OPENSSL_ROOT_DIR=$out" >> "$GITHUB_ENV"
 
+      # An object built for a newer macOS than the bundle names is a crash waiting
+      # on an older one, which the linker only warns about.
       - name: Build
-        run: QT_ROOT="$QT_ROOT_DIR" packaging/macos/build.sh --dmg --universal ${{ needs.plan.outputs.flag }}
+        run: |
+          set -o pipefail
+          QT_ROOT="$QT_ROOT_DIR" packaging/macos/build.sh --dmg --universal ${{ needs.plan.outputs.flag }} 2>&1 | tee build.log
+          if grep -q 'was built for newer' build.log; then
+            echo "::error::something linked in was built for a newer macOS than the bundle supports"
+            grep 'was built for newer' build.log | head
+            exit 1
+          fi
 
       - name: Smoke test
         run: |
