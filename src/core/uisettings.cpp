@@ -54,5 +54,6 @@ constinit const Number HubHandshakeTimeout  = from(QuickDC::Settings::HubHandsha
 constinit const Number HubIdleTimeout       = from(QuickDC::Settings::HubIdleTimeout);
 constinit const Number HubLingerTimeout     = from(QuickDC::Settings::HubLingerTimeout);
 constinit const Flag   HubCheckClaims       = from(QuickDC::Settings::HubCheckClaims);
+constinit const Flag   UpdatesEnabled       = from(QuickDC::Settings::UpdatesEnabled);
 
 }

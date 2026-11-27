@@ -37,7 +37,9 @@ add_library(qdcbridge STATIC
     searchbridge.cpp
     searchbridge.h
     transferbridge.cpp
-    transferbridge.h)
+    transferbridge.h
+    updatebridge.cpp
+    updatebridge.h)
 
 set_target_properties(qdcbridge PROPERTIES
     AUTOMOC ON

@@ -50,6 +50,50 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
 - **Settings:** `[Updates] Enabled` (default on), shown on the Settings page; `[Updates] Channel` (hidden override).
 - **Not chosen:** rollback and staged rollout. Silent installs with no rollback mean a broken release reaches every install, so the nightly channel and the release checklist have to carry that weight.
 
+### The feed, as built (phase 5)
+
+- **Where:** `<feed>/<channel>/<platform>.json`. `<feed>` is `[Updates] Feed`, by default `https://download.quickdc.org`; `<platform>` is `linux-x86_64`, `macos-universal` or `windows-x86_64`.
+- **What:** one JSON object.
+
+  ```json
+  {
+    "format": 1,
+    "channel": "nightly",
+    "platform": "linux-x86_64",
+    "version": "0.1.1~nightly20261128.1a2b3c4",
+    "url": "0.1.1~nightly20261128.1a2b3c4/QuickDC-0.1.1~nightly20261128.1a2b3c4-x86_64.AppImage",
+    "size": 63350664,
+    "sha256": "<64 lowercase hex digits>",
+    "signature": "<128 lowercase hex digits>"
+  }
+  ```
+
+- **What is signed:** the Ed25519 signature covers these lines, each ending in a line feed, not the JSON, so no serialiser has to agree with another about spacing or order:
+
+  ```
+  quickdc-update 1
+  channel <channel>
+  platform <platform>
+  version <version>
+  url <url>
+  size <size in decimal>
+  sha256 <sha256>
+  ```
+
+  The channel and platform are part of it, so a feed for one cannot be served as the feed for another.
+- **The package's address:** relative to the feed's directory (`<feed>/<channel>/`) as above, or a full https URL. A relative one may not climb out of that directory. The address is signed as it is written.
+- **Signing:** `quickdc/tools/update-feed` writes a signed feed from the private seed (64 hex digits in a file) and the package.
+- **What is refused:**
+  - a signature that does not verify against the channel's key;
+  - a channel or platform other than the one asked for;
+  - a version that is not newer than the running one, so there are no downgrades;
+  - a package that is not https, or a relative one that climbs out of the feed's directory;
+  - a download whose size or SHA-256 differs from the feed's.
+- **Versions:** `X.Y.Z` releases and `X.Y.Z~nightlyYYYYMMDD.<sha>` nightlies, ordered as Debian orders them: a nightly comes before the release of the same number. So after a release is tagged, `project(VERSION)` moves to the next number at once, or the nightlies that follow would be older than it. A build whose version has a `+` (a local build) has no channel and never updates.
+- **Channels:** set by the package as a build-time constant (`QUICKDC_QUI_CHANNEL`): `stable` for a tag, `nightly` for a nightly, empty for anything else. `[Updates] Channel` overrides it for testers.
+- **Keys:** each channel's public key is compiled into the core (`core/update/keys.h`). A channel with no key yet never updates and says so. The `test` channel's key belongs to the test suite, whose private half is committed, and is accepted only from a feed on the loopback, which only something already running on the machine can serve.
+- **The package an update fetches:** the AppImage on Linux, the installer on Windows, and on macOS a zip of `QuickDC.app` (the DMG is for people, not for swapping a bundle).
+
 ## Crash reporting and diagnostics
 
 - **Client:** Crashpad, built from source in CI (it uses gn/ninja, or a CMake port) and linked into the app. The handler runs as a separate process from the first second of start, so a corrupted process can still be dumped.

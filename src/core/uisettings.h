@@ -63,6 +63,8 @@ extern const Flag   BoardServe;
 extern const Number BoardKeepDays;
 extern const Number BoardCache;
 
+extern const Flag   UpdatesEnabled;
+
 /** The colour scheme by name; empty for the built-in default, see defaultTheme(). */
 inline constexpr Text   ThemeName         {"Interface", "Theme", ""};
 

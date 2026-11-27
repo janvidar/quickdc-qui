@@ -4,6 +4,7 @@
 
 #include <core/configbridge.h>
 #include <core/corethread.h>
+#include <core/updatebridge.h>
 #include <gui/mainwindow.h>
 #include <gui/theme.h>
 
@@ -13,6 +14,7 @@
 #include <QSocketNotifier>
 
 #include <csignal>
+#include <cstdio>
 #ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
@@ -177,6 +179,10 @@ int main(int argc, char** argv)
 
 	int status = 0;
 
+	/* Collects what the updater makes ready during the session, for the quit to install. */
+	Qdc::UpdateBridge updates(&core);
+	bool updatesWanted = true;
+
 	/*
 	 * The window is scoped so that it is destroyed before the core is stopped.
 	 *
@@ -192,12 +198,24 @@ int main(int argc, char** argv)
 		status = QApplication::exec();
 	}
 
+	/* Read while the core is up: turned off during the session means not installed at its end. */
+	updatesWanted = Qdc::ConfigBridge(&core).read(Qdc::Settings::UpdatesEnabled);
+
 	/*
 	 * Explicit rather than left to the destructor, so that flushing the download
 	 * queue and the hash cache happens here, where a failure could still be
 	 * reported, rather than silently on the way out of scope.
 	 */
 	core.shutdown();
+
+	/* After the core, so nothing of this version is still writing while it is replaced. */
+	if (updatesWanted && !updates.readyVersion().isEmpty())
+	{
+		QString why;
+		if (!updates.installOnQuit(&why))
+			std::fprintf(stderr, "QuickDC: the update to %s was not installed: %s\n",
+				qPrintable(updates.readyVersion()), qPrintable(why));
+	}
 
 	return status;
 }
