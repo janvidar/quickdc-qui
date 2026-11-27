@@ -135,6 +135,20 @@ jobs:
           [ "$RUNNER_OS" = "Windows" ] && { limit=20; bound=(timeout 1500); }
           "${bound[@]}" ctest --test-dir build -LE net --output-on-failure -j4 --timeout $limit
 
+      # QtTest's own output does not reach ctest on Windows; a file does.
+      - name: GUI test detail (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          for t in hubs bridge settings; do
+            exe=build/tests/tst_$t.exe
+            [ -x "$exe" ] || continue
+            timeout 120 "$exe" -o "tst_$t.txt,txt" > /dev/null 2>&1
+            echo "== tst_$t (exit $?)"; grep -E 'FAIL!|Loc:|Totals|QFATAL|Actual|Expected' "tst_$t.txt" | head -30 || true
+          done
+
       - name: Test log
         if: always()
         uses: actions/upload-artifact@v4
