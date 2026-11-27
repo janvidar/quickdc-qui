@@ -117,8 +117,17 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          limit=300; [ "$RUNNER_OS" = "Windows" ] && limit=60
-          ctest --test-dir build -LE net --output-on-failure -j4 --timeout $limit
+          limit=300; [ "$RUNNER_OS" = "Windows" ] && limit=20
+          # The step's own timeout does not reach ctest's children on Windows.
+          timeout 1500 ctest --test-dir build -LE net --output-on-failure -j4 --timeout $limit
+
+      - name: Test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-${{ matrix.os }}
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
 
   sanitizers:
     name: sanitizers (ubuntu)
