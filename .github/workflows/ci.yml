@@ -68,9 +68,21 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja openssl@3
 
+      # vcpkg's built packages kept between runs: building OpenSSL takes minutes.
+      - name: Cache vcpkg packages (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-cache
+          key: vcpkg-${{ runner.os }}-openssl-zlib-bzip2-v1
+
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
+        shell: bash
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/vcpkg-cache"
           choco install -y ninja
           vcpkg install openssl:x64-windows zlib:x64-windows bzip2:x64-windows
 
@@ -126,7 +138,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ctest-${{ matrix.os }}
-          path: build/Testing/Temporary/LastTest.log
+          path: build/Testing/Temporary/LastTest*
           if-no-files-found: ignore
 
   sanitizers:
