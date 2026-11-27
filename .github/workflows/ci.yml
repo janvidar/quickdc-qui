@@ -129,9 +129,11 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          limit=300; [ "$RUNNER_OS" = "Windows" ] && limit=20
-          # The step's own timeout does not reach ctest's children on Windows.
-          timeout 1500 ctest --test-dir build -LE net --output-on-failure -j4 --timeout $limit
+          limit=300; bound=()
+          # On Windows the step's own timeout does not reach ctest's children, so ctest
+          # is bounded itself (macOS has no timeout(1), and does not need one).
+          [ "$RUNNER_OS" = "Windows" ] && { limit=20; bound=(timeout 1500); }
+          "${bound[@]}" ctest --test-dir build -LE net --output-on-failure -j4 --timeout $limit
 
       - name: Test log
         if: always()
