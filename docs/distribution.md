@@ -91,8 +91,19 @@ The plan agreed on 2026-11-26. Nothing below is built yet except where it says s
   - a download whose size or SHA-256 differs from the feed's.
 - **Versions:** `X.Y.Z` releases and `X.Y.Z~nightlyYYYYMMDD.<sha>` nightlies, ordered as Debian orders them: a nightly comes before the release of the same number. So after a release is tagged, `project(VERSION)` moves to the next number at once, or the nightlies that follow would be older than it. A build whose version has a `+` (a local build) has no channel and never updates.
 - **Channels:** set by the package as a build-time constant (`QUICKDC_QUI_CHANNEL`): `stable` for a tag, `nightly` for a nightly, empty for anything else. `[Updates] Channel` overrides it for testers.
-- **Keys:** each channel's public key is compiled into the core (`core/update/keys.h`). A channel with no key yet never updates and says so. The `test` channel's key belongs to the test suite, whose private half is committed, and is accepted only from a feed on the loopback, which only something already running on the machine can serve.
+- **Keys:** each channel's public key is compiled into the core (`core/update/keys.cpp`). The nightly key's seed is the `NIGHTLY_SIGNING_SEED` secret of the `download` environment, so nightlies sign themselves; the stable key's stays offline with whoever makes a release. The `test` channel's key belongs to the test suite, whose private half is committed, and is accepted only from a feed on the loopback, which only something already running on the machine can serve.
 - **The package an update fetches:** the AppImage on Linux, the installer on Windows, and on macOS a zip of `QuickDC.app` (the DMG is for people, not for swapping a bundle).
+
+### Making a release
+
+1. `project(VERSION)` in `CMakeLists.txt` says the version, say `0.2.0`; tag that commit `v0.2.0` and push the tag. The packaging workflow builds the three packages and uploads them, with their unsigned feed entries, to `stable/0.2.0/`. No feed changes yet, so nobody is offered it.
+2. Try the packages from `https://download.quickdc.org/stable/0.2.0/`.
+3. On your own machine, with the stable key: `packaging/release-feeds.sh 0.2.0`. It checks each entry against the package as served, signs it, and uploads the three feeds. Every stable install takes the update from then on.
+4. Move `project(VERSION)` to the next number (`0.2.1`) straight away, so the nightlies that follow are newer than the release.
+
+### The download server
+
+nginx serves `/web/download.quickdc.org` (`nightly/` and `stable/`), feeds with `Cache-Control: no-cache`, packages as immutable, and no dot-files. CI writes there as `deploy`, whose one key is held to `rrsync /web/download.quickdc.org`. `packaging/server/prune-nightlies.sh /web/download.quickdc.org 14`, from deploy's crontab, removes nightlies older than two weeks that no feed names.
 
 ## Crash reporting and diagnostics
 
