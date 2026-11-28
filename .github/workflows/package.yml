@@ -7,7 +7,7 @@
 ## results are this run's artifacts. Publishing them is phase 4.
 ##
 ## Nothing is signed yet: each signing step waits for its secrets. Each package's
-## unsigned feed entry (packaging/feed-entry.sh) is kept with it for the step that
+## unsigned feed entry (quickdc/tools/feed-entry.sh) is kept with it for the step that
 ## signs and publishes it.
 #
 
@@ -40,6 +40,7 @@ jobs:
     outputs:
       build: ${{ steps.plan.outputs.build }}
       flag: ${{ steps.plan.outputs.flag }}
+      channel: ${{ steps.plan.outputs.channel }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,9 +59,15 @@ jobs:
               [ "$age" -lt 90000 ] || build=false
               ;;
           esac
+          # Published to: a nightly's channel, a tag's, and nowhere for a manual
+          # build that is neither.
+          channel=nightly
+          [ -n "$flag" ] || channel=
+          [ "$EVENT" = push ] && channel=stable
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "flag=$flag" >> "$GITHUB_OUTPUT"
-          echo "build=$build flag=${flag:-(release)}"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "build=$build flag=${flag:-(release)} channel=${channel:-(none)}"
 
   appimage:
     needs: plan
@@ -305,3 +312,88 @@ jobs:
             dist/QuickDC-*
             dist/*.unsigned.json
           retention-days: 14
+
+  # To download.quickdc.org (docs/distribution.md, phase 4): the packages first,
+  # the feeds last and all at once, so no client is ever told of a package that is
+  # not there yet. A nightly's feeds are signed here with the nightly key; a
+  # release's are not - its packages and unsigned entries go up, and the feeds are
+  # signed offline with the stable key and uploaded by hand.
+  publish:
+    needs: [plan, appimage, macos, windows]
+    if: needs.plan.outputs.build == 'true' && needs.plan.outputs.channel != ''
+    runs-on: ubuntu-24.04
+    environment: download
+    env:
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Stage
+        run: |
+          stage="$RUNNER_TEMP/stage/$CHANNEL"
+          mkdir -p "$stage"
+          if [ "$CHANNEL" = nightly ]; then
+            [ -n "$SEED" ] || { echo "::error::NIGHTLY_SIGNING_SEED is not set in the download environment"; exit 1; }
+            (umask 077; printf '%s\n' "$SEED" > "$RUNNER_TEMP/seed")
+          fi
+          for entry in dist/*.unsigned.json; do
+            version=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$entry")
+            file=$(sed -n 's/^  "url": "[^/]*\/\(.*\)",$/\1/p' "$entry")
+            platform=$(basename "$entry" .unsigned.json)
+            [ -f "dist/$file" ] || { echo "::error::$entry names $file, which was not built"; exit 1; }
+            mkdir -p "$stage/$version"
+            cp "dist/$file" "$stage/$version/"
+            # The disk image, for people, beside the zip the updater takes.
+            [ "$platform" != macos-universal ] || cp dist/QuickDC-"$version"-universal.dmg "$stage/$version/"
+            if [ "$CHANNEL" = nightly ]; then
+              quickdc/tools/sign-feed.sh "$entry" "$RUNNER_TEMP/seed" > "$RUNNER_TEMP/feeds-$platform.json"
+            else
+              cp "$entry" "$stage/$version/$platform.unsigned.json"
+            fi
+            echo "$platform: $version/$file"
+          done
+          rm -f "$RUNNER_TEMP/seed"
+          find "$RUNNER_TEMP/stage" -type f | sort
+        env:
+          SEED: ${{ secrets.NIGHTLY_SIGNING_SEED }}
+        shell: bash
+      - name: Upload
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
+          ssh="ssh -i $RUNNER_TEMP/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes"
+
+          rsync -rt --chmod=D755,F644 -e "$ssh" "$RUNNER_TEMP/stage/" "$DEPLOY_HOST:"
+
+          if [ "$CHANNEL" = nightly ]; then
+            mkdir -p "$RUNNER_TEMP/feeds/$CHANNEL"
+            for feed in "$RUNNER_TEMP"/feeds-*.json; do
+              platform=$(basename "$feed" .json); platform=${platform#feeds-}
+              mv "$feed" "$RUNNER_TEMP/feeds/$CHANNEL/$platform.json"
+            done
+            rsync -rt --delay-updates --chmod=D755,F644 -e "$ssh" "$RUNNER_TEMP/feeds/" "$DEPLOY_HOST:"
+          fi
+          rm -f "$RUNNER_TEMP/deploy_key"
+
+      - name: Check
+        run: |
+          for entry in dist/*.unsigned.json; do
+            platform=$(basename "$entry" .unsigned.json)
+            url="https://download.quickdc.org/$CHANNEL/$(sed -n 's/^  "url": "\(.*\)",$/\1/p' "$entry")"
+            curl -fsI "$url" > /dev/null || { echo "::error::$url is not served"; exit 1; }
+            echo "served: $url"
+            if [ "$CHANNEL" = nightly ]; then
+              curl -fs "https://download.quickdc.org/$CHANNEL/$platform.json" | grep -q '"signature"' \
+                || { echo "::error::the $platform feed is not served signed"; exit 1; }
+            fi
+          done

@@ -125,7 +125,7 @@ set --
 
 [ -f "$LDAI_OUTPUT" ] || { echo "$0: linuxdeploy wrote no $LDAI_OUTPUT" >&2; exit 1; }
 
-[ -z "$channel" ] || "$root/packaging/feed-entry.sh" "$channel" linux-x86_64 "$version" "$LDAI_OUTPUT" \
+[ -z "$channel" ] || "$root/quickdc/tools/feed-entry.sh" "$channel" linux-x86_64 "$version" "$LDAI_OUTPUT" \
 	> "$root/dist/linux-x86_64.unsigned.json"
 
 echo "AppImage: $LDAI_OUTPUT"

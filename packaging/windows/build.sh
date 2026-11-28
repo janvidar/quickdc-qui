@@ -114,7 +114,7 @@ symbols="dist/QuickDC-$version-x86_64-symbols.zip"
 rm -f "$symbols"
 (cd "$build/src/app" && 7z a -tzip -bso0 "$root/$symbols" QuickDC.pdb)
 
-[ -z "$channel" ] || packaging/feed-entry.sh "$channel" windows-x86_64 "$version" "$setup" \
+[ -z "$channel" ] || quickdc/tools/feed-entry.sh "$channel" windows-x86_64 "$version" "$setup" \
 	> dist/windows-x86_64.unsigned.json
 
 echo "Installer: $setup"

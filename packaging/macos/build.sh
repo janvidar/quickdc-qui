@@ -232,7 +232,7 @@ rm -f "$appzip"
 (cd "$(dirname "$app")" && ditto -c -k --keepParent "$BUNDLE_NAME.app" "$appzip")
 echo "Update package: $appzip"
 if [ -n "$channel" ] && [ "$universal" = yes ]; then
-	"$root/packaging/feed-entry.sh" "$channel" macos-universal "$version" "$appzip" \
+	"$root/quickdc/tools/feed-entry.sh" "$channel" macos-universal "$version" "$appzip" \
 		> "$root/dist/macos-universal.unsigned.json"
 fi
 
